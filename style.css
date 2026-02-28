@@ -1,0 +1,793 @@
+/* CloudScale Free Backup & Restore — Admin Styles v2.28 */
+
+/* ================================================================
+   LAYOUT
+   ================================================================ */
+
+.cs-wrap { max-width: 1200px; padding-bottom: 60px; }
+
+/* ================================================================
+   HEADER
+   ================================================================ */
+
+.cs-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    padding: 20px 24px;
+    background: linear-gradient(135deg, #1565c0 0%, #0d47a1 100%);
+    border-radius: 6px;
+    color: #fff;
+}
+.cs-header h1 { font-size: 1.55rem; margin: 0 0 5px; color: #fff; font-weight: 700; }
+.cs-header p  { color: rgba(255,255,255,0.78); margin: 0; font-size: 0.88rem; }
+.cs-header-status { padding-top: 4px; flex-shrink: 0; display:flex; flex-direction:column; align-items:flex-start; gap:8px; }
+
+/* ================================================================
+   BADGES
+   ================================================================ */
+
+.cs-badge { display: inline-block; padding: 5px 14px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
+.cs-badge-ok   { background: #16a34a; color: #fff !important; border: 1px solid #15803d; }
+.cs-badge-ok::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #86efac; box-shadow: 0 0 5px #86efac; margin-right: 6px; vertical-align: middle; position: relative; top: -1px; }
+.cs-badge-warn { background: #fff3cd; color: #856404; border: 1px solid #ffc107; animation: cs-pulse 2s infinite; }
+
+@keyframes cs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.65; } }
+
+/* ================================================================
+   DISK SPACE ALERT BANNER
+   ================================================================ */
+
+.cs-alert {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 13px 18px;
+    border-radius: 5px;
+    margin-bottom: 8px;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    border-left-width: 4px;
+    border-left-style: solid;
+}
+.cs-alert-amber { background: #fff8e1; border: 1px solid #ffca28; border-left-color: #f9a825; color: #5d4037; }
+.cs-alert-red   { background: #ffebee; border: 1px solid #ef9a9a; border-left-color: #c62828; color: #5d1717; }
+.cs-alert-icon  { font-size: 1.15rem; flex-shrink: 0; margin-top: 1px; }
+
+/* ================================================================
+   SECTION LABELS
+   ================================================================ */
+
+.cs-section-ribbon {
+    display: flex;
+    align-items: center;
+    margin: 28px 0 12px;
+    gap: 0;
+}
+
+.cs-section-ribbon span {
+    background: linear-gradient(135deg, #1565c0 0%, #1976d2 100%);
+    color: #fff;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 5px 16px 5px 14px;
+    border-radius: 3px 0 0 3px;
+    position: relative;
+    white-space: nowrap;
+}
+
+/* Chevron tail on the right of the ribbon */
+.cs-section-ribbon span::after {
+    content: '';
+    position: absolute;
+    right: -10px;
+    top: 0;
+    width: 0;
+    height: 0;
+    border-top: 14px solid transparent;
+    border-bottom: 14px solid transparent;
+    border-left: 10px solid #1976d2;
+}
+
+/* Line extending after the chevron */
+.cs-section-ribbon::after {
+    content: '';
+    flex: 1;
+    height: 2px;
+    background: linear-gradient(90deg, #1976d2 0%, #e3f2fd 60%, transparent 100%);
+    margin-left: 10px;
+}
+
+/* ================================================================
+   GRID
+   ================================================================ */
+
+.cs-grid { display: grid; gap: 16px; }
+.cs-grid-2 { grid-template-columns: repeat(2, 1fr); }
+.cs-grid-4 { grid-template-columns: repeat(4, 1fr); }
+.cs-grid-3 { grid-template-columns: repeat(3, 1fr); }
+.cs-full { grid-column: 1 / -1; }
+
+/* ================================================================
+   CARDS
+   ================================================================ */
+
+.cs-wrap .cs-card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 0 20px 22px;
+    position: relative;
+    box-shadow: 0 3px 12px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.08);
+    border: none !important;
+}
+
+/* Coloured header stripe — negative margin breaks out of card padding to hit edges */
+.cs-wrap .cs-card .cs-card-stripe {
+    display: flex !important;
+    align-items: center !important;
+    padding: 0 20px !important;
+    height: 52px !important;
+    margin: 0 -20px 20px -20px !important;
+    border-radius: 10px 10px 0 0 !important;
+    border: none !important;
+}
+
+.cs-wrap .cs-card .cs-stripe--blue   { background: linear-gradient(135deg, #1565c0 0%, #2196f3 100%) !important; }
+.cs-wrap .cs-card .cs-stripe--green  { background: linear-gradient(135deg, #2e7d32 0%, #43a047 100%) !important; }
+.cs-wrap .cs-card .cs-stripe--purple { background: linear-gradient(135deg, #6a1b9a 0%, #8e24aa 100%) !important; }
+.cs-wrap .cs-card .cs-stripe--orange { background: linear-gradient(135deg, #e65100 0%, #f57c00 100%) !important; }
+.cs-wrap .cs-card .cs-stripe--teal   { background: linear-gradient(135deg, #004d40 0%, #00897b 100%) !important; }
+.cs-wrap .cs-card .cs-stripe--red    { background: linear-gradient(135deg, #b71c1c 0%, #e53935 100%) !important; }
+
+/* Heading inside the stripe — max specificity to beat WP admin h2 resets */
+.cs-wrap .cs-card .cs-card-stripe .cs-card-heading,
+.cs-wrap .cs-card .cs-card-stripe h2.cs-card-heading {
+    font-size: 0.95rem !important;
+    font-weight: 700 !important;
+    color: #ffffff !important;
+    text-shadow: 0 1px 4px rgba(0,0,0,0.3) !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    line-height: 1.3 !important;
+    border: none !important;
+    background: none !important;
+    letter-spacing: 0.02em !important;
+}
+
+.cs-wrap .cs-card--blue   { background: #f5f9ff; }
+.cs-wrap .cs-card--green  { background: #f5fbf5; }
+.cs-wrap .cs-card--purple { background: #faf5ff; }
+.cs-wrap .cs-card--orange { background: #fff8f3; }
+.cs-wrap .cs-card--teal   { background: #f3fbfa; }
+.cs-wrap .cs-card--red    { background: #fff5f5; }
+
+/* ================================================================
+   SCHEDULE TOGGLE
+   ================================================================ */
+
+/* ---- Enable checkbox + fieldset disable ---- */
+
+.cs-wrap .cs-enable-label {
+    display: flex !important;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    font-size: 0.92rem;
+    cursor: pointer;
+    color: #1d2327;
+    margin-bottom: 0;
+}
+
+.cs-wrap .cs-enable-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+/* Fieldset reset — strip browser chrome */
+.cs-wrap .cs-schedule-fieldset {
+    border: none;
+    margin: 0;
+    padding: 0;
+    min-width: 0;
+}
+
+/* Dim everything inside when disabled — browsers do the non-interactive part */
+.cs-wrap .cs-schedule-fieldset:disabled,
+.cs-wrap .cs-schedule-fieldset[disabled] {
+    opacity: 0.4;
+}
+
+/* ================================================================
+   DAY PICKER
+   ================================================================ */
+
+/* ---- Day-of-week checkbox grid ---- */
+
+.cs-day-checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+    margin: 6px 0 4px;
+}
+
+/* Scope under .cs-wrap to beat WP admin's global "label { display: block }" */
+.cs-wrap .cs-day-check-label {
+    display: flex !important;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    color: #37474f;
+    white-space: nowrap;
+    margin-bottom: 0;
+}
+
+.cs-wrap .cs-day-check-label input[type="checkbox"] {
+    width: 15px;
+    height: 15px;
+    margin: 0;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+/* ================================================================
+   NEXT RUN BADGE
+   ================================================================ */
+
+.cs-next-run {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: #e3f2fd;
+    border: 1px solid #90caf9;
+    border-radius: 5px;
+    padding: 8px 12px;
+    margin-top: 6px;
+    margin-bottom: 2px;
+}
+.cs-next-run-label { font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #1565c0; flex-shrink: 0; }
+.cs-next-run-time  { font-size: 0.88rem; font-weight: 600; color: #0d47a1; }
+
+/* ================================================================
+   SCHEDULE OFF NOTICE
+   ================================================================ */
+
+.cs-off-notice {
+    background: #f6f7f7;
+    border: 1px solid #dcdcde;
+    border-left: 4px solid #90a4ae;
+    border-radius: 3px;
+    padding: 9px 13px;
+    font-size: 0.83rem;
+    color: #546e7a;
+    margin-top: 10px;
+    margin-bottom: 2px;
+}
+
+/* ================================================================
+   RETENTION — STORAGE GRID
+   ================================================================ */
+
+.cs-storage-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; margin: 10px 0 4px; }
+
+.cs-storage-item {
+    background: #fff;
+    border: 1px solid #e8ecef;
+    border-radius: 5px;
+    padding: 9px 12px;
+}
+.cs-storage-label { display: block; font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: #90a4ae; margin-bottom: 3px; }
+.cs-storage-value { display: block; font-size: 1.05rem; font-weight: 700; color: #37474f; }
+.cs-value--blue   { color: #1565c0; }
+
+/* ================================================================
+   SYSTEM INFO ROWS
+   ================================================================ */
+
+.cs-info-row { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #f0f0f1; font-size: 0.84rem; gap: 12px; }
+.cs-info-row:last-of-type { border-bottom: none; }
+.cs-info-row span   { color: #607d8b; flex-shrink: 0; }
+.cs-info-row strong { text-align: right; word-break: break-all; font-size: 0.81rem; }
+.cs-path { font-family: monospace; font-size: 0.73rem; word-break: break-all; }
+
+/* ================================================================
+   TRAFFIC LIGHT — DISK FREE SPACE
+   ================================================================ */
+
+.cs-tl { display: inline-flex; align-items: center; gap: 6px; font-weight: 700; }
+
+.cs-tl-dot {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    vertical-align: middle;
+}
+
+.cs-tl--green { color: #2e7d32; }
+.cs-tl--green .cs-tl-dot { background: #43a047; box-shadow: 0 0 0 3px rgba(67,160,71,0.22); }
+
+.cs-tl--amber { color: #e65100; }
+.cs-tl--amber .cs-tl-dot { background: #fb8c00; box-shadow: 0 0 0 3px rgba(251,140,0,0.22); }
+
+.cs-tl--red { color: #b71c1c; }
+.cs-tl--red .cs-tl-dot { background: #e53935; box-shadow: 0 0 0 3px rgba(229,57,53,0.22); animation: cs-pulse 1.4s infinite; }
+
+.cs-disk-of { color: #90a4ae; font-weight: 400; font-size: 0.85em; margin-left: 2px; }
+
+/* ================================================================
+   DISK USAGE BAR
+   ================================================================ */
+
+.cs-disk-bar-wrap { display: flex; align-items: center; gap: 8px; padding: 10px 0 4px; }
+.cs-disk-bar-label { font-size: 0.78rem; font-weight: 600; color: #607d8b; margin-bottom: 2px; }
+.cs-disk-bar {
+    flex: 1;
+    height: 7px;
+    background: #ffcdd2; /* red background = used portion */
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+}
+.cs-disk-bar-fill { height: 100%; border-radius: 4px; transition: width 0.5s ease; }
+/* Fill represents FREE space — green = healthy, amber = low, red = critical */
+.cs-disk-fill--green { background: linear-gradient(90deg, #43a047, #66bb6a); }
+.cs-disk-fill--amber { background: linear-gradient(90deg, #f9a825, #ffd54f); }
+.cs-disk-fill--red   { background: linear-gradient(90deg, #e53935, #ef9a9a); }
+/* Bar background tinted to match severity */
+.cs-disk-bar:has(.cs-disk-fill--amber) { background: #fff3e0; }
+.cs-disk-bar:has(.cs-disk-fill--green) { background: #eceff1; }
+.cs-disk-pct { font-size: 0.74rem; white-space: nowrap; flex-shrink: 0; min-width: 52px; text-align: right; font-weight: 700; }
+.cs-disk-pct--green { color: #2e7d32; }
+.cs-disk-pct--amber { color: #e65100; }
+.cs-disk-pct--red   { color: #b71c1c; }
+
+/* ================================================================
+   RETENTION STORAGE WARNING
+   ================================================================ */
+
+.cs-retention-storage {
+    margin: 10px 0 6px;
+    font-size: 0.83rem;
+    background: #f0f4f8;
+    border: 1px solid #dde3ea;
+    border-radius: 6px;
+    overflow: hidden;
+}
+
+.cs-ret-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 12px;
+    border-bottom: 1px solid #e2e8f0;
+}
+
+.cs-ret-row:last-of-type {
+    border-bottom: none;
+}
+
+.cs-ret-label {
+    font-size: 0.8rem;
+    color: #607d8b;
+    font-weight: 500;
+}
+
+.cs-ret-val {
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: #1d2327;
+    font-variant-numeric: tabular-nums;
+}
+
+#cs-retention-est {
+    color: #37474f;
+    font-weight: 500;
+    display: block;
+    margin-bottom: 5px;
+}
+
+#cs-retention-est.cs-retention-est--over {
+    color: #b71c1c;
+    font-weight: 700;
+}
+
+.cs-retention-no-baseline {
+    color: #90a4ae;
+    font-style: italic;
+}
+
+/* Inline traffic light dot next to retention input */
+.cs-ret-tl {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 4px;
+}
+
+.cs-ret-tl .cs-tl-dot { display: inline-block; width: 12px; height: 12px; border-radius: 50%; }
+.cs-ret-tl--green .cs-tl-dot { background: #43a047; box-shadow: 0 0 0 3px rgba(67,160,71,0.22); }
+.cs-ret-tl--amber .cs-tl-dot { background: #fb8c00; box-shadow: 0 0 0 3px rgba(251,140,0,0.22); }
+.cs-ret-tl--red   .cs-tl-dot { background: #e53935; box-shadow: 0 0 0 3px rgba(229,57,53,0.22); animation: cs-pulse 1.4s infinite; }
+
+/* Turn the number input red when retention exceeds available space */
+#cs-retention.cs-retention-over {
+    color: #b71c1c !important;
+    border-color: #e53935 !important;
+    box-shadow: 0 0 0 2px rgba(229,57,53,0.20) !important;
+    font-weight: 700 !important;
+}
+
+.cs-retention-warn {
+    display: block;
+    background: #ffebee;
+    border: 1px solid #ef9a9a;
+    border-left: 3px solid #c62828;
+    border-radius: 4px;
+    padding: 7px 10px;
+    color: #b71c1c;
+    font-size: 0.8rem;
+    font-weight: 600;
+    line-height: 1.45;
+    margin-top: 4px;
+}
+
+/* ================================================================
+   FORM FIELDS
+   ================================================================ */
+
+.cs-field-group { margin-bottom: 14px; }
+.cs-field-label { display: block; font-weight: 600; font-size: 0.83rem; margin-bottom: 5px; color: #37474f; }
+.cs-inline { display: flex; align-items: center; gap: 8px; }
+.cs-input-sm { width: 70px !important; padding: 4px 8px !important; height: 32px !important; }
+select.cs-input-sm { width: 90px !important; }
+.cs-help { color: #90a4ae; font-size: 0.78rem; margin: 4px 0 0; font-style: italic; }
+.cs-muted-text { color: #90a4ae; font-size: 0.83rem; }
+.cs-saved-msg  { color: #2e7d32; font-weight: 600; font-size: 0.85rem; margin-left: 8px; }
+.cs-mt { margin-top: 12px !important; }
+
+/* ================================================================
+   MANUAL BACKUP
+   ================================================================ */
+
+.cs-run-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; align-items: start; }
+.cs-options  { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 16px; }
+.cs-option-label { display: flex; align-items: center; gap: 8px; cursor: pointer; font-size: 0.88rem; color: #37474f; }
+
+/* Two-column backup options layout */
+.cs-options-cols {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0 24px;
+    align-items: start;
+}
+.cs-options-col {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.cs-options-col--other {
+    border-left: 2px solid #e8edf2;
+    padding-left: 20px;
+}
+.cs-options-col-heading {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #90a4ae;
+    margin: 0 0 6px !important;
+    padding: 0 !important;
+}
+@media (max-width: 600px) {
+    .cs-options-cols { grid-template-columns: 1fr; }
+    .cs-options-col--other { border-left: none; padding-left: 0; border-top: 2px solid #e8edf2; padding-top: 10px; margin-top: 6px; }
+}
+
+/* wp-config sensitive warning */
+.cs-option-sensitive {
+    background: #fff8e1;
+    border: 1px solid #ffe082;
+    border-radius: 4px;
+    padding: 4px 8px !important;
+    margin-left: -8px;
+}
+.cs-sensitive-badge {
+    display: inline-block;
+    margin-left: 6px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #b45309;
+    background: #fef3c7;
+    border: 1px solid #f59e0b;
+    border-radius: 3px;
+    padding: 1px 5px;
+}
+.cs-btn-lg { height: 38px !important; font-size: 0.95rem !important; padding: 0 20px !important; }
+
+/* ================================================================
+   BACKUP SUMMARY BAR
+   ================================================================ */
+
+.cs-backup-summary {
+    margin: 14px 0 16px;
+    padding: 10px 14px;
+    background: #f5f7fa;
+    border: 1px solid #dde3ea;
+    border-radius: 6px;
+    display: inline-block;
+    min-width: 280px;
+}
+
+.cs-backup-summary-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 24px;
+    line-height: 1.9;
+}
+
+.cs-summary-label {
+    font-size: 0.82rem;
+    color: #607d8b;
+    font-weight: 500;
+}
+
+.cs-summary-value {
+    font-size: 0.9rem;
+    font-weight: 700;
+    color: #1d2327;
+    font-variant-numeric: tabular-nums;
+}
+
+.cs-free-green { color: #2e7d32; }
+.cs-free-amber { color: #e65100; }
+.cs-free-red   { color: #b71c1c; }
+
+.cs-summary-warn {
+    font-size: 0.8rem;
+    color: #b71c1c;
+    font-weight: 600;
+    padding-top: 2px;
+    width: 100%;
+}
+
+/* ================================================================
+   PROGRESS PANELS
+   ================================================================ */
+
+.cs-progress-panel { background: #f8f9fa; border: 1px solid #e0e0e0; border-radius: 5px; padding: 16px; }
+.cs-progress-msg   { font-weight: 600; font-size: 0.88rem; margin: 0 0 10px; color: #1d2327; }
+.cs-progress-bar   { height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden; margin-bottom: 8px; }
+.cs-progress-fill  { height: 100%; width: 30%; background: #1565c0; border-radius: 4px; animation: cs-slide 1.6s infinite ease-in-out; }
+
+@keyframes cs-slide {
+    0%   { margin-left: 0%;  width: 25%; }
+    50%  { margin-left: 40%; width: 45%; }
+    100% { margin-left: 80%; width: 20%; }
+}
+
+.cs-progress-fill.cs-done  { animation: none; width: 100%; background: #2e7d32; }
+.cs-progress-fill.cs-error { animation: none; width: 100%; background: #c62828; }
+
+/* ================================================================
+   BACKUP HISTORY TABLE
+   ================================================================ */
+
+.cs-table { margin-top: 6px; border: 1px solid #e0e0e0 !important; }
+.cs-table td { padding: 8px 10px !important; vertical-align: middle !important; }
+.cs-table th { padding: 8px 10px !important; }
+.cs-table-wrap { display: block; width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.cs-table th { font-size: 0.77rem; font-weight: 700; color: #607d8b; text-transform: uppercase; letter-spacing: 0.06em; background: #eceff1 !important; }
+.cs-row-latest td { background: #e8f5e9 !important; }
+.cs-idx      { color: #90a4ae; font-size: 0.8rem; }
+.cs-age      { color: #90a4ae; font-size: 0.82rem; }
+.cs-empty    { text-align: center; color: #90a4ae; font-style: italic; padding: 40px 0; }
+.cs-filename { font-family: monospace; font-size: 0.79rem; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cs-actions  { display: flex; gap: 5px; flex-wrap: nowrap; align-items: center; }
+
+.cs-latest-badge { background: #1565c0; color: #fff; font-size: 0.62rem; padding: 1px 5px; border-radius: 3px; vertical-align: middle; margin-left: 4px; }
+
+.cs-type-badge   { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.73rem; font-weight: 700; }
+.cs-type-full    { background: #e3f2fd; color: #1565c0; }
+.cs-type-db      { background: #e8f5e9; color: #2e7d32; }
+.cs-type-media   { background: #fff8e1; color: #f57f17; }
+.cs-type-plugins { background: #f3e5f5; color: #7b1fa2; }
+.cs-type-themes  { background: #fce4ec; color: #c62828; }
+
+.cs-restore-btn { background: #fff8e1 !important; border-color: #f9a825 !important; color: #7a5600 !important; }
+.cs-restore-btn:hover { background: #fff3cd !important; border-color: #e65100 !important; }
+
+/* ================================================================
+   RESTORE FROM UPLOAD
+   ================================================================ */
+
+.cs-restore-upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; align-items: start; }
+#cs-restore-file { display: block; margin: 10px 0 8px; }
+
+/* ================================================================
+   RESTORE MODAL
+   ================================================================ */
+
+.cs-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 99998; }
+.cs-modal { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; z-index: 99999; pointer-events: none; }
+.cs-modal-box { background: #fff; border-radius: 7px; box-shadow: 0 8px 40px rgba(0,0,0,0.3); max-width: 600px; width: 90%; pointer-events: all; overflow: hidden; }
+.cs-modal-box h2 { margin: 0; padding: 18px 24px; background: #c62828; color: #fff; font-size: 1.05rem; border-radius: 7px 7px 0 0; }
+.cs-modal-body { padding: 22px 24px; }
+.cs-modal-footer { padding: 14px 24px; background: #f5f5f5; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid #e0e0e0; }
+.cs-modal-progress { padding: 14px 24px; border-top: 1px solid #e0e0e0; }
+
+.cs-warning-box { background: #fff8e1; border: 2px solid #ffca28; border-radius: 5px; padding: 14px 16px; margin-bottom: 16px; font-size: 0.87rem; }
+.cs-warning-box strong { display: block; font-size: 0.88rem; margin-bottom: 8px; color: #7a5600; text-transform: uppercase; letter-spacing: 0.04em; }
+.cs-warning-box ul { margin: 0; padding-left: 18px; }
+.cs-warning-box li { margin-bottom: 4px; color: #4e3400; }
+
+.cs-confirm-check { margin-top: 14px; background: #f5f5f5; border: 1px solid #e0e0e0; border-radius: 5px; padding: 12px 14px; }
+.cs-confirm-check label { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; font-size: 0.87rem; line-height: 1.5; }
+
+.cs-btn-danger { background: #c62828 !important; border-color: #b71c1c !important; color: #fff !important; }
+.cs-btn-danger:hover:not(:disabled) { background: #b71c1c !important; }
+.cs-btn-danger:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* ================================================================
+   RESPONSIVE
+   ================================================================ */
+
+@media (max-width: 960px) {
+    .cs-grid-3, .cs-grid-4 { grid-template-columns: 1fr 1fr; }
+    .cs-storage-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 680px) {
+    .cs-grid-2, .cs-grid-3, .cs-grid-4, .cs-run-grid, .cs-restore-upload-grid { grid-template-columns: 1fr; gap: 16px; }
+    .cs-header { flex-direction: column; gap: 12px; }
+}
+
+/* ---- Delete button — red bin ---- */
+
+.cs-delete-btn {
+    background: #c62828 !important;
+    border-color: #b71c1c !important;
+    color: #fff !important;
+    font-size: 0.78rem !important;
+}
+
+.cs-delete-btn:hover {
+    background: #b71c1c !important;
+    border-color: #8e0000 !important;
+    color: #fff !important;
+}
+
+/* ---- Header free line ---- */
+
+.cs-header-sub  { color: rgba(255,255,255,0.72); margin: 0 0 5px; font-size: 0.87rem; }
+.cs-header-free {
+    display: inline-block;
+    margin: 2px 0 0;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: #fff;
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.28);
+    border-radius: 4px;
+    padding: 3px 10px;
+}
+
+
+/* ================================================================
+   TABLE RESPONSIVE — horizontal scroll, no hidden columns
+   ================================================================ */
+
+.cs-table-wrap {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+    scrollbar-color: #b0bec5 #f5f5f5;
+}
+.cs-table-wrap::-webkit-scrollbar { height: 6px; }
+.cs-table-wrap::-webkit-scrollbar-track { background: #f5f5f5; border-radius: 3px; }
+.cs-table-wrap::-webkit-scrollbar-thumb { background: #b0bec5; border-radius: 3px; }
+
+/* Keep columns from squishing on small screens */
+.cs-table { min-width: 700px; }
+.cs-col-num     { width: 18px!important; min-width:18px!important; max-width:18px!important; white-space: nowrap; padding-left:4px!important; padding-right:4px!important; }
+.cs-col-type    { width: 80px; white-space: nowrap; }
+.cs-col-size    { width: 90px; white-space: nowrap; }
+.cs-col-meta    { width: 120px; white-space: nowrap; }
+.cs-col-actions { width: 80px; white-space: nowrap; }
+
+.cs-icon-btn {
+    display: inline-flex!important;
+    align-items: center;
+    justify-content: center;
+    width: 28px!important;
+    height: 28px!important;
+    border-radius: 6px!important;
+    border: none!important;
+    cursor: pointer!important;
+    margin: 0 2px 0 0!important;
+    padding: 0!important;
+    text-decoration: none!important;
+    transition: opacity 0.15s;
+    vertical-align: middle;
+}
+.cs-icon-btn:hover { opacity: 0.82; }
+.cs-icon-btn--blue  { background: #1565c0!important; color: #fff!important; }
+.cs-icon-btn--red   { background: #c62828!important; color: #fff!important; }
+.cs-icon-btn--green { background: #2e7d32!important; color: #fff!important; }
+
+/* Meta cell: created on top, age below */
+.cs-col-meta .cs-created { display: block; font-size: 0.83rem; }
+.cs-col-meta .cs-age     { display: block; font-size: 0.75rem; color: #888; }
+
+/* Estimate note styling */
+.cs-est-note { font-size: 0.75rem; color: #888; font-weight: 400; }
+.cs-author-badge {
+    display: inline-flex;
+    align-items: center;
+    margin-top: 12px;
+    padding: 5px 12px;
+    background: #fff;
+    color: #1565c0 !important;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    border-radius: 20px;
+    text-decoration: none !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    transition: transform 0.15s, box-shadow 0.15s;
+}
+.cs-author-badge:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    color: #0d47a1 !important;
+}
+
+/* S3 settings field rows */
+.cs-field-row { margin-bottom: 12px; }
+.cs-field-row label { display: block; margin-bottom: 4px; }
+.cs-field-row input.regular-text { width: 100%; max-width: 400px; }
+
+/* S3 / Explain modal content */
+.cs-explain-item {
+    border: 1px solid #e8edf2;
+    border-radius: 8px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+}
+.cs-explain-title {
+    font-weight: 700;
+    font-size: 0.92rem;
+    margin-bottom: 8px;
+    color: #1a1a1a;
+}
+.cs-explain-code {
+    background: #f4f6f8;
+    border: 1px solid #dde3ea;
+    border-radius: 5px;
+    padding: 10px 14px;
+    font-size: 0.78rem;
+    font-family: monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 8px 0;
+    line-height: 1.55;
+}
+
+/* S3 sync status in backup progress */
+.cs-s3-ok    { color: #2e7d32; font-size: 0.85rem; font-weight: 600; }
+.cs-s3-error { color: #c62828; font-size: 0.85rem; font-weight: 600; }
+
+/* Pink card (S3) */
+.cs-card--pink { border-top: 3px solid #e91e8c; }
+.cs-stripe--pink { background: linear-gradient(135deg,#880e4f 0%,#e91e8c 100%); }
+.cs-card--indigo { border-top: 3px solid #3949ab; background: #f5f5ff; }
+.cs-stripe--indigo { background: linear-gradient(135deg,#1a237e 0%,#3949ab 100%); }
