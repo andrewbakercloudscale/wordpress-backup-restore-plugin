@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           2.76.0
+ * Version:           2.97.0
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,9 @@
 
 defined('ABSPATH') || exit;
 
-define('CS_VERSION',    '2.76.0');
+define('CS_VERSION',    '2.97.0');
+define('CS_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
+define('CS_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('CS_BACKUP_DIR', WP_CONTENT_DIR . '/cloudscale-backups/');
 define('CS_MAINT_FILE', ABSPATH . '.maintenance');
@@ -35,9 +37,10 @@ function cs_activate() {
 
 function cs_deactivate() {
     wp_clear_scheduled_hook('cs_scheduled_backup');
+    wp_clear_scheduled_hook('cs_ami_poll');
     cs_maintenance_off();
 
-    // Wipe asset files so Deactivate > Delete > Upload leaves no stale code
+    // Wipe all asset files so Deactivate > Delete > Upload leaves no stale code
     $dir = plugin_dir_path(__FILE__);
     foreach (glob($dir . '*.{js,css}', GLOB_BRACE) as $f) { @unlink($f); }
 
@@ -49,17 +52,65 @@ function cs_deactivate() {
     }
 }
 
+/**
+ * Return the versioned filename for a JS/CSS asset.
+ * On first page load after a deploy, copies script.js -> script-2-77-0.js
+ * (and style.css -> style-2-77-0.css). The CDN has never seen the new URL
+ * so it must fetch from origin — query strings (?ver=) are stripped by
+ * CloudFront and other CDNs and do not bust the cache.
+ */
+function cs_get_versioned_asset(string $ext): string {
+    $ver_slug  = str_replace('.', '-', CS_VERSION);
+    $src_name  = ($ext === 'js') ? 'script.' . $ext : 'style.' . $ext;
+    $dest_name = ($ext === 'js') ? 'script-' . $ver_slug . '.js' : 'style-' . $ver_slug . '.css';
+    $dir       = plugin_dir_path(__FILE__);
+
+    if (!file_exists($dir . $dest_name)) {
+        // Delete old versioned copies first
+        $pattern = ($ext === 'js') ? $dir . 'script-*.js' : $dir . 'style-*.css';
+        foreach (glob($pattern) ?: [] as $old) {
+            if (basename($old) !== $dest_name) { @unlink($old); }
+        }
+        // Copy the canonical source to the new versioned name
+        if (file_exists($dir . $src_name)) {
+            @copy($dir . $src_name, $dir . $dest_name);
+        }
+    }
+
+    return file_exists($dir . $dest_name) ? $dest_name : $src_name;
+}
+
 // Version change detector — cleans stale assets on upgrade without deactivation
 add_action('admin_init', function () {
     $cached = get_option('cs_loaded_version', '');
     if ($cached !== CS_VERSION) {
         if (function_exists('opcache_reset')) { opcache_reset(); }
-        // Delete any old assets/ subfolder from previous versions
-        $assets = plugin_dir_path(__FILE__) . 'assets/';
+        $dir = plugin_dir_path(__FILE__);
+        // Delete old versioned JS/CSS files from previous versions
+        foreach (glob($dir . 'script-*.js') ?: [] as $f) { @unlink($f); }
+        foreach (glob($dir . 'style-*.css') ?: [] as $f) { @unlink($f); }
+        // Clean old assets/ subfolder from early versions
+        $assets = $dir . 'assets/';
         if (is_dir($assets)) {
             foreach (glob($assets . '*') as $f) { if (is_file($f)) { @unlink($f); } }
             @rmdir($assets);
         }
+        // Reset any AMI log entries stuck as 'deleted in AWS' back to 'pending'
+        // so Refresh All re-verifies them against AWS on next run.
+        // Corrupt state from previous bugs must never survive a deploy.
+        $ami_log = (array) get_option('cs_ami_log', []);
+        $ami_log_fixed = false;
+        foreach ($ami_log as &$entry) {
+            if (!empty($entry['ami_id']) && ($entry['state'] ?? '') === 'deleted in AWS' && !empty($entry['ok'])) {
+                $entry['state'] = 'pending';
+                $ami_log_fixed = true;
+            }
+        }
+        unset($entry);
+        if ($ami_log_fixed) {
+            update_option('cs_ami_log', $ami_log, false);
+        }
+
         update_option('cs_loaded_version', CS_VERSION);
     }
 });
@@ -82,7 +133,7 @@ function cs_ensure_backup_dir(): void {
 // Scheduling — day-of-week based
 // ============================================================
 
-// Ensure daily interval exists
+// Register required cron intervals
 add_filter('cron_schedules', function (array $schedules): array {
     if (!isset($schedules['daily'])) {
         $schedules['daily'] = [
@@ -92,6 +143,87 @@ add_filter('cron_schedules', function (array $schedules): array {
     }
     return $schedules;
 });
+
+// ============================================================
+// AMI state poller — WP-Cron single event
+// ============================================================
+
+/**
+ * Poll AWS for the state of every AMI log entry that is still 'pending'.
+ * Scheduled as a single event 10 minutes after an AMI is created.
+ * If any entries remain pending and are younger than CS_AMI_POLL_MAX_AGE,
+ * reschedules itself for another CS_AMI_POLL_INTERVAL seconds.
+ * Gives up automatically after 2 hours to avoid polling indefinitely.
+ */
+add_action('cs_ami_poll', 'cs_ami_poll_handler');
+function cs_ami_poll_handler(): void {
+    $aws = cs_find_aws();
+    if (!$aws) {
+        error_log('[CloudScale Backup] AMI poll: AWS CLI not found, skipping.');
+        return;
+    }
+
+    $log     = (array) get_option('cs_ami_log', []);
+    $region  = cs_get_instance_region();
+    $region_flag = $region ? ' --region ' . escapeshellarg($region) : '';
+    $changed = false;
+    $still_pending = false;
+
+    foreach ($log as &$entry) {
+        // Only poll entries that have an AMI ID and are still pending
+        if (empty($entry['ami_id']) || !isset($entry['ok']) || !$entry['ok']) {
+            continue;
+        }
+        if (($entry['state'] ?? '') !== 'pending') {
+            continue;
+        }
+
+        // Stop polling entries older than CS_AMI_POLL_MAX_AGE
+        $age = time() - (int) ($entry['time'] ?? 0);
+        if ($age > CS_AMI_POLL_MAX_AGE) {
+            // Don't overwrite with timed-out — let Refresh All query AWS directly
+            // Just stop scheduling further polls for this entry
+            error_log('[CloudScale Backup] AMI poll: gave up scheduling polls for ' . $entry['ami_id'] . ' after ' . round($age / 60) . ' min — use Refresh All to check current state');
+            continue;
+        }
+
+        $cmd = escapeshellarg($aws) . ' ec2 describe-images'
+             . ' --image-ids ' . escapeshellarg($entry['ami_id'])
+             . $region_flag
+             . ' --query "Images[0].State"'
+             . ' --output text 2>&1';
+
+        $raw   = trim((string) shell_exec($cmd));
+        $state = $raw;
+
+        if ($state && $state !== 'None' && !str_contains(strtolower($state), 'error') && !str_contains(strtolower($state), 'unable') && !str_contains(strtolower($state), 'invalid')) {
+            if ($entry['state'] !== $state) {
+                $entry['state'] = $state;
+                $changed = true;
+                error_log('[CloudScale Backup] AMI poll: ' . $entry['ami_id'] . ' → ' . $state);
+            }
+            if ($state === 'pending') {
+                $still_pending = true;
+            }
+        } else {
+            // AWS returned nothing or an error — likely a credentials issue on this server user
+            // Keep state as 'pending' so user knows it hasn't resolved, log the raw output
+            $still_pending = true;
+            error_log('[CloudScale Backup] AMI poll: describe-images returned "' . $raw . '" for ' . $entry['ami_id'] . ' — possible credentials issue for www-data user. Use Refresh All from the admin UI instead.');
+        }
+    }
+    unset($entry);
+
+    if ($changed) {
+        update_option('cs_ami_log', $log, false);
+    }
+
+    // Reschedule if any entries are still pending and not yet timed out
+    if ($still_pending && !wp_next_scheduled('cs_ami_poll')) {
+        wp_schedule_single_event(time() + CS_AMI_POLL_INTERVAL, 'cs_ami_poll');
+        error_log('[CloudScale Backup] AMI poll: rescheduled in ' . (CS_AMI_POLL_INTERVAL / 60) . ' min (pending AMIs remain)');
+    }
+}
 
 function cs_get_run_days(): array {
     global $wpdb;
@@ -164,8 +296,10 @@ add_action('admin_menu', function () {
 
 add_action('admin_enqueue_scripts', function (string $hook): void {
     if ($hook !== 'tools_page_cloudscale-backup') return;
-    wp_enqueue_style('cs-style',  plugin_dir_url(__FILE__) . 'style.css',  [], CS_VERSION);
-    wp_enqueue_script('cs-script', plugin_dir_url(__FILE__) . 'script.js', ['jquery'], CS_VERSION, true);
+    $css_file = cs_get_versioned_asset('css');
+    $js_file  = cs_get_versioned_asset('js');
+    wp_enqueue_style('cs-style',   plugin_dir_url(__FILE__) . $css_file, [], CS_VERSION);
+    wp_enqueue_script('cs-script', plugin_dir_url(__FILE__) . $js_file,  ['jquery'], CS_VERSION, true);
     wp_localize_script('cs-script', 'CS', [
         'ajax_url' => admin_url('admin-ajax.php'),
         'nonce'    => wp_create_nonce('cs_nonce'),
@@ -256,8 +390,9 @@ function cs_admin_page(): void {
     $s3_bucket    = get_option('cs_s3_bucket', '');
     $s3_prefix    = get_option('cs_s3_prefix', 'backups/');
     $s3_saved_msg = '';
-    $ami_prefix   = get_option('cs_ami_prefix', '');
-    $ami_reboot   = (bool) get_option('cs_ami_reboot', false);
+    $ami_prefix          = get_option('cs_ami_prefix', '');
+    $ami_reboot          = (bool) get_option('cs_ami_reboot', false);
+    $ami_region_override = get_option('cs_ami_region_override', '');
     $dump_method  = cs_mysqldump_available() ? 'mysqldump (native — fast)' : 'PHP streamed (compatible)';
     $restore_method = cs_mysql_cli_available() ? 'mysql CLI (native — fast)' : 'PHP streamed (compatible)';
 
@@ -317,7 +452,7 @@ function cs_admin_page(): void {
                 <form method="post" action="" id="cs-schedule-form">
                 <?php wp_nonce_field('cs_nonce', 'nonce'); ?>
                 <input type="hidden" name="cs_action" value="save_schedule">
-                <div class="cs-card-stripe cs-stripe--blue" style="background:linear-gradient(135deg,#1565c0 0%,#2196f3 100%);display:flex;align-items:center;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⏰ Backup Schedule</h2></div>
+                <div class="cs-card-stripe cs-stripe--blue" style="background:linear-gradient(135deg,#1565c0 0%,#2196f3 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⏰ Backup Schedule</h2><button type="button" onclick="csScheduleExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
 
                 <!-- Enable/disable checkbox — inline with label -->
                 <div class="cs-field-group">
@@ -390,7 +525,7 @@ function cs_admin_page(): void {
             $ret_has_baseline = $latest_size > 0;
             ?>
             <div class="cs-card cs-card--green">
-                <div class="cs-card-stripe cs-stripe--green" style="background:linear-gradient(135deg,#2e7d32 0%,#43a047 100%);display:flex;align-items:center;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🗂 Retention &amp; Storage</h2></div>
+                <div class="cs-card-stripe cs-stripe--green" style="background:linear-gradient(135deg,#2e7d32 0%,#43a047 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🗂 Retention &amp; Storage</h2><button type="button" onclick="csRetentionExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
 
                 <div class="cs-field-group">
                     <label class="cs-field-label">Keep last</label>
@@ -521,7 +656,7 @@ function cs_admin_page(): void {
                 </div>
                 <div class="cs-info-row">
                     <span>Last S3 sync</span>
-                    <strong><?php echo $s3_last ? esc_html(cs_human_age($s3_last) . ' ago (' . date('Y-m-d H:i', $s3_last) . ')') : 'Never'; ?></strong>
+                    <strong><?php echo $s3_last ? esc_html(cs_human_age($s3_last) . ' ago (' . wp_date('j M Y H:i', $s3_last) . ')') : 'Never'; ?></strong>
                 </div>
                 <?php endif; ?>
             </div>
@@ -571,35 +706,44 @@ function cs_admin_page(): void {
                 });
             }
 
-            function csS3Explain() {
-                var el = document.getElementById('cs-s3-explain-overlay');
+            function csExplainModal(id, title, gradient, contentHtml) {
+                var el = document.getElementById(id);
                 if (el) { el.style.display = 'flex'; return; }
                 var ov = document.createElement('div');
-                ov.id = 'cs-s3-explain-overlay';
+                ov.id = id;
                 ov.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999999;display:flex;align-items:center;justify-content:center;';
                 var box = document.createElement('div');
                 box.style.cssText = 'background:#fff;border-radius:8px;max-width:600px;width:92%;max-height:80vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.4);';
                 var head = document.createElement('div');
-                head.style.cssText = 'background:linear-gradient(135deg,#880e4f,#e91e8c);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;';
-                head.innerHTML = '<strong style="color:#fff;">S3 Remote Backup - Setup Guide</strong>';
+                head.style.cssText = 'background:' + gradient + ';padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;';
+                head.innerHTML = '<strong style="color:#fff;">' + title + '</strong>';
                 var closeBtn = document.createElement('button');
                 closeBtn.type = 'button';
                 closeBtn.innerHTML = '&times;';
+                closeBtn.setAttribute('aria-label', 'Close');
                 closeBtn.style.cssText = 'background:none;border:none;color:#fff;font-size:1.4rem;cursor:pointer;line-height:1;';
                 closeBtn.onclick = function() { ov.style.display = 'none'; };
                 head.appendChild(closeBtn);
                 var body = document.createElement('div');
                 body.style.cssText = 'overflow-y:auto;padding:20px 24px;';
-                body.innerHTML = '<p><strong>How it works</strong><br>After every backup the plugin runs <code>aws s3 cp</code> to upload the zip. Local copy always kept.</p>'
-                    + '<p><strong>Install (Ubuntu/Debian)</strong></p><pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;overflow-x:auto;">curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip\nunzip awscliv2.zip &amp;&amp; sudo ./aws/install</pre>'
-                    + '<p><strong>Install (Amazon Linux)</strong></p><pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;">sudo yum install -y aws-cli</pre>'
-                    + '<p><strong>Credentials</strong><br>1. IAM instance role (recommended)<br>2. <code>aws configure</code> as web server user<br>3. Env vars: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION</p>'
-                    + '<p><strong>Minimum IAM policy</strong></p><pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;overflow-x:auto;">{\n  "Version": "2012-10-17",\n  "Statement": [{\n    "Effect": "Allow",\n    "Action": ["s3:PutObject","s3:GetObject","s3:ListBucket"],\n    "Resource": ["arn:aws:s3:::YOUR-BUCKET","arn:aws:s3:::YOUR-BUCKET/*"]\n  }]\n}</pre>';
+                body.innerHTML = contentHtml;
                 box.appendChild(head);
                 box.appendChild(body);
                 ov.appendChild(box);
                 ov.addEventListener('click', function(e) { if (e.target === ov) ov.style.display = 'none'; });
+                document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && ov.style.display === 'flex') ov.style.display = 'none'; });
                 document.body.appendChild(ov);
+            }
+
+            function csS3Explain() {
+                csExplainModal('cs-s3-explain-overlay', 'S3 Remote Backup - Setup Guide',
+                    'linear-gradient(135deg,#880e4f,#e91e8c)',
+                    '<p><strong>How it works</strong><br>After every backup the plugin runs <code>aws s3 cp</code> to upload the zip. Local copy always kept.</p>'
+                    + '<p><strong>Install (Ubuntu/Debian)</strong></p><pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;overflow-x:auto;">curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip\nunzip awscliv2.zip &amp;&amp; sudo ./aws/install</pre>'
+                    + '<p><strong>Install (Amazon Linux)</strong></p><pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;">sudo yum install -y aws-cli</pre>'
+                    + '<p><strong>Credentials</strong><br>1. IAM instance role (recommended)<br>2. <code>aws configure</code> as web server user<br>3. Env vars: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION</p>'
+                    + '<p><strong>Minimum IAM policy</strong></p><pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;overflow-x:auto;">{\n  "Version": "2012-10-17",\n  "Statement": [{\n    "Effect": "Allow",\n    "Action": ["s3:PutObject","s3:GetObject","s3:ListBucket"],\n    "Resource": ["arn:aws:s3:::YOUR-BUCKET","arn:aws:s3:::YOUR-BUCKET/*"]\n  }]\n}</pre>'
+                );
             }
             </script>
 
@@ -609,8 +753,8 @@ function cs_admin_page(): void {
             $ami_instance_id = cs_get_instance_id();
             $ami_region      = cs_get_instance_region();
             $ami_log         = (array) get_option('cs_ami_log', []);
-            // Show last 5, newest first
-            $ami_log_recent  = array_slice(array_reverse($ami_log), 0, 5);
+            // Show all entries with a valid AMI ID, newest first (plus failed creation entries)
+            $ami_log_recent  = array_reverse($ami_log);
             } catch (\Throwable $e) {
                 $ami_instance_id = '';
                 $ami_region      = '';
@@ -639,7 +783,14 @@ function cs_admin_page(): void {
                 </div>
                 <div class="cs-info-row">
                     <span>Region</span>
-                    <strong><?php echo $ami_region ? esc_html($ami_region) : '<span style="color:#999">Unknown</span>'; ?></strong>
+                    <strong><?php echo $ami_region ? esc_html($ami_region) : '<span style="color:#999">Unknown — set override below</span>'; ?></strong>
+                </div>
+
+                <div class="cs-field-row cs-mt">
+                    <label for="cs-ami-region-override"><strong>Region override</strong></label>
+                    <input type="text" id="cs-ami-region-override" class="cs-input-sm" placeholder="e.g. af-south-1"
+                           value="<?php echo esc_attr($ami_region_override); ?>" style="width:320px;">
+                    <p class="cs-help">Set this if the region shown above is wrong or Unknown. Bypasses IMDS detection entirely. Example: <code>af-south-1</code></p>
                 </div>
 
                 <div class="cs-field-row cs-mt">
@@ -661,8 +812,10 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csAmiSave()" class="button button-primary">Save AMI Settings</button>
                     <button type="button" onclick="csAmiCreate()" class="button" style="margin-left:8px;background:#1a237e!important;color:#fff!important;border-color:#1a237e!important;" <?php echo $ami_instance_id ? '' : 'disabled title="EC2 instance not detected"'; ?>>&#128247; Create AMI Now</button>
                     <button type="button" onclick="csAmiStatus()" class="button" style="margin-left:4px;" <?php echo $ami_instance_id ? '' : 'disabled'; ?>>Check Status</button>
+                    <button type="button" onclick="csAmiResetAndRefresh()" class="button" id="cs-ami-refresh-all" style="margin-left:4px;background:#c2185b!important;color:#fff!important;border-color:#880e4f!important;">&#8635; Refresh All</button>
                     <span id="cs-ami-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
                 </div>
+
 
                 <?php if (!empty($ami_log_recent)): ?>
                 <div class="cs-mt" style="margin-top:16px;">
@@ -678,26 +831,36 @@ function cs_admin_page(): void {
                                 <th style="width:140px;">Actions</th>
                             </tr>
                         </thead>
-                        <tbody>
+                        <tbody id="cs-ami-tbody">
                         <?php foreach ($ami_log_recent as $entry): ?>
-                            <?php $row_ami_id = esc_attr($entry['ami_id'] ?? ''); ?>
-                            <tr id="cs-ami-row-<?php echo $row_ami_id; ?>">
+                            <?php
+                            $row_ami_id  = esc_attr($entry['ami_id'] ?? '');
+                            $entry_state = $entry['state'] ?? '';
+                            $is_deleted  = ($entry_state === 'deleted in AWS');
+                            $is_ok       = !empty($entry['ok']);
+                            ?>
+                            <tr id="cs-ami-row-<?php echo $row_ami_id; ?>" <?php echo $is_deleted ? 'style="opacity:0.55;"' : ''; ?>>
                                 <td><?php echo esc_html($entry['name'] ?? '—'); ?></td>
                                 <td><code style="font-size:0.78rem;"><?php echo esc_html($entry['ami_id'] ?? '—'); ?></code></td>
-                                <td><?php echo esc_html(isset($entry['time']) ? date('Y-m-d H:i', $entry['time']) : '—'); ?></td>
+                                <td><?php echo esc_html(isset($entry['time']) ? wp_date('j M Y H:i', $entry['time']) : '—'); ?></td>
                                 <td id="cs-ami-state-<?php echo $row_ami_id; ?>">
-                                    <?php if (!empty($entry['ok'])): ?>
-                                        <span style="color:#2e7d32;font-weight:600;">&#10003; <?php echo esc_html($entry['state'] ?? 'Created'); ?></span>
+                                    <?php if ($is_deleted): ?>
+                                        <span style="color:#999;font-weight:600;">&#128465; deleted in AWS</span>
+                                    <?php elseif ($is_ok): ?>
+                                        <?php
+                                        $sc = $entry_state === 'available' ? '#2e7d32' : ($entry_state === 'pending' ? '#e65100' : '#757575');
+                                        $si = $entry_state === 'available' ? '&#10003;' : ($entry_state === 'pending' ? '&#9203;' : '&#10007;');
+                                        ?>
+                                        <span style="color:<?php echo $sc; ?>;font-weight:600;"><?php echo $si; ?> <?php echo esc_html($entry_state ?: 'Created'); ?></span>
                                     <?php else: ?>
                                         <span style="color:#c62828;font-weight:600;">&#10007; Failed</span>
                                     <?php endif; ?>
                                 </td>
-                                <td>
+                                <td id="cs-ami-actions-<?php echo $row_ami_id; ?>">
                                     <?php if (!empty($entry['ami_id'])): ?>
-                                    <button type="button" onclick="csAmiRefreshRow('<?php echo $row_ami_id; ?>')" class="button button-small" title="Refresh status" style="min-width:0;padding:2px 8px;">&#8635; Refresh</button>
-                                    <button type="button" onclick="csAmiDelete('<?php echo $row_ami_id; ?>', '<?php echo esc_attr($entry['name'] ?? ''); ?>')" class="button button-small" title="Deregister AMI" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>
+                                    <button type="button" onclick="csAmiDelete('<?php echo $row_ami_id; ?>', '<?php echo esc_attr($entry['name'] ?? ''); ?>', <?php echo $is_deleted ? 'true' : 'false'; ?>)" class="button button-small" title="<?php echo $is_deleted ? 'Remove record' : 'Deregister AMI'; ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? 'Remove' : 'Delete'; ?></button>
                                     <?php else: ?>
-                                    <span style="color:#999;">—</span>
+                                    <button type="button" onclick="csAmiRemoveFailed('<?php echo esc_js($entry['name'] ?? ''); ?>')" class="button button-small" title="Remove failed record" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Remove</button>
                                     <?php endif; ?>
                                 </td>
                             </tr>
@@ -733,9 +896,10 @@ function cs_admin_page(): void {
             function csAmiSave() {
                 var prefix = document.getElementById('cs-ami-prefix').value.trim();
                 var reboot = document.getElementById('cs-ami-reboot').checked ? '1' : '0';
+                var regionOverride = document.getElementById('cs-ami-region-override').value.trim();
                 csAmiMsg('Saving...', true);
                 csAmiPost('cs_save_ami',
-                    'prefix=' + encodeURIComponent(prefix) + '&reboot=' + reboot,
+                    'prefix=' + encodeURIComponent(prefix) + '&reboot=' + reboot + '&region_override=' + encodeURIComponent(regionOverride),
                     function(res) { csAmiMsg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success); }
                 );
             }
@@ -769,79 +933,192 @@ function cs_admin_page(): void {
                 });
             }
 
-            function csAmiRefreshRow(amiId) {
-                var stateCell = document.getElementById('cs-ami-state-' + amiId);
-                if (stateCell) stateCell.innerHTML = '<span style="color:#1565c0;font-weight:600;">&#8987; Checking...</span>';
-                csAmiPost('cs_ami_status', 'ami_id=' + encodeURIComponent(amiId), function(res) {
-                    if (res.success && res.data && res.data.state) {
-                        var state = res.data.state;
-                        var color = state === 'available' ? '#2e7d32' : (state === 'pending' ? '#e65100' : '#c62828');
-                        var icon  = state === 'available' ? '&#10003;' : (state === 'pending' ? '&#9203;' : '&#10007;');
-                        if (stateCell) stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + state + '</span>';
-                    } else {
-                        if (stateCell) stateCell.innerHTML = '<span style="color:#c62828;font-weight:600;">&#10007; ' + (res.data || 'Error') + '</span>';
+            function csAmiRefreshAll() {
+                var btn = document.getElementById('cs-ami-refresh-all');
+                if (btn) { btn.disabled = true; btn.textContent = '⏳ Refreshing...'; }
+                csAmiMsg('Refreshing all AMI states...', true);
+                csAmiPost('cs_ami_refresh_all', '', function(res) {
+                    if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh All'; }
+                    if (!res.success) {
+                        csAmiMsg('&#10007; ' + (res.data || 'Refresh failed'), false);
+                        return;
                     }
+                    var results = res.data.results || [];
+                    var updated = 0;
+                    results.forEach(function(r) {
+                        var amiId = r.ami_id;
+                        var state = r.state;
+                        var stateCell   = document.getElementById('cs-ami-state-' + amiId);
+                        var actionsCell = document.getElementById('cs-ami-actions-' + amiId);
+                        var row         = document.getElementById('cs-ami-row-' + amiId);
+                        if (!stateCell) return;
+                        updated++;
+                        if (state === 'deleted in AWS') {
+                            if (row) row.style.opacity = '0.55';
+                            stateCell.innerHTML = '<span style="color:#999;font-weight:600;">&#128465; deleted in AWS</span>';
+                            if (actionsCell) actionsCell.innerHTML = '<button type="button" onclick="csAmiDelete(\'' + amiId + '\', \'' + r.name.replace(/'/g, '') + '\', true)" class="button button-small" title="Remove record" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Remove</button>';
+                        } else {
+                            if (row) row.style.opacity = '';
+                            var color = state === 'available' ? '#2e7d32' : (state === 'pending' ? '#e65100' : '#757575');
+                            var icon  = state === 'available' ? '&#10003;' : (state === 'pending' ? '&#9203;' : '&#10007;');
+                            stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + state + '</span>';
+                            if (actionsCell) actionsCell.innerHTML = '<button type="button" onclick="csAmiDelete(\'' + amiId + '\', \'' + r.name.replace(/'/g, '') + '\', false)" class="button button-small" title="Deregister AMI" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>';
+                        }
+                    });
+                    csAmiMsg('&#10003; Refreshed ' + updated + ' AMI' + (updated !== 1 ? 's' : ''), true);
                 });
             }
 
-            function csAmiDelete(amiId, amiName) {
+            function csAmiResetAndRefresh() {
+                var btn = document.getElementById('cs-ami-refresh-all');
+                if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Refreshing...'; }
+                csAmiMsg('Resetting and refreshing...', true);
+                csAmiPost('cs_ami_reset_deleted', '', function(res) {
+                    if (!res.success) {
+                        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh All'; }
+                        csAmiMsg('\u2717 Reset failed: ' + res.data, false);
+                        return;
+                    }
+                    csAmiRefreshAll();
+                });
+            }
+
+            function csAmiDelete(amiId, amiName, alreadyDeleted) {
                 var label = amiName ? amiName + ' (' + amiId + ')' : amiId;
+                if (alreadyDeleted) {
+                    if (!confirm('Remove this record from the log?\n\n' + label + '\n\nThis AMI has already been deleted in AWS. This will only remove the local record.')) return;
+                    csAmiMsg('Removing record...', true);
+                    csAmiPost('cs_ami_remove_record', 'ami_id=' + encodeURIComponent(amiId), function(res) {
+                        if (res.success) {
+                            csAmiMsg('&#10003; Record removed', true);
+                            var row = document.getElementById('cs-ami-row-' + amiId);
+                            if (row) row.remove();
+                        } else {
+                            csAmiMsg('&#10007; ' + (res.data || 'Remove failed'), false);
+                        }
+                    });
+                    return;
+                }
                 if (!confirm('Deregister (delete) this AMI?\n\n' + label + '\n\nThis will deregister the AMI from AWS. Associated EBS snapshots will NOT be deleted automatically.')) return;
                 csAmiMsg('Deregistering ' + amiId + '...', true);
                 csAmiPost('cs_deregister_ami', 'ami_id=' + encodeURIComponent(amiId), function(res) {
                     if (res.success) {
                         csAmiMsg('&#10003; ' + (res.data || 'AMI deregistered'), true);
                         var row = document.getElementById('cs-ami-row-' + amiId);
-                        if (row) {
-                            row.style.opacity = '0.4';
-                            row.style.textDecoration = 'line-through';
-                            // Remove action buttons
-                            var cells = row.getElementsByTagName('td');
-                            if (cells.length >= 5) cells[4].innerHTML = '<span style="color:#999;font-style:italic;">Deregistered</span>';
-                            if (cells.length >= 4) cells[3].innerHTML = '<span style="color:#999;font-weight:600;">&#10007; Deregistered</span>';
-                        }
+                        if (row) row.remove();
                     } else {
                         csAmiMsg('&#10007; ' + (res.data || 'Deregister failed'), false);
                     }
                 });
             }
 
+            function csAmiRemoveFailed(name) {
+                if (!confirm('Remove this failed record from the log?\n\n' + name)) return;
+                csAmiMsg('Removing...', true);
+                csAmiPost('cs_ami_remove_failed', 'name=' + encodeURIComponent(name), function(res) {
+                    if (res.success) {
+                        csAmiMsg('&#10003; Record removed', true);
+                        // Remove the row — find by scanning all rows for matching name cell
+                        var rows = document.querySelectorAll('#cs-ami-tbody tr');
+                        rows.forEach(function(row) {
+                            var cells = row.querySelectorAll('td');
+                            if (cells.length && cells[0].textContent.trim() === name) row.remove();
+                        });
+                    } else {
+                        csAmiMsg('&#10007; ' + (res.data || 'Remove failed'), false);
+                    }
+                });
+            }
+
             function csAmiExplain() {
-                var el = document.getElementById('cs-ami-explain-overlay');
-                if (el) { el.style.display = 'flex'; return; }
-                var ov = document.createElement('div');
-                ov.id = 'cs-ami-explain-overlay';
-                ov.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999999;display:flex;align-items:center;justify-content:center;';
-                var box = document.createElement('div');
-                box.style.cssText = 'background:#fff;border-radius:8px;max-width:600px;width:92%;max-height:80vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.4);';
-                var head = document.createElement('div');
-                head.style.cssText = 'background:linear-gradient(135deg,#1a237e,#3949ab);padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;';
-                head.innerHTML = '<strong style="color:#fff;">EC2 AMI Snapshot - Setup Guide</strong>';
-                var closeBtn = document.createElement('button');
-                closeBtn.type = 'button';
-                closeBtn.innerHTML = '&times;';
-                closeBtn.style.cssText = 'background:none;border:none;color:#fff;font-size:1.4rem;cursor:pointer;line-height:1;';
-                closeBtn.onclick = function() { ov.style.display = 'none'; };
-                head.appendChild(closeBtn);
-                var body = document.createElement('div');
-                body.style.cssText = 'overflow-y:auto;padding:20px 24px;';
-                body.innerHTML = '<p><strong>How it works</strong><br>Creates an Amazon Machine Image (AMI) of the running EC2 instance. This is a full disk snapshot that can be used to launch an identical replacement server.</p>'
+                csExplainModal('cs-ami-explain-overlay', 'EC2 AMI Snapshot - Setup Guide',
+                    'linear-gradient(135deg,#1a237e,#3949ab)',
+                    '<p><strong>How it works</strong><br>Creates an Amazon Machine Image (AMI) of the running EC2 instance. This is a full disk snapshot that can be used to launch an identical replacement server.</p>'
                     + '<p><strong>Requirements</strong></p><ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li>Instance must be running on EC2 with IMDSv1 or IMDSv2 enabled</li><li>AWS CLI installed and configured on the server</li><li>IAM role or credentials with the required permissions</li></ul>'
                     + '<p><strong>AMI naming</strong><br>You provide a prefix (e.g. <code>prod-web01</code>) and the plugin appends a timestamp: <code>prod-web01_20260227_1430</code></p>'
                     + '<p><strong>Reboot option</strong><br>With reboot enabled, EC2 cleanly shuts down the instance before snapshotting, ensuring filesystem consistency. Without reboot, the snapshot is crash consistent (like pulling the power).</p>'
                     + '<p><strong>Minimum IAM policy</strong></p><pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;overflow-x:auto;">{\n  "Version": "2012-10-17",\n  "Statement": [{\n    "Effect": "Allow",\n    "Action": [\n      "ec2:CreateImage",\n      "ec2:DeregisterImage",\n      "ec2:DescribeImages",\n      "ec2:DescribeInstances",\n      "ec2:RebootInstances"\n    ],\n    "Resource": "*"\n  }]\n}</pre>'
-                    + '<p><strong>Restoring from AMI</strong><br>In the AWS Console: EC2 &rarr; AMIs &rarr; select your AMI &rarr; Launch Instance. Or use <code>aws ec2 run-instances --image-id ami-xxx</code>.</p>';
-                box.appendChild(head);
-                box.appendChild(body);
-                ov.appendChild(box);
-                ov.addEventListener('click', function(e) { if (e.target === ov) ov.style.display = 'none'; });
-                document.body.appendChild(ov);
+                    + '<p><strong>Restoring from AMI</strong><br>In the AWS Console: EC2 &rarr; AMIs &rarr; select your AMI &rarr; Launch Instance. Or use <code>aws ec2 run-instances --image-id ami-xxx</code>.</p>'
+                );
+            }
+
+            function csScheduleExplain() {
+                csExplainModal('cs-schedule-explain-overlay', 'Backup Schedule - How It Works',
+                    'linear-gradient(135deg,#1565c0,#2196f3)',
+                    '<p><strong>How scheduling works</strong><br>The plugin uses WordPress cron (WP-Cron) to trigger scheduled backups. WP-Cron is a pseudo-cron system that fires when someone visits your site, so backups run at approximately the scheduled time rather than at the exact second.</p>'
+                    + '<p><strong>Day selection</strong><br>Choose one or more days of the week. A full backup runs once per selected day at the configured time. Common strategies:</p>'
+                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>Daily</strong> &mdash; select all 7 days for maximum protection</li><li><strong>Weekdays</strong> &mdash; Mon through Fri, skip quiet weekends</li><li><strong>MWF</strong> &mdash; good balance of protection and storage usage</li></ul>'
+                    + '<p><strong>Time setting</strong><br>The time uses your server\'s configured timezone. Choose a low-traffic hour (e.g. 02:00 or 03:00) to minimise impact on visitors. The backup process is non-blocking but can be CPU-intensive on large sites.</p>'
+                    + '<p><strong>Low-traffic sites</strong><br>If your site receives very few visits, WP-Cron may not fire reliably. In that case, set up a system cron job to call <code>wp-cron.php</code> periodically:</p>'
+                    + '<pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;overflow-x:auto;">*/15 * * * * curl -s https://yoursite.com/wp-cron.php > /dev/null 2>&1</pre>'
+                    + '<p><strong>Retention interaction</strong><br>Scheduled backups automatically enforce your retention limit. After each backup, files beyond the retention count are deleted oldest first.</p>'
+                );
+            }
+
+            function csRetentionExplain() {
+                csExplainModal('cs-retention-explain-overlay', 'Retention and Storage - How It Works',
+                    'linear-gradient(135deg,#2e7d32,#43a047)',
+                    '<p><strong>What retention means</strong><br>The retention number controls how many backup zip files are kept on disk. After every backup (manual or scheduled), the plugin counts all stored backups and deletes the oldest files that exceed this limit.</p>'
+                    + '<p><strong>Choosing a retention number</strong><br>Consider your backup frequency and recovery needs:</p>'
+                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>3 to 5</strong> &mdash; low storage, suitable for small sites with daily backups</li><li><strong>7 to 14</strong> &mdash; two weeks of daily backups, good for most sites</li><li><strong>20 to 30</strong> &mdash; a full month if you have the disk space</li></ul>'
+                    + '<p><strong>Storage estimation</strong><br>The estimated storage is calculated as: <code>retention count &times; latest backup size</code>. This is an approximation because backup sizes can vary as your content changes. The traffic-light indicator turns red when the estimate exceeds your available free disk space.</p>'
+                    + '<p><strong>Storage breakdown</strong><br>The storage grid below shows the raw (uncompressed) sizes of each backup component. Actual zip files are typically 40 to 60% smaller due to compression, depending on content type. Media files (images, video) compress less than database dumps and PHP code.</p>'
+                );
+            }
+
+            function csSystemExplain() {
+                csExplainModal('cs-system-explain-overlay', 'System Info - What It Means',
+                    'linear-gradient(135deg,#6a1b9a,#8e24aa)',
+                    '<p><strong>Backup method</strong><br><code>mysqldump (native)</code> means the server has the <code>mysqldump</code> binary available. This is significantly faster and more reliable for large databases. <code>PHP streamed</code> is the fallback that works everywhere but is slower because it reads data through WordPress\'s PHP database layer.</p>'
+                    + '<p><strong>Restore method</strong><br>Same principle as backup: <code>mysql CLI (native)</code> pipes the SQL file directly into the MySQL client binary for maximum speed. <code>PHP streamed</code> splits the SQL into individual statements and executes them one by one through WordPress.</p>'
+                    + '<p><strong>PHP memory limit</strong><br>Controls the maximum amount of RAM PHP can use. For large backups, 256M or higher is recommended. If backups fail with memory errors, increase this in <code>php.ini</code> or <code>.htaccess</code>.</p>'
+                    + '<p><strong>Max execution time</strong><br>How long PHP is allowed to run before being killed. The plugin sets this to unlimited during backup/restore, but some hosting providers enforce hard limits regardless. If backups time out, contact your host.</p>'
+                    + '<p><strong>Disk free space traffic light</strong></p>'
+                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><span style="color:#2e7d32;font-weight:700;">Green</span> &mdash; room for 10+ more backups</li><li><span style="color:#e65100;font-weight:700;">Amber</span> &mdash; room for 4 to 9 more backups</li><li><span style="color:#c62828;font-weight:700;">Red</span> &mdash; fewer than 4 backups fit, free up space immediately</li></ul>'
+                );
+            }
+
+            function csBackupExplain() {
+                csExplainModal('cs-backup-explain-overlay', 'Manual Backup - Component Guide',
+                    'linear-gradient(135deg,#e65100,#f57c00)',
+                    '<p><strong>What gets backed up</strong><br>You can select any combination of components. The plugin creates a single zip file containing everything you selected.</p>'
+                    + '<p><strong>Core components</strong></p>'
+                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>Database</strong> &mdash; all WordPress tables (posts, pages, users, settings, custom tables). This is the most critical component. A database-only backup lets you restore all content even if files are intact.</li><li><strong>Media uploads</strong> &mdash; everything in <code>wp-content/uploads/</code> (images, PDFs, videos). Often the largest component.</li><li><strong>Plugins</strong> &mdash; the entire <code>wp-content/plugins/</code> directory. Can be reinstalled from wordpress.org, but custom configs live here.</li><li><strong>Themes</strong> &mdash; all installed themes in <code>wp-content/themes/</code>.</li></ul>'
+                    + '<p><strong>Other components</strong></p>'
+                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>Must-use plugins</strong> &mdash; <code>wp-content/mu-plugins/</code>, auto-loaded by WordPress</li><li><strong>Languages</strong> &mdash; translation files in <code>wp-content/languages/</code></li><li><strong>Dropins</strong> &mdash; special PHP files like <code>object-cache.php</code> in <code>wp-content/</code></li><li><strong>.htaccess</strong> &mdash; Apache rewrite rules at the site root</li><li><strong>wp-config.php</strong> &mdash; contains database credentials and secret keys. Marked with a warning because the backup will contain sensitive credentials.</li></ul>'
+                    + '<p><strong>Size estimates</strong><br>The uncompressed total is the raw filesystem size. The zipped estimate is based on your last backup\'s compression ratio, or a rough 50% estimate if no prior backup exists. Actual size depends on content type.</p>'
+                );
+            }
+
+            function csHistoryExplain() {
+                csExplainModal('cs-history-explain-overlay', 'Backup History - Reading the Table',
+                    'linear-gradient(135deg,#004d40,#00897b)',
+                    '<p><strong>Backup types</strong><br>Each backup is labelled by what it contains:</p>'
+                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>Full</strong> &mdash; database + media + plugins + themes (the four core components)</li><li><strong>Full+</strong> &mdash; all four core components plus one or more "other" items (mu-plugins, languages, dropins, .htaccess, wp-config)</li><li><strong>DB</strong> &mdash; database only</li><li><strong>Media</strong> &mdash; media uploads only</li><li><strong>DB + Media</strong>, <strong>DB + Plugins</strong>, etc. &mdash; custom combinations</li></ul>'
+                    + '<p><strong>Actions</strong></p>'
+                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><span style="color:#1565c0;font-weight:700;">Download</span> (blue arrow) &mdash; saves the zip to your local machine</li><li><span style="color:#2e7d32;font-weight:700;">Restore</span> (green arrow, only on backups containing a database) &mdash; opens the restore confirmation dialog</li><li><span style="color:#c62828;font-weight:700;">Delete</span> (red bin) &mdash; permanently removes the backup file from the server</li></ul>'
+                    + '<p><strong>S3 column</strong><br>If S3 remote backup is configured, a cloud icon shows the sync status: green checkmark for synced, red X for failed, dash for not yet synced.</p>'
+                    + '<p><strong>Retention</strong><br>The oldest backups beyond your retention limit are deleted automatically after each backup run. You can also delete individual backups manually.</p>'
+                );
+            }
+
+            function csRestoreExplain() {
+                csExplainModal('cs-restore-explain-overlay', 'Restore from File - How It Works',
+                    'linear-gradient(135deg,#b71c1c,#e53935)',
+                    '<p><strong>What this does</strong><br>Upload a backup file to restore your database. This is useful when migrating between servers or recovering from a disaster where the backup directory was lost.</p>'
+                    + '<p><strong>Accepted formats</strong></p>'
+                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>.zip</strong> &mdash; a backup created by this plugin. The plugin extracts <code>database.sql</code> from the zip and restores it.</li><li><strong>.sql</strong> &mdash; a raw SQL dump file (e.g. from phpMyAdmin, mysqldump, or another backup tool). The plugin executes it directly.</li></ul>'
+                    + '<p><strong>The restore process</strong></p>'
+                    + '<ol style="margin:8px 0 12px 20px;font-size:0.9rem;"><li>Site enters <strong>maintenance mode</strong> (visitors see a maintenance page)</li><li>Existing database tables are <strong>dropped and recreated</strong> from the backup</li><li>Maintenance mode is <strong>removed</strong> and the site comes back online</li></ol>'
+                    + '<p><strong>&#9888; Critical: Take a snapshot first</strong><br>Before restoring, always take a server snapshot or VM snapshot from your hosting control panel or AWS console. If the restore goes wrong (corrupted file, incompatible SQL), you can roll back the entire server to the snapshot instantly. This plugin cannot undo a failed restore without a prior backup.</p>'
+                    + '<p><strong>File uploads</strong><br>The maximum upload size depends on your PHP configuration (<code>upload_max_filesize</code> and <code>post_max_size</code>). If your backup is too large to upload, place it in the backup directory on the server and use the restore button in the history table instead.</p>'
+                );
             }
             </script>
 
             <!-- SYSTEM INFO CARD -->
             <div class="cs-card cs-card--purple">
-                <div class="cs-card-stripe cs-stripe--purple" style="background:linear-gradient(135deg,#6a1b9a 0%,#8e24aa 100%);display:flex;align-items:center;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⚙ System Info</h2></div>
+                <div class="cs-card-stripe cs-stripe--purple" style="background:linear-gradient(135deg,#6a1b9a 0%,#8e24aa 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⚙ System Info</h2><button type="button" onclick="csSystemExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
 
                 <div class="cs-info-row">
                     <span>Backup method</span>
@@ -910,7 +1187,7 @@ function cs_admin_page(): void {
         <!-- ===================== MANUAL BACKUP ===================== -->
         <div class="cs-section-ribbon"><span>Manual Backup</span></div>
         <div class="cs-card cs-card--orange cs-full">
-            <div class="cs-card-stripe cs-stripe--orange" style="background:linear-gradient(135deg,#e65100 0%,#f57c00 100%);display:flex;align-items:center;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">▶ Run Backup Now</h2></div>
+            <div class="cs-card-stripe cs-stripe--orange" style="background:linear-gradient(135deg,#e65100 0%,#f57c00 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">▶ Run Backup Now</h2><button type="button" onclick="csBackupExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
             <?php
             // Pass sizes to JS for live total calculation
             $backup_sizes = [
@@ -982,7 +1259,7 @@ function cs_admin_page(): void {
         <!-- ===================== BACKUP HISTORY ===================== -->
         <div class="cs-section-ribbon"><span>Backup History</span></div>
         <div class="cs-card cs-card--teal cs-full">
-            <div class="cs-card-stripe cs-stripe--teal" style="background:linear-gradient(135deg,#004d40 0%,#00897b 100%);display:flex;align-items:center;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🕓 Backup History</h2></div>
+            <div class="cs-card-stripe cs-stripe--teal" style="background:linear-gradient(135deg,#004d40 0%,#00897b 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🕓 Backup History</h2><button type="button" onclick="csHistoryExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
             <?php if (empty($backups)): ?>
                 <p class="cs-empty">No backups yet. Run your first backup above.</p>
             <?php else: ?>
@@ -1032,7 +1309,7 @@ function cs_admin_page(): void {
                             <?php if (!$s3_entry): ?>
                                 <span title="Not synced to S3" style="color:#bbb;font-size:16px;">—</span>
                             <?php elseif ($s3_entry['ok']): ?>
-                                <span title="Synced to S3 on <?php echo esc_attr(date('Y-m-d H:i', $s3_entry['time'])); ?>" style="color:#2e7d32;font-size:16px;">
+                                <span title="Synced to S3 on <?php echo esc_attr(wp_date('j M Y H:i', $s3_entry['time'])); ?>" style="color:#2e7d32;font-size:16px;">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/></svg>
                                 </span>
                             <?php else: ?>
@@ -1054,7 +1331,7 @@ function cs_admin_page(): void {
         <!-- ===================== RESTORE FROM UPLOAD ===================== -->
         <div class="cs-section-ribbon"><span>Restore from File</span></div>
         <div class="cs-card cs-card--red cs-full">
-            <div class="cs-card-stripe cs-stripe--red" style="background:linear-gradient(135deg,#b71c1c 0%,#e53935 100%);display:flex;align-items:center;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">↩ Restore from Uploaded File</h2></div>
+            <div class="cs-card-stripe cs-stripe--red" style="background:linear-gradient(135deg,#b71c1c 0%,#e53935 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">↩ Restore from Uploaded File</h2><button type="button" onclick="csRestoreExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
             <div class="cs-restore-upload-grid">
                 <div>
                     <p>Upload a <code>.zip</code> (from this plugin) or a raw <code>.sql</code> file to restore the database.</p>
@@ -1288,11 +1565,17 @@ add_action('wp_ajax_cs_save_s3', function (): void {
 
 add_action('wp_ajax_cs_save_ami', function (): void {
     cs_verify_nonce();
-    $prefix = sanitize_text_field($_POST['prefix'] ?? '');
-    $reboot = !empty($_POST['reboot']);
+    $prefix          = sanitize_text_field($_POST['prefix'] ?? '');
+    $reboot          = !empty($_POST['reboot']);
+    $region_override = sanitize_text_field($_POST['region_override'] ?? '');
+    // Validate region format if provided: letters, digits, hyphens only
+    if ($region_override && !preg_match('/^[a-z0-9-]+$/', $region_override)) {
+        wp_send_json_error('Invalid region format. Example: af-south-1');
+    }
     update_option('cs_ami_prefix', $prefix);
     update_option('cs_ami_reboot', $reboot);
-    wp_send_json_success(['prefix' => $prefix, 'reboot' => $reboot]);
+    update_option('cs_ami_region_override', $region_override);
+    wp_send_json_success(['prefix' => $prefix, 'reboot' => $reboot, 'region' => $region_override]);
 });
 
 add_action('wp_ajax_cs_create_ami', function (): void {
@@ -1357,12 +1640,19 @@ add_action('wp_ajax_cs_create_ami', function (): void {
             'state'       => 'pending',
         ];
         $log[] = $entry;
-        // Keep last 20 entries
-        if (count($log) > 20) $log = array_slice($log, -20);
+        // Keep last 50 entries
+        if (count($log) > 50) $log = array_slice($log, -50);
         update_option('cs_ami_log', $log, false);
 
         $msg = 'AMI creation started: ' . $ami_id . ' (' . $ami_name . ')';
         if ($reboot) $msg .= ' — instance will reboot shortly';
+
+        // Schedule the first state poll in 10 minutes if not already queued
+        if (!wp_next_scheduled('cs_ami_poll')) {
+            wp_schedule_single_event(time() + CS_AMI_POLL_INTERVAL, 'cs_ami_poll');
+            error_log('[CloudScale Backup] AMI poll: first check scheduled in ' . (CS_AMI_POLL_INTERVAL / 60) . ' min for ' . $ami_id);
+        }
+
         wp_send_json_success(['message' => $msg, 'ami_id' => $ami_id, 'name' => $ami_name]);
     } else {
         $entry = [
@@ -1468,22 +1758,152 @@ add_action('wp_ajax_cs_deregister_ami', function (): void {
 
     // deregister-image returns empty output on success
     if ($out === '' || str_contains($out, '"return": true') || str_contains($out, 'Return')) {
-        // Update the log to mark as deregistered
-        $log = (array) get_option('cs_ami_log', []);
-        foreach ($log as &$e) {
-            if (($e['ami_id'] ?? '') === $ami_id) {
-                $e['state'] = 'deregistered';
-                $e['ok']    = false;
-            }
-        }
-        unset($e);
-        update_option('cs_ami_log', $log, false);
+        // Remove the record from the log entirely
+        $log     = (array) get_option('cs_ami_log', []);
+        $updated = array_values(array_filter($log, fn($e) => ($e['ami_id'] ?? '') !== $ami_id));
+        update_option('cs_ami_log', $updated, false);
 
         wp_send_json_success('AMI ' . $ami_id . ' deregistered successfully.');
     } else {
         error_log('[CloudScale Backup] AMI deregister failed: ' . $out);
         wp_send_json_error('Deregister failed: ' . $out);
     }
+});
+
+// ============================================================
+// AJAX — Refresh all AMI states (one at a time, 2s gap between calls)
+// ============================================================
+
+add_action('wp_ajax_cs_ami_refresh_all', function (): void {
+    cs_verify_nonce();
+    set_time_limit(0);
+
+    $aws = cs_find_aws();
+    if (!$aws) {
+        wp_send_json_error('AWS CLI not found.');
+    }
+
+    // Read directly from DB — bypasses object cache which may serve stale state
+    // after cs_ami_reset_deleted has just written new values
+    global $wpdb;
+    $raw_log = $wpdb->get_var("SELECT option_value FROM {$wpdb->options} WHERE option_name = 'cs_ami_log'");
+    $log     = $raw_log ? (array) maybe_unserialize($raw_log) : [];
+
+    $region      = cs_get_instance_region();
+    $region_flag = $region ? ' --region ' . escapeshellarg($region) : '';
+    $results     = [];
+
+    foreach ($log as &$entry) {
+        if (empty($entry['ami_id']) || !preg_match('/^ami-[a-f0-9]+$/', $entry['ami_id'])) {
+            continue;
+        }
+
+        $ami_id = $entry['ami_id'];
+
+        $cmd = escapeshellarg($aws) . ' ec2 describe-images'
+             . ' --image-ids ' . escapeshellarg($ami_id)
+             . $region_flag
+             . ' --query "Images[*].{ImageId:ImageId,State:State}"'
+             . ' --output json 2>&1';
+
+        $out    = trim((string) shell_exec($cmd));
+        $images = json_decode($out, true);
+
+        // Determine state: if AWS returned a valid image entry use its state,
+        // otherwise the AMI is gone
+        $new_state = 'deleted in AWS';
+        if (is_array($images)) {
+            foreach ($images as $img) {
+                if (($img['ImageId'] ?? '') === $ami_id) {
+                    $new_state = $img['State'] ?? 'unknown';
+                    break;
+                }
+            }
+        }
+
+        error_log('[CloudScale Backup] Refresh All: ' . $ami_id . ' → ' . $new_state);
+
+        // Always write the state — never skip based on previous value
+        $entry['state'] = $new_state;
+        if ($new_state !== 'deleted in AWS') {
+            $entry['ok'] = true;
+        }
+
+        $results[] = [
+            'ami_id' => $ami_id,
+            'name'   => $entry['name'] ?? '',
+            'state'  => $new_state,
+        ];
+
+        sleep(2);
+    }
+    unset($entry);
+
+    // Auto-prune log entries confirmed deleted for more than 30 days
+    $prune_cutoff = time() - (30 * DAY_IN_SECONDS);
+    $log = array_values(array_filter($log, function($e) use ($prune_cutoff) {
+        if (($e['state'] ?? '') !== 'deleted in AWS') return true;
+        return (int)($e['time'] ?? 0) > $prune_cutoff;
+    }));
+
+    // Always write back — state is always refreshed from AWS
+    update_option('cs_ami_log', $log, false);
+
+    wp_send_json_success(['results' => $results]);
+});
+
+// ============================================================
+// AJAX — Reset all 'deleted in AWS' log entries back to 'pending' for re-query
+// ============================================================
+
+add_action('wp_ajax_cs_ami_reset_deleted', function (): void {
+    cs_verify_nonce();
+    $log     = (array) get_option('cs_ami_log', []);
+    $reset   = 0;
+    foreach ($log as &$entry) {
+        if (!empty($entry['ami_id']) && ($entry['state'] ?? '') === 'deleted in AWS') {
+            $entry['state'] = 'pending';
+            $entry['ok']    = true;
+            $reset++;
+        }
+    }
+    unset($entry);
+    update_option('cs_ami_log', $log, false);
+    wp_send_json_success(['reset' => $reset]);
+});
+
+// ============================================================
+// AJAX — Remove a log record (for AMIs already deleted in AWS)
+// ============================================================
+
+add_action('wp_ajax_cs_ami_remove_record', function (): void {
+    cs_verify_nonce();
+
+    $ami_id = sanitize_text_field($_POST['ami_id'] ?? '');
+    if (!$ami_id || !preg_match('/^ami-[a-f0-9]+$/', $ami_id)) {
+        wp_send_json_error('Invalid AMI ID.');
+    }
+
+    $log     = (array) get_option('cs_ami_log', []);
+    $updated = array_values(array_filter($log, fn($e) => ($e['ami_id'] ?? '') !== $ami_id));
+
+    update_option('cs_ami_log', $updated, false);
+    wp_send_json_success('Record removed.');
+});
+
+add_action('wp_ajax_cs_ami_remove_failed', function (): void {
+    cs_verify_nonce();
+    $name = sanitize_text_field($_POST['name'] ?? '');
+    if (!$name) {
+        wp_send_json_error('No name provided.');
+    }
+    $log     = (array) get_option('cs_ami_log', []);
+    $updated = array_values(array_filter($log, fn($e) => ($e['name'] ?? '') !== $name || !empty($e['ami_id'])));
+    if (count($updated) === count($log)) {
+        wp_send_json_error('Record not found.');
+    }
+    update_option('cs_ami_log', $updated, false);
+    wp_send_json_success('Record removed.');
 });
 
 add_action('wp_ajax_cs_save_retention', function (): void {
@@ -1802,21 +2222,12 @@ function cs_get_instance_id(): string {
     static $cached = null;
     if ($cached !== null) return $cached;
 
-    // Check transient first to avoid IMDS calls on every page load
-    $transient = get_transient('cs_ec2_instance_id');
-    if ($transient !== false) {
-        $cached = $transient;
-        return $cached;
-    }
-
     try {
         $cached = cs_imds_get('/latest/meta-data/instance-id');
     } catch (\Throwable $e) {
         $cached = '';
     }
 
-    // Cache for 1 hour — empty string means "not on EC2", still cache it
-    set_transient('cs_ec2_instance_id', $cached, HOUR_IN_SECONDS);
     return $cached;
 }
 
@@ -1824,21 +2235,21 @@ function cs_get_instance_region(): string {
     static $cached = null;
     if ($cached !== null) return $cached;
 
-    $transient = get_transient('cs_ec2_region');
-    if ($transient !== false) {
-        $cached = $transient;
+    // Manual override always wins — avoids IMDS dependency entirely
+    $override = get_option('cs_ami_region_override', '');
+    if ($override) {
+        $cached = $override;
         return $cached;
     }
 
     try {
-        // Availability zone is e.g. "eu-west-1a" — strip the trailing letter
+        // Availability zone is e.g. "af-south-1a" — strip the trailing letter
         $az = cs_imds_get('/latest/meta-data/placement/availability-zone');
         $cached = $az ? preg_replace('/[a-z]$/', '', $az) : '';
     } catch (\Throwable $e) {
         $cached = '';
     }
 
-    set_transient('cs_ec2_region', $cached, HOUR_IN_SECONDS);
     return $cached;
 }
 
@@ -2185,7 +2596,7 @@ function cs_list_backups(): array {
             'name'  => $name,
             'type'  => $type,
             'size'  => filesize($file),
-            'date'  => date('Y-m-d H:i', filemtime($file)),
+            'date'  => wp_date('j M Y H:i', filemtime($file)),
             'mtime' => filemtime($file),
         ];
     }
@@ -2223,7 +2634,7 @@ function cs_human_age(int $timestamp): string {
     if ($diff < 3600)   return round($diff / 60) . ' min ago';
     if ($diff < 86400)  return round($diff / 3600) . ' hr ago';
     if ($diff < 604800) return round($diff / 86400) . ' days ago';
-    return date('j M Y', $timestamp);
+    return wp_date('j M Y', $timestamp);
 }
 
 function cs_verify_nonce(): void {
