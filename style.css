@@ -603,7 +603,6 @@ select.cs-input-sm { width: 90px !important; }
 .cs-type-themes  { background: #fce4ec; color: #c62828; }
 
 .cs-restore-btn { background: #fff8e1 !important; border-color: #f9a825 !important; color: #7a5600 !important; }
-.cs-restore-btn:hover { background: #fff3cd !important; border-color: #e65100 !important; }
 
 /* ================================================================
    RESTORE FROM UPLOAD
@@ -722,7 +721,8 @@ select.cs-input-sm { width: 90px !important; }
 .cs-icon-btn:hover { opacity: 0.82; }
 .cs-icon-btn--blue  { background: #1565c0!important; color: #fff!important; }
 .cs-icon-btn--red   { background: #c62828!important; color: #fff!important; }
-.cs-icon-btn--green { background: #2e7d32!important; color: #fff!important; }
+.cs-icon-btn--green  { background: #2e7d32!important; color: #fff!important; }
+.cs-icon-btn--orange { background: #e65100!important; color: #fff!important; }
 
 /* Meta cell: created on top, age below */
 .cs-col-meta .cs-created { display: block; font-size: 0.83rem; }

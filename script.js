@@ -178,7 +178,7 @@ jQuery(function ($) {
 
         var $row = $(this).closest('tr');
         var $btn = $(this);
-        $btn.prop('disabled', true).text('Deleting...');
+        $btn.prop('disabled', true).removeClass('cs-icon-btn--red').addClass('cs-icon-btn--orange');
 
         $.post(CS.ajax_url, { action: 'cs_delete_backup', nonce: CS.nonce, file: file },
             function (res) {
@@ -186,7 +186,7 @@ jQuery(function ($) {
                     $row.fadeOut(250, function () { $(this).remove(); });
                 } else {
                     alert('Error: ' + res.data);
-                    $btn.prop('disabled', false).text('✕');
+                    $btn.prop('disabled', false).removeClass('cs-icon-btn--orange').addClass('cs-icon-btn--red');
                 }
             }
         );
