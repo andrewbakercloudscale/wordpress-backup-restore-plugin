@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           2.97.0
+ * Version:           3.0.3
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined('ABSPATH') || exit;
 
-define('CS_VERSION',    '2.97.0');
+define('CS_VERSION',    '3.0.3');
 define('CS_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -276,7 +276,20 @@ add_action('cs_scheduled_backup', function () {
     set_time_limit(0);
     ignore_user_abort(true);
     cs_ensure_backup_dir();
-    cs_create_backup(true, true, true, true);
+
+    // Read configured components — default to core four if option missing
+    $c = (array) get_option('cs_schedule_components', ['db','media','plugins','themes']);
+    cs_create_backup(
+        in_array('db',        $c, true),
+        in_array('media',     $c, true),
+        in_array('plugins',   $c, true),
+        in_array('themes',    $c, true),
+        in_array('mu',        $c, true),
+        in_array('languages', $c, true),
+        in_array('dropins',   $c, true),
+        in_array('htaccess',  $c, true),
+        in_array('wpconfig',  $c, true)
+    );
     cs_enforce_retention();
 });
 
@@ -372,10 +385,17 @@ function cs_admin_page(): void {
         update_option('cs_run_days_saved',   '1');
         update_option('cs_schedule_enabled', !empty($_POST['schedule_enabled']));
         update_option('cs_run_hour',         max(0, min(23, intval($_POST['run_hour'] ?? 3))));
-        wp_cache_delete('cs_run_days',         'options');
-        wp_cache_delete('cs_run_days_saved',   'options');
-        wp_cache_delete('cs_schedule_enabled', 'options');
-        wp_cache_delete('alloptions',          'options');
+        $valid_components = ['db','media','plugins','themes','mu','languages','dropins','htaccess','wpconfig'];
+        $raw_components   = isset($_POST['schedule_components']) && is_array($_POST['schedule_components']) ? $_POST['schedule_components'] : [];
+        $clean_components = array_values(array_intersect($raw_components, $valid_components));
+        // Default to core four if nothing selected
+        if (empty($clean_components)) { $clean_components = ['db','media','plugins','themes']; }
+        update_option('cs_schedule_components', $clean_components);
+        wp_cache_delete('cs_run_days',              'options');
+        wp_cache_delete('cs_run_days_saved',        'options');
+        wp_cache_delete('cs_schedule_enabled',      'options');
+        wp_cache_delete('cs_schedule_components',   'options');
+        wp_cache_delete('alloptions',               'options');
         cs_reschedule();
         $day_names = ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
         $saved_labels = implode(', ', array_map(fn($d) => $day_names[$d] ?? $d, $clean_days));
@@ -386,6 +406,7 @@ function cs_admin_page(): void {
     $enabled      = isset($_POST['cs_action']) ? !empty($_POST['schedule_enabled']) : (bool) get_option('cs_schedule_enabled', false);
     $run_days_sel = cs_get_run_days();
     $hour         = intval(get_option('cs_run_hour', 3));
+    $sched_components = (array) get_option('cs_schedule_components', ['db','media','plugins','themes']);
     $retention    = intval(get_option('cs_retention', 8));
     $s3_bucket    = get_option('cs_s3_bucket', '');
     $s3_prefix    = get_option('cs_s3_prefix', 'backups/');
@@ -393,6 +414,7 @@ function cs_admin_page(): void {
     $ami_prefix          = get_option('cs_ami_prefix', '');
     $ami_reboot          = (bool) get_option('cs_ami_reboot', false);
     $ami_region_override = get_option('cs_ami_region_override', '');
+    $ami_max             = intval(get_option('cs_ami_max', 10));
     $dump_method  = cs_mysqldump_available() ? 'mysqldump (native — fast)' : 'PHP streamed (compatible)';
     $restore_method = cs_mysql_cli_available() ? 'mysql CLI (native — fast)' : 'PHP streamed (compatible)';
 
@@ -504,6 +526,35 @@ function cs_admin_page(): void {
                     <?php endif; ?>
 
                 </fieldset>
+
+                <!-- Scheduled backup components -->
+                <div class="cs-field-group cs-mt" style="border-top:1px solid #e0e0e0;padding-top:14px;margin-top:14px;">
+                    <span class="cs-field-label">Include in scheduled backup</span>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:6px;">
+                        <?php
+                        $sched_comp_map = [
+                            'db'        => 'Database',
+                            'media'     => 'Media uploads',
+                            'plugins'   => 'Plugins',
+                            'themes'    => 'Themes',
+                            'mu'        => 'Must-use plugins',
+                            'languages' => 'Languages',
+                            'dropins'   => 'Dropins',
+                            'htaccess'  => '.htaccess',
+                            'wpconfig'  => 'wp-config.php',
+                        ];
+                        foreach ($sched_comp_map as $key => $label):
+                        ?>
+                        <label class="cs-option-label" style="margin:0;">
+                            <input type="checkbox" name="schedule_components[]" value="<?php echo $key; ?>"
+                                <?php checked(in_array($key, $sched_components, true)); ?>>
+                            <?php echo esc_html($label); ?>
+                            <?php if ($key === 'wpconfig'): ?><span class="cs-sensitive-badge" style="margin-left:4px;">&#9888; credentials</span><?php endif; ?>
+                        </label>
+                        <?php endforeach; ?>
+                    </div>
+                    <p class="cs-help">Choose which components are included each time the scheduled backup runs. Manual backups always let you choose individually.</p>
+                </div>
 
                 <div id="cs-off-notice" class="cs-off-notice" <?php echo $enabled ? 'style="display:none"' : ''; ?>>
                     Automatic backups are <strong>off</strong>. Enable the checkbox above to configure a schedule, or run backups manually below.
@@ -794,10 +845,23 @@ function cs_admin_page(): void {
                 </div>
 
                 <div class="cs-field-row cs-mt">
-                    <label for="cs-ami-prefix"><strong>AMI name prefix</strong></label>
-                    <input type="text" id="cs-ami-prefix" class="regular-text" placeholder="mysite-backup"
-                           value="<?php echo esc_attr($ami_prefix); ?>">
-                    <p class="cs-help">Example: entering <code>prod-web01</code> creates AMIs named <code>prod-web01_20260227_1430</code></p>
+                    <div style="display:flex;align-items:flex-start;gap:24px;flex-wrap:wrap;">
+                        <div>
+                            <label for="cs-ami-prefix"><strong>AMI name prefix</strong></label><br>
+                            <input type="text" id="cs-ami-prefix" placeholder="mysite-backup"
+                                   value="<?php echo esc_attr($ami_prefix); ?>"
+                                   style="width:calc(20em - 50px);min-width:140px;">
+                        </div>
+                        <div>
+                            <label for="cs-ami-max"><strong>Max AMIs to keep</strong></label><br>
+                            <div class="cs-inline" style="margin-top:2px;">
+                                <input type="number" id="cs-ami-max" class="cs-input-sm" min="1" max="999"
+                                       value="<?php echo esc_attr($ami_max); ?>" style="width:80px;">
+                                <span class="cs-muted-text">AMIs</span>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="cs-help" style="margin-top:6px;">Prefix example: <code>prod-web01</code> &rarr; <code>prod-web01_20260227_1430</code>. Max AMIs: when creating a new AMI would exceed this limit, the oldest AMI is automatically deregistered from AWS and removed from the log before the new one is created.</p>
                 </div>
 
                 <div class="cs-field-group">
@@ -897,9 +961,10 @@ function cs_admin_page(): void {
                 var prefix = document.getElementById('cs-ami-prefix').value.trim();
                 var reboot = document.getElementById('cs-ami-reboot').checked ? '1' : '0';
                 var regionOverride = document.getElementById('cs-ami-region-override').value.trim();
+                var amiMax = parseInt(document.getElementById('cs-ami-max').value, 10) || 10;
                 csAmiMsg('Saving...', true);
                 csAmiPost('cs_save_ami',
-                    'prefix=' + encodeURIComponent(prefix) + '&reboot=' + reboot + '&region_override=' + encodeURIComponent(regionOverride),
+                    'prefix=' + encodeURIComponent(prefix) + '&reboot=' + reboot + '&region_override=' + encodeURIComponent(regionOverride) + '&ami_max=' + amiMax,
                     function(res) { csAmiMsg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success); }
                 );
             }
@@ -1281,7 +1346,7 @@ function cs_admin_page(): void {
                 <?php
                 $s3_log = (array) get_option('cs_s3_log', []);
                 foreach ($backups as $i => $b):
-                    $is_db  = (str_contains($b['name'], '_db') || str_contains($b['name'], '_full'));
+                    $is_db  = str_contains($b['type'], 'DB') || $b['type'] === 'Full' || $b['type'] === 'Full+';
                     $s3_entry = $s3_log[$b['name']] ?? null;
                 ?>
                     <tr class="<?php echo $i === 0 ? 'cs-row-latest' : ''; ?>" style="height:40px!important;max-height:40px!important;">
@@ -1568,6 +1633,7 @@ add_action('wp_ajax_cs_save_ami', function (): void {
     $prefix          = sanitize_text_field($_POST['prefix'] ?? '');
     $reboot          = !empty($_POST['reboot']);
     $region_override = sanitize_text_field($_POST['region_override'] ?? '');
+    $ami_max         = max(1, min(999, intval($_POST['ami_max'] ?? 10)));
     // Validate region format if provided: letters, digits, hyphens only
     if ($region_override && !preg_match('/^[a-z0-9-]+$/', $region_override)) {
         wp_send_json_error('Invalid region format. Example: af-south-1');
@@ -1575,7 +1641,8 @@ add_action('wp_ajax_cs_save_ami', function (): void {
     update_option('cs_ami_prefix', $prefix);
     update_option('cs_ami_reboot', $reboot);
     update_option('cs_ami_region_override', $region_override);
-    wp_send_json_success(['prefix' => $prefix, 'reboot' => $reboot, 'region' => $region_override]);
+    update_option('cs_ami_max', $ami_max);
+    wp_send_json_success(['prefix' => $prefix, 'reboot' => $reboot, 'region' => $region_override, 'ami_max' => $ami_max]);
 });
 
 add_action('wp_ajax_cs_create_ami', function (): void {
@@ -1640,9 +1707,8 @@ add_action('wp_ajax_cs_create_ami', function (): void {
             'state'       => 'pending',
         ];
         $log[] = $entry;
-        // Keep last 50 entries
-        if (count($log) > 50) $log = array_slice($log, -50);
-        update_option('cs_ami_log', $log, false);
+        // Enforce cs_ami_max — deregister and prune oldest successful entries beyond the limit
+        $log = cs_ami_enforce_max($log, $aws, $region);
 
         $msg = 'AMI creation started: ' . $ami_id . ' (' . $ami_name . ')';
         if ($reboot) $msg .= ' — instance will reboot shortly';
@@ -1669,6 +1735,56 @@ add_action('wp_ajax_cs_create_ami', function (): void {
         wp_send_json_error('AMI creation failed: ' . $out);
     }
 });
+
+// ============================================================
+// AMI retention enforcement — deregisters oldest AMIs from AWS
+// ============================================================
+
+function cs_ami_enforce_max(array $log, string $aws, string $region): array {
+    $ami_max      = max(1, intval(get_option('cs_ami_max', 10)));
+    $ok_entries   = array_values(array_filter($log, fn($e) => !empty($e['ok']) && !empty($e['ami_id'])));
+    $fail_entries = array_values(array_filter($log, fn($e) =>  empty($e['ok']) ||  empty($e['ami_id'])));
+
+    // Sort oldest first
+    usort($ok_entries, fn($a, $b) => ($a['time'] ?? 0) <=> ($b['time'] ?? 0));
+
+    if (count($ok_entries) > $ami_max) {
+        $to_prune    = array_slice($ok_entries, 0, count($ok_entries) - $ami_max);
+        $keep        = array_slice($ok_entries, -$ami_max);
+        $region_flag = $region ? ' --region ' . escapeshellarg($region) : '';
+
+        foreach ($to_prune as $old) {
+            $ami_id = $old['ami_id'] ?? '';
+            if (!$ami_id || !preg_match('/^ami-[a-f0-9]+$/', $ami_id)) {
+                continue;
+            }
+            $cmd = escapeshellarg($aws) . ' ec2 deregister-image'
+                 . ' --image-id ' . escapeshellarg($ami_id)
+                 . $region_flag
+                 . ' 2>&1';
+            $out = trim((string) shell_exec($cmd));
+            // deregister-image returns empty output on success.
+            // Also treat "InvalidAMIID.NotFound" as success — already gone from AWS.
+            $already_gone = str_contains($out, 'InvalidAMIID') || str_contains($out, 'does not exist');
+            if ($out === '' || $already_gone) {
+                // Deregistered (or already gone) — safe to drop local record
+                error_log('[CloudScale Backup] AMI auto-deregistered: ' . $ami_id . ' (' . ($old['name'] ?? '') . ')');
+            } else {
+                // Deregistration failed — keep the record so the user can see and retry
+                error_log('[CloudScale Backup] AMI auto-deregister FAILED for ' . $ami_id . ': ' . $out . ' — keeping local record');
+                $keep[] = $old;
+            }
+        }
+
+        $ok_entries = $keep;
+    }
+
+    // Keep at most 20 failed entries
+    $fail_entries = array_slice($fail_entries, -20);
+    $log = array_values(array_merge($ok_entries, $fail_entries));
+    update_option('cs_ami_log', $log, false);
+    return $log;
+}
 
 add_action('wp_ajax_cs_ami_status', function (): void {
     cs_verify_nonce();
