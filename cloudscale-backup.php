@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.0.3
+ * Version:           3.0.6
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined('ABSPATH') || exit;
 
-define('CS_VERSION',    '3.0.3');
+define('CS_VERSION',    '3.0.6');
 define('CS_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -805,7 +805,8 @@ function cs_admin_page(): void {
             $ami_region      = cs_get_instance_region();
             $ami_log         = (array) get_option('cs_ami_log', []);
             // Show all entries with a valid AMI ID, newest first (plus failed creation entries)
-            $ami_log_recent  = array_reverse($ami_log);
+            usort($ami_log, fn($a, $b) => ($b['time'] ?? 0) <=> ($a['time'] ?? 0));
+            $ami_log_recent  = $ami_log;
             } catch (\Throwable $e) {
                 $ami_instance_id = '';
                 $ami_region      = '';
@@ -917,7 +918,11 @@ function cs_admin_page(): void {
                                         ?>
                                         <span style="color:<?php echo $sc; ?>;font-weight:600;"><?php echo $si; ?> <?php echo esc_html($entry_state ?: 'Created'); ?></span>
                                     <?php else: ?>
-                                        <span style="color:#c62828;font-weight:600;">&#10007; Failed</span>
+                                        <?php $err_msg = esc_html(substr($entry['error'] ?? '', 0, 120)); ?>
+                                        <span style="color:#c62828;font-weight:600;" title="<?php echo $err_msg ?: 'No error detail recorded'; ?>">&#10007; Failed</span>
+                                        <?php if ($err_msg): ?>
+                                        <br><span style="color:#c62828;font-size:0.72rem;word-break:break-word;display:block;max-width:180px;line-height:1.3;margin-top:2px;"><?php echo $err_msg; ?></span>
+                                        <?php endif; ?>
                                     <?php endif; ?>
                                 </td>
                                 <td id="cs-ami-actions-<?php echo $row_ami_id; ?>">
@@ -1101,6 +1106,8 @@ function cs_admin_page(): void {
                     '<p><strong>How it works</strong><br>Creates an Amazon Machine Image (AMI) of the running EC2 instance. This is a full disk snapshot that can be used to launch an identical replacement server.</p>'
                     + '<p><strong>Requirements</strong></p><ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li>Instance must be running on EC2 with IMDSv1 or IMDSv2 enabled</li><li>AWS CLI installed and configured on the server</li><li>IAM role or credentials with the required permissions</li></ul>'
                     + '<p><strong>AMI naming</strong><br>You provide a prefix (e.g. <code>prod-web01</code>) and the plugin appends a timestamp: <code>prod-web01_20260227_1430</code></p>'
+                    + '<p><strong>Max AMIs to keep</strong><br>Controls how many AMIs are retained in AWS. The default is 10. Each time a new AMI is created, the plugin counts your existing AMIs. If creating the new one would push the total above this limit, the oldest AMI is automatically deregistered from AWS and removed from the log before the new one is created. This keeps your AWS AMI list and costs under control without manual housekeeping.</p>'
+                    + '<p>Choosing a number: consider your recovery window and AWS storage costs. AMIs are billed for the EBS snapshots they reference. A limit of 3 to 5 gives you a short rolling window; 10 to 14 gives roughly two weeks of daily snapshots.</p>'
                     + '<p><strong>Reboot option</strong><br>With reboot enabled, EC2 cleanly shuts down the instance before snapshotting, ensuring filesystem consistency. Without reboot, the snapshot is crash consistent (like pulling the power).</p>'
                     + '<p><strong>Minimum IAM policy</strong></p><pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;overflow-x:auto;">{\n  "Version": "2012-10-17",\n  "Statement": [{\n    "Effect": "Allow",\n    "Action": [\n      "ec2:CreateImage",\n      "ec2:DeregisterImage",\n      "ec2:DescribeImages",\n      "ec2:DescribeInstances",\n      "ec2:RebootInstances"\n    ],\n    "Resource": "*"\n  }]\n}</pre>'
                     + '<p><strong>Restoring from AMI</strong><br>In the AWS Console: EC2 &rarr; AMIs &rarr; select your AMI &rarr; Launch Instance. Or use <code>aws ec2 run-instances --image-id ami-xxx</code>.</p>'
