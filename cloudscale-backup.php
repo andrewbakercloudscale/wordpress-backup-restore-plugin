@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.0.6
+ * Version:           3.1.2
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined('ABSPATH') || exit;
 
-define('CS_VERSION',    '3.0.6');
+define('CS_VERSION',    '3.1.2');
 define('CS_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -95,22 +95,6 @@ add_action('admin_init', function () {
             foreach (glob($assets . '*') as $f) { if (is_file($f)) { @unlink($f); } }
             @rmdir($assets);
         }
-        // Reset any AMI log entries stuck as 'deleted in AWS' back to 'pending'
-        // so Refresh All re-verifies them against AWS on next run.
-        // Corrupt state from previous bugs must never survive a deploy.
-        $ami_log = (array) get_option('cs_ami_log', []);
-        $ami_log_fixed = false;
-        foreach ($ami_log as &$entry) {
-            if (!empty($entry['ami_id']) && ($entry['state'] ?? '') === 'deleted in AWS' && !empty($entry['ok'])) {
-                $entry['state'] = 'pending';
-                $ami_log_fixed = true;
-            }
-        }
-        unset($entry);
-        if ($ami_log_fixed) {
-            update_option('cs_ami_log', $ami_log, false);
-        }
-
         update_option('cs_loaded_version', CS_VERSION);
     }
 });
@@ -442,7 +426,7 @@ function cs_admin_page(): void {
                 <?php if ($maint_active): ?>
                     <span class="cs-badge cs-badge-warn">⚠ Maintenance Mode Active</span>
                 <?php else: ?>
-                    <span class="cs-badge cs-badge-ok" style="background:#16a34a!important;color:#fff!important;border:1px solid #15803d!important;display:inline-flex;align-items:center;gap:6px;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#86efac;box-shadow:0 0 5px #86efac;flex-shrink:0;"></span>Site Online</span>
+                    <span class="cs-badge cs-badge-ok">Site Online</span>
                 <?php endif; ?>
                 <a href="https://your-wordpress-site.example.com" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;padding:6px 16px;background:#f57c00!important;color:#fff!important;font-size:0.8rem;font-weight:700;border-radius:20px;text-decoration:none!important;border:1px solid #e65100!important;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ffcc80;box-shadow:0 0 5px #ffcc80;flex-shrink:0;"></span>andrewbaker.ninja</a>
             </div>
@@ -848,13 +832,13 @@ function cs_admin_page(): void {
                 <div class="cs-field-row cs-mt">
                     <div style="display:flex;align-items:flex-start;gap:24px;flex-wrap:wrap;">
                         <div>
-                            <label for="cs-ami-prefix"><strong>AMI name prefix</strong></label><br>
+                            <label for="cs-ami-prefix"><strong>AMI name prefix</strong></label>
                             <input type="text" id="cs-ami-prefix" placeholder="mysite-backup"
                                    value="<?php echo esc_attr($ami_prefix); ?>"
                                    style="width:calc(20em - 50px);min-width:140px;">
                         </div>
                         <div>
-                            <label for="cs-ami-max"><strong>Max AMIs to keep</strong></label><br>
+                            <label for="cs-ami-max"><strong>Max AMIs to keep</strong></label>
                             <div class="cs-inline" style="margin-top:2px;">
                                 <input type="number" id="cs-ami-max" class="cs-input-sm" min="1" max="999"
                                        value="<?php echo esc_attr($ami_max); ?>" style="width:80px;">
@@ -904,11 +888,12 @@ function cs_admin_page(): void {
                             $is_deleted  = ($entry_state === 'deleted in AWS');
                             $is_ok       = !empty($entry['ok']);
                             ?>
-                            <tr id="cs-ami-row-<?php echo $row_ami_id; ?>" <?php echo $is_deleted ? 'style="opacity:0.55;"' : ''; ?>>
-                                <td><?php echo esc_html($entry['name'] ?? '—'); ?></td>
-                                <td><code style="font-size:0.78rem;"><?php echo esc_html($entry['ami_id'] ?? '—'); ?></code></td>
-                                <td><?php echo esc_html(isset($entry['time']) ? wp_date('j M Y H:i', $entry['time']) : '—'); ?></td>
-                                <td id="cs-ami-state-<?php echo $row_ami_id; ?>">
+                            <tr id="cs-ami-row-<?php echo $row_ami_id; ?>">
+                                <?php $faded = $is_deleted ? 'style="opacity:0.45;"' : ''; ?>
+                                <td <?php echo $faded; ?>><?php echo esc_html($entry['name'] ?? '—'); ?></td>
+                                <td <?php echo $faded; ?>><code style="font-size:0.78rem;"><?php echo esc_html($entry['ami_id'] ?? '—'); ?></code></td>
+                                <td <?php echo $faded; ?>><?php echo esc_html(isset($entry['time']) ? wp_date('j M Y H:i', $entry['time']) : '—'); ?></td>
+                                <td id="cs-ami-state-<?php echo $row_ami_id; ?>" <?php echo $faded; ?>>
                                     <?php if ($is_deleted): ?>
                                         <span style="color:#999;font-weight:600;">&#128465; deleted in AWS</span>
                                     <?php elseif ($is_ok): ?>
@@ -927,6 +912,9 @@ function cs_admin_page(): void {
                                 </td>
                                 <td id="cs-ami-actions-<?php echo $row_ami_id; ?>">
                                     <?php if (!empty($entry['ami_id'])): ?>
+                                    <?php if (!$is_deleted): ?>
+                                    <button type="button" onclick="csAmiRefreshOne('<?php echo $row_ami_id; ?>')" class="button button-small" title="Refresh this AMI state from AWS" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+                                    <?php endif; ?>
                                     <button type="button" onclick="csAmiDelete('<?php echo $row_ami_id; ?>', '<?php echo esc_attr($entry['name'] ?? ''); ?>', <?php echo $is_deleted ? 'true' : 'false'; ?>)" class="button button-small" title="<?php echo $is_deleted ? 'Remove record' : 'Deregister AMI'; ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? 'Remove' : 'Delete'; ?></button>
                                     <?php else: ?>
                                     <button type="button" onclick="csAmiRemoveFailed('<?php echo esc_js($entry['name'] ?? ''); ?>')" class="button button-small" title="Remove failed record" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Remove</button>
@@ -1024,11 +1012,12 @@ function cs_admin_page(): void {
                         if (!stateCell) return;
                         updated++;
                         if (state === 'deleted in AWS') {
-                            if (row) row.style.opacity = '0.55';
+                            var fadedCells = row ? row.querySelectorAll('td:not(:last-child)') : [];
+                            fadedCells.forEach(function(td) { td.style.opacity = '0.45'; });
                             stateCell.innerHTML = '<span style="color:#999;font-weight:600;">&#128465; deleted in AWS</span>';
                             if (actionsCell) actionsCell.innerHTML = '<button type="button" onclick="csAmiDelete(\'' + amiId + '\', \'' + r.name.replace(/'/g, '') + '\', true)" class="button button-small" title="Remove record" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Remove</button>';
                         } else {
-                            if (row) row.style.opacity = '';
+                            if (row) row.querySelectorAll('td').forEach(function(td) { td.style.opacity = ''; });
                             var color = state === 'available' ? '#2e7d32' : (state === 'pending' ? '#e65100' : '#757575');
                             var icon  = state === 'available' ? '&#10003;' : (state === 'pending' ? '&#9203;' : '&#10007;');
                             stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + state + '</span>';
@@ -1050,6 +1039,24 @@ function cs_admin_page(): void {
                         return;
                     }
                     csAmiRefreshAll();
+                });
+            }
+
+            function csAmiRefreshOne(amiId) {
+                var stateCell = document.getElementById('cs-ami-state-' + amiId);
+                if (stateCell) {
+                    stateCell.innerHTML = '<span style="color:#888;">&#8635; checking...</span>';
+                }
+                csAmiPost('cs_ami_status', 'ami_id=' + encodeURIComponent(amiId), function(res) {
+                    if (!stateCell) return;
+                    if (res.success && res.data && res.data.state) {
+                        var state  = res.data.state;
+                        var color  = state === 'available' ? '#2e7d32' : (state === 'pending' ? '#e65100' : '#757575');
+                        var icon   = state === 'available' ? '&#10003;' : (state === 'pending' ? '&#9203;' : '&#10007;');
+                        stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + state + '</span>';
+                    } else {
+                        stateCell.innerHTML = '<span style="color:#c62828;">&#10007; ' + (res.data || 'error') + '</span>';
+                    }
                 });
             }
 
