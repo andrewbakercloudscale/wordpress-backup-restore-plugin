@@ -4,7 +4,7 @@ Tags: backup, restore, database, media, plugins, themes, mysqldump, maintenance 
 Requires at least: 6.0
 Tested up to: 6.7
 Requires PHP: 8.1
-Stable tag: 2.74.2
+Stable tag: 3.1.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
