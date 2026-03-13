@@ -438,7 +438,7 @@ jQuery(function ($) {
         var $btn = $(this);
         $btn.prop('disabled', true).text('Saving...');
 
-        $.post(CS.ajax_url, { action: 'cs_save_retention', nonce: CS.nonce, retention: $('#cs-retention').val() },
+        $.post(CS.ajax_url, { action: 'cs_save_retention', nonce: CS.nonce, retention: $('#cs-retention').val(), backup_prefix: $('#cs-backup-prefix').val() },
             function (res) {
                 if (res.success) {
                     $('#cs-retention-saved').show().delay(2500).fadeOut();

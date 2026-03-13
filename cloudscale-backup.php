@@ -37,7 +37,9 @@ function cs_activate() {
 
 function cs_deactivate() {
     wp_clear_scheduled_hook('cs_scheduled_backup');
+    wp_clear_scheduled_hook('cs_scheduled_ami_backup');
     wp_clear_scheduled_hook('cs_ami_poll');
+    wp_clear_scheduled_hook('cs_s3_retry');
     cs_maintenance_off();
 
     // Wipe all asset files so Deactivate > Delete > Upload leaves no stale code
@@ -226,33 +228,49 @@ function cs_get_run_days(): array {
 
 function cs_reschedule(): void {
     wp_clear_scheduled_hook('cs_scheduled_backup');
+    wp_clear_scheduled_hook('cs_scheduled_ami_backup');
 
     $enabled = get_option('cs_schedule_enabled', false);
     if (!$enabled) return;
 
-    $hour     = intval(get_option('cs_run_hour', 3));
     $timezone = wp_timezone();
     $now      = new DateTime('now', $timezone);
+
+    // File backup — schedule on its own days/time
     $run_days = cs_get_run_days();
-
-    // Walk forward up to 8 days to find next matching day/time
-    $candidate = clone $now;
-    $candidate->setTime($hour, 0, 0);
-
-    for ($i = 0; $i <= 7; $i++) {
-        $dow = intval($candidate->format('N')); // 1=Mon...7=Sun
-        if (in_array($dow, $run_days, true) && $candidate > $now) {
-            break;
+    if (!empty($run_days)) {
+        $hour   = intval(get_option('cs_run_hour',   3));
+        $minute = intval(get_option('cs_run_minute', 0));
+        $candidate = clone $now;
+        $candidate->setTime($hour, $minute, 0);
+        for ($i = 0; $i <= 7; $i++) {
+            $dow = intval($candidate->format('N')); // 1=Mon...7=Sun
+            if (in_array($dow, $run_days, true) && $candidate > $now) break;
+            $candidate->modify('+1 day');
+            $candidate->setTime($hour, $minute, 0);
         }
-        $candidate->modify('+1 day');
-        $candidate->setTime($hour, 0, 0);
+        wp_schedule_event($candidate->getTimestamp(), 'daily', 'cs_scheduled_backup');
     }
 
-    wp_schedule_event($candidate->getTimestamp(), 'daily', 'cs_scheduled_backup');
+    // AMI backup — separate cron event on its own days/time
+    $ami_days = array_map('intval', (array) get_option('cs_ami_schedule_days', []));
+    if (!empty($ami_days)) {
+        $ami_hour   = intval(get_option('cs_ami_run_hour',   3));
+        $ami_minute = intval(get_option('cs_ami_run_minute', 30));
+        $candidate = clone $now;
+        $candidate->setTime($ami_hour, $ami_minute, 0);
+        for ($i = 0; $i <= 7; $i++) {
+            $dow = intval($candidate->format('N'));
+            if (in_array($dow, $ami_days, true) && $candidate > $now) break;
+            $candidate->modify('+1 day');
+            $candidate->setTime($ami_hour, $ami_minute, 0);
+        }
+        wp_schedule_event($candidate->getTimestamp(), 'daily', 'cs_scheduled_ami_backup');
+    }
 }
 
 add_action('cs_scheduled_backup', function () {
-    // Skip days not in the configured run-day list
+    // Day-of-week guard — WP cron fires daily so skip days not in the list
     $run_days = cs_get_run_days();
     $today    = intval((new DateTime('now', wp_timezone()))->format('N'));
     if (!in_array($today, $run_days, true)) return;
@@ -261,7 +279,6 @@ add_action('cs_scheduled_backup', function () {
     ignore_user_abort(true);
     cs_ensure_backup_dir();
 
-    // Read configured components — default to core four if option missing
     $c = (array) get_option('cs_schedule_components', ['db','media','plugins','themes']);
     cs_create_backup(
         in_array('db',        $c, true),
@@ -275,6 +292,20 @@ add_action('cs_scheduled_backup', function () {
         in_array('wpconfig',  $c, true)
     );
     cs_enforce_retention();
+});
+
+add_action('cs_scheduled_ami_backup', function () {
+    // Day-of-week guard
+    $ami_days = array_map('intval', (array) get_option('cs_ami_schedule_days', []));
+    $today    = intval((new DateTime('now', wp_timezone()))->format('N'));
+    if (empty($ami_days) || !in_array($today, $ami_days, true)) return;
+
+    $result = cs_do_create_ami();
+    if ($result['ok']) {
+        error_log('[CloudScale Backup] Scheduled AMI created: ' . $result['ami_id'] . ' (' . $result['name'] . ')');
+    } else {
+        error_log('[CloudScale Backup] Scheduled AMI failed: ' . ($result['error'] ?? 'unknown error'));
+    }
 });
 
 // ============================================================
@@ -337,6 +368,7 @@ function cs_admin_page(): void {
         DB_NAME
     ));
     $next_run     = wp_next_scheduled('cs_scheduled_backup');
+    $ami_next_run = wp_next_scheduled('cs_scheduled_ami_backup');
     $maint_active = file_exists(CS_MAINT_FILE);
 
     // Disk space
@@ -368,17 +400,28 @@ function cs_admin_page(): void {
         update_option('cs_run_days',         $clean_days);
         update_option('cs_run_days_saved',   '1');
         update_option('cs_schedule_enabled', !empty($_POST['schedule_enabled']));
-        update_option('cs_run_hour',         max(0, min(23, intval($_POST['run_hour'] ?? 3))));
+        update_option('cs_run_hour',         max(0,  min(23, intval($_POST['run_hour']         ?? 3))));
+        update_option('cs_run_minute',        max(0,  min(59, intval($_POST['run_minute']        ?? 0))));
+        update_option('cs_ami_run_hour',      max(0,  min(23, intval($_POST['ami_run_hour']      ?? 3))));
+        update_option('cs_ami_run_minute',    max(0,  min(59, intval($_POST['ami_run_minute']    ?? 30))));
         $valid_components = ['db','media','plugins','themes','mu','languages','dropins','htaccess','wpconfig'];
         $raw_components   = isset($_POST['schedule_components']) && is_array($_POST['schedule_components']) ? $_POST['schedule_components'] : [];
         $clean_components = array_values(array_intersect($raw_components, $valid_components));
         // Default to core four if nothing selected
         if (empty($clean_components)) { $clean_components = ['db','media','plugins','themes']; }
         update_option('cs_schedule_components', $clean_components);
+        $raw_ami_days   = isset($_POST['ami_schedule_days']) && is_array($_POST['ami_schedule_days']) ? $_POST['ami_schedule_days'] : [];
+        $clean_ami_days = array_values(array_filter(array_map('intval', $raw_ami_days), fn($d) => $d >= 1 && $d <= 7));
+        update_option('cs_ami_schedule_days', $clean_ami_days);
         wp_cache_delete('cs_run_days',              'options');
         wp_cache_delete('cs_run_days_saved',        'options');
         wp_cache_delete('cs_schedule_enabled',      'options');
         wp_cache_delete('cs_schedule_components',   'options');
+        wp_cache_delete('cs_ami_schedule_days',     'options');
+        wp_cache_delete('cs_run_hour',              'options');
+        wp_cache_delete('cs_run_minute',            'options');
+        wp_cache_delete('cs_ami_run_hour',          'options');
+        wp_cache_delete('cs_ami_run_minute',        'options');
         wp_cache_delete('alloptions',               'options');
         cs_reschedule();
         $day_names = ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
@@ -388,10 +431,14 @@ function cs_admin_page(): void {
 
     // Settings — read after any POST save so page shows updated values
     $enabled      = isset($_POST['cs_action']) ? !empty($_POST['schedule_enabled']) : (bool) get_option('cs_schedule_enabled', false);
-    $run_days_sel = cs_get_run_days();
-    $hour         = intval(get_option('cs_run_hour', 3));
+    $run_days_sel    = cs_get_run_days();
+    $hour            = intval(get_option('cs_run_hour',      3));
+    $minute          = intval(get_option('cs_run_minute',    0));
+    $ami_run_hour    = intval(get_option('cs_ami_run_hour',  3));
+    $ami_run_minute  = intval(get_option('cs_ami_run_minute', 30));
     $sched_components = (array) get_option('cs_schedule_components', ['db','media','plugins','themes']);
-    $retention    = intval(get_option('cs_retention', 8));
+    $retention      = intval(get_option('cs_retention', 8));
+    $backup_prefix  = sanitize_key(get_option('cs_backup_prefix', 'bkup')) ?: 'bkup';
     $s3_bucket    = get_option('cs_s3_bucket', '');
     $s3_prefix    = get_option('cs_s3_prefix', 'backups/');
     $s3_saved_msg = '';
@@ -399,6 +446,7 @@ function cs_admin_page(): void {
     $ami_reboot          = (bool) get_option('cs_ami_reboot', false);
     $ami_region_override = get_option('cs_ami_region_override', '');
     $ami_max             = intval(get_option('cs_ami_max', 10));
+    $ami_schedule_days   = (array) get_option('cs_ami_schedule_days', []);
     $dump_method  = cs_mysqldump_available() ? 'mysqldump (native — fast)' : 'PHP streamed (compatible)';
     $restore_method = cs_mysql_cli_available() ? 'mysql CLI (native — fast)' : 'PHP streamed (compatible)';
 
@@ -472,8 +520,9 @@ function cs_admin_page(): void {
                 <fieldset id="cs-schedule-controls" <?php echo !$enabled ? 'disabled' : ''; ?> class="cs-schedule-fieldset">
                     <legend class="screen-reader-text">Schedule controls</legend>
 
+                    <!-- File backup days + components + time -->
                     <div class="cs-field-group">
-                        <span class="cs-field-label">Run on these days</span>
+                        <span class="cs-field-label">File backup days</span>
                         <div class="cs-day-checks">
                             <?php foreach ($days_map as $num => $day_label): ?>
                             <label class="cs-day-check-label">
@@ -486,59 +535,97 @@ function cs_admin_page(): void {
                             </label>
                             <?php endforeach; ?>
                         </div>
-                        <p class="cs-help">Select one or more days. Backup runs once per selected day at the time below.</p>
                     </div>
 
                     <div class="cs-field-group">
-                        <label class="cs-field-label" for="cs-run-hour">Run at time (server)</label>
+                        <span class="cs-field-label">Include in scheduled backup</span>
+                        <div style="display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:6px;">
+                            <?php
+                            $sched_comp_map = [
+                                'db'        => 'Database',
+                                'media'     => 'Media uploads',
+                                'plugins'   => 'Plugins',
+                                'themes'    => 'Themes',
+                                'mu'        => 'Must-use plugins',
+                                'languages' => 'Languages',
+                                'dropins'   => 'Dropins',
+                                'htaccess'  => '.htaccess',
+                                'wpconfig'  => 'wp-config.php',
+                            ];
+                            foreach ($sched_comp_map as $key => $label):
+                            ?>
+                            <label class="cs-option-label" style="margin:0;">
+                                <input type="checkbox" name="schedule_components[]" value="<?php echo $key; ?>"
+                                    <?php checked(in_array($key, $sched_components, true)); ?>>
+                                <?php echo esc_html($label); ?>
+                                <?php if ($key === 'wpconfig'): ?><span class="cs-sensitive-badge" style="margin-left:4px;">&#9888; credentials</span><?php endif; ?>
+                            </label>
+                            <?php endforeach; ?>
+                        </div>
+                        <p class="cs-help">Choose which components are included each time the scheduled backup runs. Manual backups always let you choose individually.</p>
+                    </div>
+
+                    <div class="cs-field-group">
+                        <label class="cs-field-label" for="cs-run-hour">File backup time</label>
                         <div class="cs-inline">
-                            <select id="cs-run-hour" class="cs-input-sm">
+                            <select id="cs-run-hour" name="run_hour" class="cs-input-sm">
                                 <?php for ($h = 0; $h < 24; $h++): ?>
-                                    <option value="<?php echo $h; ?>" <?php selected($hour, $h); ?>><?php echo str_pad($h, 2, '0', STR_PAD_LEFT); ?>:00</option>
+                                    <option value="<?php echo $h; ?>" <?php selected($hour, $h); ?>><?php echo str_pad($h, 2, '0', STR_PAD_LEFT); ?></option>
                                 <?php endfor; ?>
+                            </select>
+                            <span class="cs-muted-text">:</span>
+                            <select id="cs-run-minute" name="run_minute" class="cs-input-sm">
+                                <?php foreach ([0, 15, 30, 45] as $m): ?>
+                                    <option value="<?php echo $m; ?>" <?php selected($minute, $m); ?>><?php echo str_pad($m, 2, '0', STR_PAD_LEFT); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <span class="cs-muted-text">server time &nbsp;·&nbsp; now: <?php echo current_time('H:i T'); ?> &nbsp;·&nbsp; TZ: <?php echo wp_timezone_string(); ?></span>
+                        </div>
+                        <?php if ($next_run): ?>
+                        <p class="cs-help">Next file backup: <strong><?php echo get_date_from_gmt(date('Y-m-d H:i:s', $next_run), 'D j M \a\t H:i'); ?></strong></p>
+                        <?php endif; ?>
+                    </div>
+
+                    <!-- AMI days + time -->
+                    <div class="cs-field-group" style="border-top:1px solid #e0e0e0;padding-top:14px;margin-top:4px;">
+                        <span class="cs-field-label">AMI snapshot days <span class="cs-sensitive-badge" style="margin-left:4px;">&#9888; reboot</span></span>
+                        <div class="cs-day-checks">
+                            <?php foreach ($days_map as $num => $day_label): ?>
+                            <label class="cs-day-check-label">
+                                <input type="checkbox"
+                                       class="cs-ami-day-check"
+                                       name="ami_schedule_days[]"
+                                       value="<?php echo $num; ?>"
+                                       <?php checked(in_array($num, $ami_schedule_days, false)); ?>>
+                                <?php echo $day_label; ?>
+                            </label>
+                            <?php endforeach; ?>
+                        </div>
+                        <p class="cs-help">Requires AWS CLI and a prefix set in the AMI settings below. Leave all unchecked to disable scheduled AMI backups.</p>
+                    </div>
+
+                    <div class="cs-field-group">
+                        <label class="cs-field-label" for="cs-ami-run-hour">AMI backup time</label>
+                        <div class="cs-inline">
+                            <select id="cs-ami-run-hour" name="ami_run_hour" class="cs-input-sm">
+                                <?php for ($h = 0; $h < 24; $h++): ?>
+                                    <option value="<?php echo $h; ?>" <?php selected($ami_run_hour, $h); ?>><?php echo str_pad($h, 2, '0', STR_PAD_LEFT); ?></option>
+                                <?php endfor; ?>
+                            </select>
+                            <span class="cs-muted-text">:</span>
+                            <select id="cs-ami-run-minute" name="ami_run_minute" class="cs-input-sm">
+                                <?php foreach ([0, 15, 30, 45] as $m): ?>
+                                    <option value="<?php echo $m; ?>" <?php selected($ami_run_minute, $m); ?>><?php echo str_pad($m, 2, '0', STR_PAD_LEFT); ?></option>
+                                <?php endforeach; ?>
                             </select>
                             <span class="cs-muted-text">server time</span>
                         </div>
-                        <p class="cs-help">Now: <?php echo current_time('H:i T'); ?> &nbsp;·&nbsp; TZ: <?php echo wp_timezone_string(); ?></p>
+                        <?php if ($ami_next_run): ?>
+                        <p class="cs-help">Next AMI backup: <strong><?php echo get_date_from_gmt(date('Y-m-d H:i:s', $ami_next_run), 'D j M \a\t H:i'); ?></strong></p>
+                        <?php endif; ?>
                     </div>
-
-                    <?php if ($next_run): ?>
-                    <div class="cs-next-run">
-                        <span class="cs-next-run-label">Next scheduled run</span>
-                        <span class="cs-next-run-time"><?php echo get_date_from_gmt(date('Y-m-d H:i:s', $next_run), 'D j M \a\t H:i'); ?></span>
-                    </div>
-                    <?php endif; ?>
 
                 </fieldset>
-
-                <!-- Scheduled backup components -->
-                <div class="cs-field-group cs-mt" style="border-top:1px solid #e0e0e0;padding-top:14px;margin-top:14px;">
-                    <span class="cs-field-label">Include in scheduled backup</span>
-                    <div style="display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:6px;">
-                        <?php
-                        $sched_comp_map = [
-                            'db'        => 'Database',
-                            'media'     => 'Media uploads',
-                            'plugins'   => 'Plugins',
-                            'themes'    => 'Themes',
-                            'mu'        => 'Must-use plugins',
-                            'languages' => 'Languages',
-                            'dropins'   => 'Dropins',
-                            'htaccess'  => '.htaccess',
-                            'wpconfig'  => 'wp-config.php',
-                        ];
-                        foreach ($sched_comp_map as $key => $label):
-                        ?>
-                        <label class="cs-option-label" style="margin:0;">
-                            <input type="checkbox" name="schedule_components[]" value="<?php echo $key; ?>"
-                                <?php checked(in_array($key, $sched_components, true)); ?>>
-                            <?php echo esc_html($label); ?>
-                            <?php if ($key === 'wpconfig'): ?><span class="cs-sensitive-badge" style="margin-left:4px;">&#9888; credentials</span><?php endif; ?>
-                        </label>
-                        <?php endforeach; ?>
-                    </div>
-                    <p class="cs-help">Choose which components are included each time the scheduled backup runs. Manual backups always let you choose individually.</p>
-                </div>
 
                 <div id="cs-off-notice" class="cs-off-notice" <?php echo $enabled ? 'style="display:none"' : ''; ?>>
                     Automatic backups are <strong>off</strong>. Enable the checkbox above to configure a schedule, or run backups manually below.
@@ -561,6 +648,17 @@ function cs_admin_page(): void {
             ?>
             <div class="cs-card cs-card--green">
                 <div class="cs-card-stripe cs-stripe--green" style="background:linear-gradient(135deg,#2e7d32 0%,#43a047 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🗂 Retention &amp; Storage</h2><button type="button" onclick="csRetentionExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+
+                <div class="cs-field-group">
+                    <label class="cs-field-label" for="cs-backup-prefix">Backup filename prefix</label>
+                    <div class="cs-inline">
+                        <input type="text" id="cs-backup-prefix" class="cs-input-sm"
+                               value="<?php echo esc_attr($backup_prefix); ?>"
+                               maxlength="32" style="width:140px;" placeholder="bkup">
+                        <span class="cs-muted-text">_f12.zip</span>
+                    </div>
+                    <p class="cs-help">Lowercase letters, numbers, and hyphens only. Example: <code>mysite</code> produces <code>mysite_f12.zip</code>. Existing backups are unaffected.</p>
+                </div>
 
                 <div class="cs-field-group">
                     <label class="cs-field-label">Keep last</label>
@@ -768,6 +866,23 @@ function cs_admin_page(): void {
                 ov.addEventListener('click', function(e) { if (e.target === ov) ov.style.display = 'none'; });
                 document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && ov.style.display === 'flex') ov.style.display = 'none'; });
                 document.body.appendChild(ov);
+            }
+
+            function csS3SyncFile(btn, filename) {
+                btn.disabled = true;
+                btn.textContent = '…';
+                csS3Post('cs_s3_sync_file', 'filename=' + encodeURIComponent(filename), function(res) {
+                    if (res.success) {
+                        var td = btn.closest ? btn.closest('td') : btn.parentNode;
+                        if (td) td.innerHTML = '<span title="Synced to S3" style="color:#2e7d32;font-size:16px;"><svg xmlns=\'http://www.w3.org/2000/svg\' width=\'16\' height=\'16\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'2.5\' stroke-linecap=\'round\' stroke-linejoin=\'round\'><path d=\'M18 8h1a4 4 0 0 1 0 8h-1\'/><path d=\'M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z\'/><line x1=\'6\' y1=\'1\' x2=\'6\' y2=\'4\'/><line x1=\'10\' y1=\'1\' x2=\'10\' y2=\'4\'/><line x1=\'14\' y1=\'1\' x2=\'14\' y2=\'4\'/></svg></span>';
+                    } else {
+                        btn.disabled = false;
+                        btn.textContent = '↑ Retry';
+                        var errEl = btn.previousElementSibling;
+                        if (errEl) errEl.textContent = res.data || 'Sync failed';
+                        else alert('S3 sync failed: ' + (res.data || 'Unknown error'));
+                    }
+                });
             }
 
             function csS3Explain() {
@@ -1112,10 +1227,11 @@ function cs_admin_page(): void {
                     'linear-gradient(135deg,#1a237e,#3949ab)',
                     '<p><strong>How it works</strong><br>Creates an Amazon Machine Image (AMI) of the running EC2 instance. This is a full disk snapshot that can be used to launch an identical replacement server.</p>'
                     + '<p><strong>Requirements</strong></p><ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li>Instance must be running on EC2 with IMDSv1 or IMDSv2 enabled</li><li>AWS CLI installed and configured on the server</li><li>IAM role or credentials with the required permissions</li></ul>'
+                    + '<p><strong>Scheduling AMI backups</strong><br>Use the <strong>Backup Schedule</strong> card at the top of this page to automate AMI creation. Pick your AMI snapshot days and AMI backup time there &mdash; these run on a separate cron event from file backups, so they are fully independent. Set the prefix below first or scheduled runs will be skipped.</p>'
                     + '<p><strong>AMI naming</strong><br>You provide a prefix (e.g. <code>prod-web01</code>) and the plugin appends a timestamp: <code>prod-web01_20260227_1430</code></p>'
                     + '<p><strong>Max AMIs to keep</strong><br>Controls how many AMIs are retained in AWS. The default is 10. Each time a new AMI is created, the plugin counts your existing AMIs. If creating the new one would push the total above this limit, the oldest AMI is automatically deregistered from AWS and removed from the log before the new one is created. This keeps your AWS AMI list and costs under control without manual housekeeping.</p>'
                     + '<p>Choosing a number: consider your recovery window and AWS storage costs. AMIs are billed for the EBS snapshots they reference. A limit of 3 to 5 gives you a short rolling window; 10 to 14 gives roughly two weeks of daily snapshots.</p>'
-                    + '<p><strong>Reboot option</strong><br>With reboot enabled, EC2 cleanly shuts down the instance before snapshotting, ensuring filesystem consistency. Without reboot, the snapshot is crash consistent (like pulling the power).</p>'
+                    + '<p><strong>Reboot option</strong><br>With reboot enabled, EC2 cleanly shuts down the instance before snapshotting, ensuring filesystem consistency. Without reboot, the snapshot is crash consistent (like pulling the power). If scheduling with reboot enabled, choose days that don\'t overlap with your file backup days to avoid two disruptions on the same day.</p>'
                     + '<p><strong>Minimum IAM policy</strong></p><pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;overflow-x:auto;">{\n  "Version": "2012-10-17",\n  "Statement": [{\n    "Effect": "Allow",\n    "Action": [\n      "ec2:CreateImage",\n      "ec2:DeregisterImage",\n      "ec2:DescribeImages",\n      "ec2:DescribeInstances",\n      "ec2:RebootInstances"\n    ],\n    "Resource": "*"\n  }]\n}</pre>'
                     + '<p><strong>Restoring from AMI</strong><br>In the AWS Console: EC2 &rarr; AMIs &rarr; select your AMI &rarr; Launch Instance. Or use <code>aws ec2 run-instances --image-id ami-xxx</code>.</p>'
                 );
@@ -1125,12 +1241,17 @@ function cs_admin_page(): void {
                 csExplainModal('cs-schedule-explain-overlay', 'Backup Schedule - How It Works',
                     'linear-gradient(135deg,#1565c0,#2196f3)',
                     '<p><strong>How scheduling works</strong><br>The plugin uses WordPress cron (WP-Cron) to trigger scheduled backups. WP-Cron is a pseudo-cron system that fires when someone visits your site, so backups run at approximately the scheduled time rather than at the exact second.</p>'
-                    + '<p><strong>Day selection</strong><br>Choose one or more days of the week. A full backup runs once per selected day at the configured time. Common strategies:</p>'
-                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>Daily</strong> &mdash; select all 7 days for maximum protection</li><li><strong>Weekdays</strong> &mdash; Mon through Fri, skip quiet weekends</li><li><strong>MWF</strong> &mdash; good balance of protection and storage usage</li></ul>'
-                    + '<p><strong>Time setting</strong><br>The time uses your server\'s configured timezone. Choose a low-traffic hour (e.g. 02:00 or 03:00) to minimise impact on visitors. The backup process is non-blocking but can be CPU-intensive on large sites.</p>'
-                    + '<p><strong>Low-traffic sites</strong><br>If your site receives very few visits, WP-Cron may not fire reliably. In that case, set up a system cron job to call <code>wp-cron.php</code> periodically:</p>'
+                    + '<p><strong>Two independent schedules</strong><br>The card has two separate day pickers and two separate times:</p>'
+                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>File backup days / File backup time</strong> &mdash; when regular zip backups run. Non-destructive, no downtime.</li><li><strong>AMI snapshot days / AMI backup time</strong> &mdash; when EC2 AMI snapshots are created. Requires AWS CLI and a prefix configured in the AMI settings card. If reboot is enabled there, the instance goes offline briefly on those days.</li></ul>'
+                    + '<p>The two schedules run on completely separate WP-Cron events, so they are independent of each other. Choosing different days avoids two operations hitting the server on the same day.</p>'
+                    + '<p><strong>File backup day strategies</strong></p>'
+                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>Daily</strong> &mdash; all 7 days for maximum protection</li><li><strong>Weekdays</strong> &mdash; Mon through Fri, skip quiet weekends</li><li><strong>MWF</strong> &mdash; good balance of protection and storage usage</li></ul>'
+                    + '<p><strong>AMI snapshot day strategies</strong></p>'
+                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>Weekly (e.g. Sunday)</strong> &mdash; a full-server recovery point once a week without daily reboot disruption</li><li><strong>MWF or daily</strong> &mdash; higher protection if reboot is disabled (crash-consistent snapshot, no downtime)</li></ul>'
+                    + '<p><strong>Time settings</strong><br>Both times use your server\'s configured timezone. The times are independent &mdash; for example file backup at 03:00 and AMI at 03:30 staggers the workload. Choose low-traffic hours to minimise visitor impact.</p>'
+                    + '<p><strong>Low-traffic sites</strong><br>If your site receives very few visits, WP-Cron may not fire reliably. Set up a system cron job to call <code>wp-cron.php</code> periodically:</p>'
                     + '<pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;overflow-x:auto;">*/15 * * * * curl -s https://yoursite.com/wp-cron.php > /dev/null 2>&1</pre>'
-                    + '<p><strong>Retention interaction</strong><br>Scheduled backups automatically enforce your retention limit. After each backup, files beyond the retention count are deleted oldest first.</p>'
+                    + '<p><strong>Retention interaction</strong><br>Scheduled file backups automatically enforce your retention limit. After each backup, files beyond the retention count are deleted oldest first. AMI retention is controlled separately by the Max AMIs setting in the AMI card.</p>'
                 );
             }
 
@@ -1382,19 +1503,36 @@ function cs_admin_page(): void {
                         <td class="cs-col-size" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html(cs_format_size($b['size'])); ?></td>
                         <td class="cs-col-meta cs-created" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html($b['date']); ?></td>
                         <td class="cs-col-age cs-age" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html(cs_human_age($b['mtime'])); ?></td>
-                        <td class="cs-col-type" style="padding:6px 8px!important;vertical-align:middle!important;"><span class="cs-type-badge cs-type-<?php echo esc_attr(strtolower(explode(' ', $b['type'])[0])); ?>"><?php echo esc_html($b['type']); ?></span></td>
+                        <td class="cs-col-type" style="padding:6px 8px!important;vertical-align:middle!important;"><span class="cs-type-badge cs-type-<?php echo esc_attr(preg_replace('/[^a-z0-9]/', '', str_replace('+', 'plus', strtolower(explode(' ', $b['type'])[0])))); ?>"><?php echo esc_html($b['type']); ?></span></td>
                         <?php if ($s3_bucket): ?>
-                        <td style="width:36px!important;text-align:center;padding:6px 4px!important;vertical-align:middle!important;">
+                        <td style="text-align:center;padding:4px 6px!important;vertical-align:middle!important;min-width:48px;">
                             <?php if (!$s3_entry): ?>
-                                <span title="Not synced to S3" style="color:#bbb;font-size:16px;">—</span>
+                                <button type="button"
+                                        onclick="csS3SyncFile(this,'<?php echo esc_js($b['name']); ?>')"
+                                        class="button button-small"
+                                        style="font-size:10px;padding:1px 7px;height:auto;line-height:1.6;">
+                                    ↑ Sync
+                                </button>
                             <?php elseif ($s3_entry['ok']): ?>
                                 <span title="Synced to S3 on <?php echo esc_attr(wp_date('j M Y H:i', $s3_entry['time'])); ?>" style="color:#2e7d32;font-size:16px;">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/></svg>
                                 </span>
-                            <?php else: ?>
-                                <span title="S3 sync failed: <?php echo esc_attr($s3_entry['error'] ?? 'unknown error'); ?>" style="color:#c62828;font-size:16px;">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+                            <?php elseif (!empty($s3_entry['retry_at']) && $s3_entry['retry_at'] > time()): ?>
+                                <?php $mins = max(1, (int) ceil(($s3_entry['retry_at'] - time()) / 60)); ?>
+                                <span style="color:#e65100;font-size:10px;" title="Sync failed — auto-retry in ~<?php echo $mins; ?> min">
+                                    ⏱ ~<?php echo $mins; ?>m
                                 </span>
+                            <?php else: ?>
+                                <div style="font-size:10px;color:#c62828;line-height:1.3;text-align:left;">
+                                    <strong style="display:block;">&#10007; S3 failed</strong>
+                                    <span style="word-break:break-all;display:block;margin-bottom:3px;"><?php echo esc_html(substr($s3_entry['error'] ?? 'Unknown error', 0, 80)); ?></span>
+                                    <button type="button"
+                                            onclick="csS3SyncFile(this,'<?php echo esc_js($b['name']); ?>')"
+                                            class="button button-small"
+                                            style="font-size:10px;padding:1px 7px;height:auto;line-height:1.6;">
+                                        ↺ Retry
+                                    </button>
+                                </div>
                             <?php endif; ?>
                         </td>
                         <?php endif; ?>
@@ -1638,6 +1776,38 @@ add_action('wp_ajax_cs_save_s3', function (): void {
     wp_send_json_success(['bucket' => $bucket, 'prefix' => $prefix]);
 });
 
+// S3 auto-retry — single WP-Cron event scheduled 5 min after a failed sync
+add_action('cs_s3_retry', function (string $filename): void {
+    $path = CS_BACKUP_DIR . $filename;
+    if (!file_exists($path)) {
+        error_log('[CloudScale Backup] S3 retry: file no longer exists: ' . $filename);
+        return;
+    }
+    error_log('[CloudScale Backup] S3 retry attempt for ' . $filename);
+    cs_sync_to_s3($path, false); // false = no further retries on second failure
+});
+
+add_action('wp_ajax_cs_s3_sync_file', function (): void {
+    cs_verify_nonce();
+    $filename = sanitize_file_name($_POST['filename'] ?? '');
+    if (!$filename || !str_ends_with($filename, '.zip')) {
+        wp_send_json_error('Invalid filename.');
+    }
+    $path = CS_BACKUP_DIR . $filename;
+    if (!file_exists($path)) {
+        wp_send_json_error('File not found on server.');
+    }
+    $result = cs_sync_to_s3($path);
+    if (isset($result['skipped'])) {
+        wp_send_json_error('S3 not configured — set a bucket name in the S3 Remote Backup settings.');
+    }
+    if ($result['ok']) {
+        wp_send_json_success('Synced to ' . $result['dest']);
+    } else {
+        wp_send_json_error($result['error'] ?? 'Sync failed.');
+    }
+});
+
 // ============================================================
 // AJAX — AMI snapshot operations
 // ============================================================
@@ -1798,6 +1968,93 @@ function cs_ami_enforce_max(array $log, string $aws, string $region): array {
     $log = array_values(array_merge($ok_entries, $fail_entries));
     update_option('cs_ami_log', $log, false);
     return $log;
+}
+
+// ============================================================
+// AMI creation — shared logic used by scheduler and AJAX handler
+// ============================================================
+
+/**
+ * Create an AMI snapshot of the current EC2 instance.
+ * Returns an associative array with keys:
+ *   'ok'     => bool
+ *   'ami_id' => string|null
+ *   'name'   => string
+ *   'error'  => string  (only present when ok === false)
+ */
+function cs_do_create_ami(): array {
+    $instance_id = cs_get_instance_id();
+    if (!$instance_id) {
+        return ['ok' => false, 'ami_id' => null, 'name' => '', 'error' => 'EC2 instance ID not detected.'];
+    }
+
+    $aws = cs_find_aws();
+    if (!$aws) {
+        return ['ok' => false, 'ami_id' => null, 'name' => '', 'error' => 'AWS CLI not found on server.'];
+    }
+
+    $prefix = get_option('cs_ami_prefix', '');
+    if (!$prefix) {
+        return ['ok' => false, 'ami_id' => null, 'name' => '', 'error' => 'No AMI name prefix configured.'];
+    }
+
+    $reboot  = (bool) get_option('cs_ami_reboot', false);
+    $region  = cs_get_instance_region();
+    $tz      = wp_timezone();
+    $now     = new DateTime('now', $tz);
+
+    $safe_prefix = preg_replace('/[^a-zA-Z0-9().\-\/_]/', '-', $prefix);
+    $safe_prefix = preg_replace('/-{2,}/', '-', trim($safe_prefix, '-'));
+    $ami_name    = substr($safe_prefix . '_' . $now->format('Ymd_Hi'), 0, 128);
+
+    $description = 'CloudScale Backup AMI - ' . get_site_url() . ' - ' . $now->format('Y-m-d H:i T');
+    $description = preg_replace('/[^\x20-\x7E]/', '', $description);
+
+    $no_reboot   = $reboot ? '' : ' --no-reboot';
+    $region_flag = $region ? ' --region ' . escapeshellarg($region) : '';
+    $cmd = escapeshellarg($aws) . ' ec2 create-image'
+         . ' --instance-id ' . escapeshellarg($instance_id)
+         . ' --name '        . escapeshellarg($ami_name)
+         . ' --description ' . escapeshellarg($description)
+         . $no_reboot
+         . $region_flag
+         . ' --output json 2>&1';
+
+    $out    = trim((string) shell_exec($cmd));
+    $result = json_decode($out, true);
+    $ami_id = $result['ImageId'] ?? null;
+
+    $log = (array) get_option('cs_ami_log', []);
+
+    if ($ami_id) {
+        $log[] = [
+            'ok'          => true,
+            'ami_id'      => $ami_id,
+            'name'        => $ami_name,
+            'instance_id' => $instance_id,
+            'time'        => time(),
+            'reboot'      => $reboot,
+            'state'       => 'pending',
+        ];
+        cs_ami_enforce_max($log, $aws, $region);
+
+        if (!wp_next_scheduled('cs_ami_poll')) {
+            wp_schedule_single_event(time() + CS_AMI_POLL_INTERVAL, 'cs_ami_poll');
+        }
+
+        return ['ok' => true, 'ami_id' => $ami_id, 'name' => $ami_name];
+    } else {
+        $log[] = [
+            'ok'    => false,
+            'name'  => $ami_name,
+            'time'  => time(),
+            'error' => substr($out, 0, 500),
+        ];
+        if (count($log) > 20) { $log = array_slice($log, -20); }
+        update_option('cs_ami_log', $log, false);
+
+        return ['ok' => false, 'ami_id' => null, 'name' => $ami_name, 'error' => $out];
+    }
 }
 
 add_action('wp_ajax_cs_ami_status', function (): void {
@@ -2040,7 +2297,9 @@ add_action('wp_ajax_cs_save_retention', function (): void {
     cs_verify_nonce();
     $r = max(1, min(9999, intval($_POST['retention'] ?? 8)));
     update_option('cs_retention', $r);
-    wp_send_json_success('Retention set to ' . $r);
+    $prefix = sanitize_key($_POST['backup_prefix'] ?? 'bkup') ?: 'bkup';
+    update_option('cs_backup_prefix', $prefix);
+    wp_send_json_success('Saved');
 });
 
 // ============================================================
@@ -2214,10 +2473,11 @@ function cs_create_backup(
     }
 
     // Increment global sequence number, skip any that already exist on disk
+    $prefix = sanitize_key(get_option('cs_backup_prefix', 'bkup')) ?: 'bkup';
     $seq = (int) get_option('cs_backup_seq', 0);
     do {
         $seq++;
-        $filename = 'bkup_' . $tcode . $seq . '.zip';
+        $filename = $prefix . '_' . $tcode . $seq . '.zip';
     } while (file_exists(CS_BACKUP_DIR . $filename));
     update_option('cs_backup_seq', $seq, false);
     $zip_path = CS_BACKUP_DIR . $filename;
@@ -2399,7 +2659,7 @@ function cs_find_aws(): string {
     return '';
 }
 
-function cs_sync_to_s3(string $local_path): array {
+function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
     $bucket = get_option('cs_s3_bucket', '');
     if (!$bucket) return ['skipped' => true];
 
@@ -2423,7 +2683,19 @@ function cs_sync_to_s3(string $local_path): array {
     if ($out) {
         error_log('[CloudScale Backup] S3 sync error: ' . $out);
         $result = ['ok' => false, 'dest' => $dest, 'error' => $out];
-        $log[$filename] = ['ok' => false, 'time' => time(), 'dest' => $dest, 'error' => $out];
+        $retry_at = null;
+        if ($schedule_retry && !wp_next_scheduled('cs_s3_retry', [$filename])) {
+            wp_schedule_single_event(time() + 300, 'cs_s3_retry', [$filename]);
+            $retry_at = time() + 300;
+            error_log('[CloudScale Backup] S3 retry scheduled in 5 min for ' . $filename);
+        }
+        $log[$filename] = array_filter([
+            'ok'       => false,
+            'time'     => time(),
+            'dest'     => $dest,
+            'error'    => $out,
+            'retry_at' => $retry_at,
+        ], fn($v) => $v !== null);
     } else {
         error_log('[CloudScale Backup] S3 sync OK: ' . $dest);
         $result = ['ok' => true, 'dest' => $dest];
@@ -2685,11 +2957,16 @@ function cs_list_backups(): array {
 
     $files = glob(CS_BACKUP_DIR . '*.zip') ?: [];
 
+    $current_prefix = sanitize_key(get_option('cs_backup_prefix', 'bkup')) ?: 'bkup';
+
     foreach ($files as $file) {
         $name = basename($file);
-        // bkup_{tcode}{seq}.zip — decode type from single-char code in filename
+        // {prefix}_{tcode}{seq}.zip — decode type from single-char code in filename
+        // Also match legacy bkup_ prefix if a custom prefix has been set
         // Legacy formats: backup_full_2026-02-25_... or full_000001.zip
-        if (preg_match('/^bkup_([a-zA-Z]*)\d+\.zip$/', $name, $tm)) {
+        $p = preg_quote($current_prefix, '/');
+        if (preg_match('/^' . $p . '_([a-zA-Z]*)\d+\.zip$/', $name, $tm)
+            || ($current_prefix !== 'bkup' && preg_match('/^bkup_([a-zA-Z]*)\d+\.zip$/', $name, $tm))) {
             $tcode = $tm[1];
             $type = match($tcode) {
                 'f'  => 'Full',
