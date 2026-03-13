@@ -4,7 +4,7 @@ Tags: backup, restore, database, media, plugins, themes, mysqldump, maintenance 
 Requires at least: 6.0
 Tested up to: 6.7
 Requires PHP: 8.1
-Stable tag: 3.1.3
+Stable tag: 3.2.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -164,6 +164,14 @@ Yes. Run a full backup on the old site, install WordPress on the new host, insta
 2. Manual backup panel with individual component checkboxes and live progress bar, plus the full backup history table showing stored backups with type badges, age, and Download / Restore DB / Delete actions.
 
 == Changelog ==
+
+= 3.2.0 =
+* NEW: Split backup scheduling into two independent cron events — file backup and AMI snapshot each have their own day picker and time selector
+* NEW: Configurable backup filename prefix (default: bkup), set in the Retention card
+* NEW: S3 sync auto-retry — on failure a single cron event fires 5 minutes later; UI shows pending state and a manual Retry button
+* FIX: Scheduled backup run hour never saved due to missing name attribute on the hour select
+* FIX: Full+ backup type badge now renders distinctly from Full (separate CSS rule)
+* AMI explain modal updated to document the two-schedule architecture; reboot defaults clarified (off = crash-consistent, no downtime)
 
 = 2.74.2 =
 * FIX: AMI creation failed with "Character sets beyond ASCII are not supported" due to em dash in description
