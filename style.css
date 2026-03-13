@@ -596,7 +596,8 @@ select.cs-input-sm { width: 90px !important; }
 .cs-latest-badge { background: #1565c0; color: #fff; font-size: 0.62rem; padding: 1px 5px; border-radius: 3px; vertical-align: middle; margin-left: 4px; }
 
 .cs-type-badge   { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.73rem; font-weight: 700; }
-.cs-type-full    { background: #e3f2fd; color: #1565c0; }
+.cs-type-full     { background: #e3f2fd; color: #1565c0; }
+.cs-type-fullplus { background: #1565c0; color: #fff; }
 .cs-type-db      { background: #e8f5e9; color: #2e7d32; }
 .cs-type-media   { background: #fff8e1; color: #f57f17; }
 .cs-type-plugins { background: #f3e5f5; color: #7b1fa2; }
