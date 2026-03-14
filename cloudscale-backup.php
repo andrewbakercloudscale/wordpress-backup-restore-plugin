@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.1.3
+ * Version:           3.2.1
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,12 +16,26 @@
 
 defined('ABSPATH') || exit;
 
-define('CS_VERSION',    '3.1.3');
-define('CS_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
-define('CS_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
-define('CS_PLUGIN_DIR', plugin_dir_path(__FILE__));
+define('CS_BACKUP_VERSION',    '3.2.1');
+define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
+define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
+define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('CS_BACKUP_DIR', WP_CONTENT_DIR . '/cloudscale-backups/');
-define('CS_MAINT_FILE', ABSPATH . '.maintenance');
+define('CS_BACKUP_MAINT_FILE', ABSPATH . '.maintenance');
+
+/**
+ * Write a message to the PHP error log when WP_DEBUG is enabled.
+ * Replaces bare error_log() calls throughout the plugin so they are
+ * silenced in production and only visible during development.
+ *
+ * @param string $message Message to write to the PHP error log.
+ * @return void
+ */
+function cs_log( string $message ): void {
+    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+        error_log( $message );
+    }
+}
 
 // ============================================================
 // Bootstrap
@@ -30,11 +44,24 @@ define('CS_MAINT_FILE', ABSPATH . '.maintenance');
 register_activation_hook(__FILE__, 'cs_activate');
 register_deactivation_hook(__FILE__, 'cs_deactivate');
 
+/**
+ * Plugin activation: create the backup directory and schedule the first cron event.
+ *
+ * @since 1.0.0
+ * @return void
+ */
 function cs_activate() {
     cs_ensure_backup_dir();
     cs_reschedule();
 }
 
+/**
+ * Plugin deactivation: clear all scheduled hooks, remove maintenance mode, and
+ * delete versioned asset files so a reinstall starts clean.
+ *
+ * @since 1.0.0
+ * @return void
+ */
 function cs_deactivate() {
     wp_clear_scheduled_hook('cs_scheduled_backup');
     wp_clear_scheduled_hook('cs_scheduled_ami_backup');
@@ -44,13 +71,13 @@ function cs_deactivate() {
 
     // Wipe all asset files so Deactivate > Delete > Upload leaves no stale code
     $dir = plugin_dir_path(__FILE__);
-    foreach (glob($dir . '*.{js,css}', GLOB_BRACE) as $f) { @unlink($f); }
+    foreach (glob($dir . '*.{js,css}', GLOB_BRACE) as $f) { wp_delete_file($f); }
 
     // Clean old assets/ subdirectory from previous versions
     $assets = $dir . 'assets/';
     if (is_dir($assets)) {
-        foreach (glob($assets . '*') as $f) { if (is_file($f)) { @unlink($f); } }
-        @rmdir($assets);
+        foreach (glob($assets . '*') as $f) { if (is_file($f)) { wp_delete_file($f); } }
+        rmdir($assets);
     }
 }
 
@@ -60,9 +87,13 @@ function cs_deactivate() {
  * (and style.css -> style-2-77-0.css). The CDN has never seen the new URL
  * so it must fetch from origin — query strings (?ver=) are stripped by
  * CloudFront and other CDNs and do not bust the cache.
+ *
+ * @since 1.0.0
+ * @param string $ext File extension — 'js' or 'css'.
+ * @return string Filename (not path) of the versioned asset, e.g. 'script-3-2-0.js'.
  */
 function cs_get_versioned_asset(string $ext): string {
-    $ver_slug  = str_replace('.', '-', CS_VERSION);
+    $ver_slug  = str_replace('.', '-', CS_BACKUP_VERSION);
     $src_name  = ($ext === 'js') ? 'script.' . $ext : 'style.' . $ext;
     $dest_name = ($ext === 'js') ? 'script-' . $ver_slug . '.js' : 'style-' . $ver_slug . '.css';
     $dir       = plugin_dir_path(__FILE__);
@@ -71,11 +102,11 @@ function cs_get_versioned_asset(string $ext): string {
         // Delete old versioned copies first
         $pattern = ($ext === 'js') ? $dir . 'script-*.js' : $dir . 'style-*.css';
         foreach (glob($pattern) ?: [] as $old) {
-            if (basename($old) !== $dest_name) { @unlink($old); }
+            if (basename($old) !== $dest_name) { wp_delete_file($old); }
         }
         // Copy the canonical source to the new versioned name
         if (file_exists($dir . $src_name)) {
-            @copy($dir . $src_name, $dir . $dest_name);
+            copy($dir . $src_name, $dir . $dest_name);
         }
     }
 
@@ -85,22 +116,30 @@ function cs_get_versioned_asset(string $ext): string {
 // Version change detector — cleans stale assets on upgrade without deactivation
 add_action('admin_init', function () {
     $cached = get_option('cs_loaded_version', '');
-    if ($cached !== CS_VERSION) {
+    if ($cached !== CS_BACKUP_VERSION) {
         if (function_exists('opcache_reset')) { opcache_reset(); }
         $dir = plugin_dir_path(__FILE__);
         // Delete old versioned JS/CSS files from previous versions
-        foreach (glob($dir . 'script-*.js') ?: [] as $f) { @unlink($f); }
-        foreach (glob($dir . 'style-*.css') ?: [] as $f) { @unlink($f); }
+        foreach (glob($dir . 'script-*.js') ?: [] as $f) { wp_delete_file($f); }
+        foreach (glob($dir . 'style-*.css') ?: [] as $f) { wp_delete_file($f); }
         // Clean old assets/ subfolder from early versions
         $assets = $dir . 'assets/';
         if (is_dir($assets)) {
-            foreach (glob($assets . '*') as $f) { if (is_file($f)) { @unlink($f); } }
-            @rmdir($assets);
+            foreach (glob($assets . '*') as $f) { if (is_file($f)) { wp_delete_file($f); } }
+            rmdir($assets);
         }
-        update_option('cs_loaded_version', CS_VERSION);
+        update_option('cs_loaded_version', CS_BACKUP_VERSION);
     }
 });
 
+/**
+ * Create the backup directory and its protection files if they do not exist.
+ *
+ * Creates CS_BACKUP_DIR, drops an .htaccess deny-all, and adds a silent index.php.
+ *
+ * @since 1.0.0
+ * @return void
+ */
 function cs_ensure_backup_dir(): void {
     if (!file_exists(CS_BACKUP_DIR)) {
         wp_mkdir_p(CS_BACKUP_DIR);
@@ -137,15 +176,18 @@ add_filter('cron_schedules', function (array $schedules): array {
 /**
  * Poll AWS for the state of every AMI log entry that is still 'pending'.
  * Scheduled as a single event 10 minutes after an AMI is created.
- * If any entries remain pending and are younger than CS_AMI_POLL_MAX_AGE,
- * reschedules itself for another CS_AMI_POLL_INTERVAL seconds.
+ * If any entries remain pending and are younger than CS_BACKUP_AMI_POLL_MAX_AGE,
+ * reschedules itself for another CS_BACKUP_AMI_POLL_INTERVAL seconds.
  * Gives up automatically after 2 hours to avoid polling indefinitely.
+ *
+ * @since 2.74.0
+ * @return void
  */
 add_action('cs_ami_poll', 'cs_ami_poll_handler');
 function cs_ami_poll_handler(): void {
     $aws = cs_find_aws();
     if (!$aws) {
-        error_log('[CloudScale Backup] AMI poll: AWS CLI not found, skipping.');
+        cs_log('[CloudScale Backup] AMI poll: AWS CLI not found, skipping.');
         return;
     }
 
@@ -164,12 +206,12 @@ function cs_ami_poll_handler(): void {
             continue;
         }
 
-        // Stop polling entries older than CS_AMI_POLL_MAX_AGE
+        // Stop polling entries older than CS_BACKUP_AMI_POLL_MAX_AGE
         $age = time() - (int) ($entry['time'] ?? 0);
-        if ($age > CS_AMI_POLL_MAX_AGE) {
+        if ($age > CS_BACKUP_AMI_POLL_MAX_AGE) {
             // Don't overwrite with timed-out — let Refresh All query AWS directly
             // Just stop scheduling further polls for this entry
-            error_log('[CloudScale Backup] AMI poll: gave up scheduling polls for ' . $entry['ami_id'] . ' after ' . round($age / 60) . ' min — use Refresh All to check current state');
+            cs_log('[CloudScale Backup] AMI poll: gave up scheduling polls for ' . $entry['ami_id'] . ' after ' . round($age / 60) . ' min — use Refresh All to check current state');
             continue;
         }
 
@@ -186,7 +228,7 @@ function cs_ami_poll_handler(): void {
             if ($entry['state'] !== $state) {
                 $entry['state'] = $state;
                 $changed = true;
-                error_log('[CloudScale Backup] AMI poll: ' . $entry['ami_id'] . ' → ' . $state);
+                cs_log('[CloudScale Backup] AMI poll: ' . $entry['ami_id'] . ' → ' . $state);
             }
             if ($state === 'pending') {
                 $still_pending = true;
@@ -195,7 +237,7 @@ function cs_ami_poll_handler(): void {
             // AWS returned nothing or an error — likely a credentials issue on this server user
             // Keep state as 'pending' so user knows it hasn't resolved, log the raw output
             $still_pending = true;
-            error_log('[CloudScale Backup] AMI poll: describe-images returned "' . $raw . '" for ' . $entry['ami_id'] . ' — possible credentials issue for www-data user. Use Refresh All from the admin UI instead.');
+            cs_log('[CloudScale Backup] AMI poll: describe-images returned "' . $raw . '" for ' . $entry['ami_id'] . ' — possible credentials issue for www-data user. Use Refresh All from the admin UI instead.');
         }
     }
     unset($entry);
@@ -206,15 +248,24 @@ function cs_ami_poll_handler(): void {
 
     // Reschedule if any entries are still pending and not yet timed out
     if ($still_pending && !wp_next_scheduled('cs_ami_poll')) {
-        wp_schedule_single_event(time() + CS_AMI_POLL_INTERVAL, 'cs_ami_poll');
-        error_log('[CloudScale Backup] AMI poll: rescheduled in ' . (CS_AMI_POLL_INTERVAL / 60) . ' min (pending AMIs remain)');
+        wp_schedule_single_event(time() + CS_BACKUP_AMI_POLL_INTERVAL, 'cs_ami_poll');
+        cs_log('[CloudScale Backup] AMI poll: rescheduled in ' . (CS_BACKUP_AMI_POLL_INTERVAL / 60) . ' min (pending AMIs remain)');
     }
 }
 
+/**
+ * Return the configured file-backup days of the week as an array of integers (1=Mon…7=Sun).
+ *
+ * Reads directly from the database to bypass the object cache so cron handlers
+ * always see the most recently saved value.
+ *
+ * @since 1.0.0
+ * @return int[] Day-of-week numbers, e.g. [1, 3, 5] for Mon/Wed/Fri.
+ */
 function cs_get_run_days(): array {
     global $wpdb;
     // Read directly from DB — bypasses object cache entirely
-    $raw = $wpdb->get_var("SELECT option_value FROM {$wpdb->options} WHERE option_name = 'cs_run_days'");
+    $raw = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'cs_run_days' ) );
     if ($raw === null) {
         return [1, 3, 5]; // option row doesn't exist yet — install default
     }
@@ -226,6 +277,14 @@ function cs_get_run_days(): array {
     return array_map('intval', $saved);
 }
 
+/**
+ * Clear and reschedule the file-backup and AMI cron events based on current settings.
+ *
+ * Called on activation and whenever the schedule settings are saved.
+ *
+ * @since 1.0.0
+ * @return void
+ */
 function cs_reschedule(): void {
     wp_clear_scheduled_hook('cs_scheduled_backup');
     wp_clear_scheduled_hook('cs_scheduled_ami_backup');
@@ -302,9 +361,9 @@ add_action('cs_scheduled_ami_backup', function () {
 
     $result = cs_do_create_ami();
     if ($result['ok']) {
-        error_log('[CloudScale Backup] Scheduled AMI created: ' . $result['ami_id'] . ' (' . $result['name'] . ')');
+        cs_log('[CloudScale Backup] Scheduled AMI created: ' . $result['ami_id'] . ' (' . $result['name'] . ')');
     } else {
-        error_log('[CloudScale Backup] Scheduled AMI failed: ' . ($result['error'] ?? 'unknown error'));
+        cs_log('[CloudScale Backup] Scheduled AMI failed: ' . ($result['error'] ?? 'unknown error'));
     }
 });
 
@@ -314,8 +373,8 @@ add_action('cs_scheduled_ami_backup', function () {
 
 add_action('admin_menu', function () {
     add_management_page(
-        'CloudScale Free Backup and Restore',
-        'CloudScale Backup & Restore',
+        __( 'CloudScale Free Backup and Restore', 'cloudscale-backup' ),
+        __( 'CloudScale Backup & Restore', 'cloudscale-backup' ),
         'manage_options',
         'cloudscale-backup',
         'cs_admin_page'
@@ -326,8 +385,8 @@ add_action('admin_enqueue_scripts', function (string $hook): void {
     if ($hook !== 'tools_page_cloudscale-backup') return;
     $css_file = cs_get_versioned_asset('css');
     $js_file  = cs_get_versioned_asset('js');
-    wp_enqueue_style('cs-style',   plugin_dir_url(__FILE__) . $css_file, [], CS_VERSION);
-    wp_enqueue_script('cs-script', plugin_dir_url(__FILE__) . $js_file,  ['jquery'], CS_VERSION, true);
+    wp_enqueue_style('cs-style',   plugin_dir_url(__FILE__) . $css_file, [], CS_BACKUP_VERSION);
+    wp_enqueue_script('cs-script', plugin_dir_url(__FILE__) . $js_file,  ['jquery'], CS_BACKUP_VERSION, true);
     wp_localize_script('cs-script', 'CS', [
         'ajax_url' => admin_url('admin-ajax.php'),
         'nonce'    => wp_create_nonce('cs_nonce'),
@@ -339,6 +398,12 @@ add_action('admin_enqueue_scripts', function (string $hook): void {
 // Admin page
 // ============================================================
 
+/**
+ * Render the plugin admin page (Tools > CloudScale Backup & Restore).
+ *
+ * @since 1.0.0
+ * @return void
+ */
 function cs_admin_page(): void {
     cs_ensure_backup_dir();
 
@@ -369,7 +434,7 @@ function cs_admin_page(): void {
     ));
     $next_run     = wp_next_scheduled('cs_scheduled_backup');
     $ami_next_run = wp_next_scheduled('cs_scheduled_ami_backup');
-    $maint_active = file_exists(CS_MAINT_FILE);
+    $maint_active = file_exists(CS_BACKUP_MAINT_FILE);
 
     // Disk space
     $free_bytes  = disk_free_space(CS_BACKUP_DIR);
@@ -466,15 +531,15 @@ function cs_admin_page(): void {
         <!-- ===================== HEADER ===================== -->
         <div class="cs-header">
             <div class="cs-header-title">
-                <h1>☁ CloudScale Free Backup &amp; Restore</h1>
-                <p class="cs-header-sub">Database · media · plugins · themes. No timeouts, no external services.</p>
-                <p class="cs-header-free">✅ 100% free forever — no licence, no premium tier, no feature restrictions. Everything is included.</p>
+                <h1>☁ <?php echo esc_html__( 'CloudScale Free Backup & Restore', 'cloudscale-backup' ); ?></h1>
+                <p class="cs-header-sub"><?php esc_html_e( 'Database · media · plugins · themes. No timeouts, no external services.', 'cloudscale-backup' ); ?></p>
+                <p class="cs-header-free">✅ <?php esc_html_e( '100% free forever — no licence, no premium tier, no feature restrictions. Everything is included.', 'cloudscale-backup' ); ?></p>
             </div>
             <div class="cs-header-status">
                 <?php if ($maint_active): ?>
-                    <span class="cs-badge cs-badge-warn">⚠ Maintenance Mode Active</span>
+                    <span class="cs-badge cs-badge-warn">⚠ <?php esc_html_e( 'Maintenance Mode Active', 'cloudscale-backup' ); ?></span>
                 <?php else: ?>
-                    <span class="cs-badge cs-badge-ok">Site Online</span>
+                    <span class="cs-badge cs-badge-ok"><?php esc_html_e( 'Site Online', 'cloudscale-backup' ); ?></span>
                 <?php endif; ?>
                 <a href="https://your-wordpress-site.example.com/2026/02/24/cloudscale-free-backup-and-restore-a-wordpress-backup-plugin-that-does-exactly-what-it-says/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;padding:6px 16px;background:#f57c00!important;color:#fff!important;font-size:0.8rem;font-weight:700;border-radius:20px;text-decoration:none!important;border:1px solid #e65100!important;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ffcc80;box-shadow:0 0 5px #ffcc80;flex-shrink:0;"></span>andrewbaker.ninja</a>
             </div>
@@ -482,23 +547,23 @@ function cs_admin_page(): void {
 
         <!-- ===================== DISK SPACE ALERT ===================== -->
         <?php if ($show_disk_alert): ?>
-        <div class="cs-alert cs-alert-<?php echo $disk_status; ?>">
+        <div class="cs-alert cs-alert-<?php echo esc_attr($disk_status); ?>">
             <?php if ($disk_status === 'red'): ?>
                 <span class="cs-alert-icon">🔴</span>
                 <div><strong>Critical: Very low disk space</strong> —
-                <?php echo cs_format_size((int)$free_bytes); ?> free<?php if ($backups_fit !== null): ?>, room for approximately <strong><?php echo $backups_fit; ?> more backup(s)</strong><?php endif; ?>.
+                <?php echo esc_html(cs_format_size((int)$free_bytes)); ?> free<?php if ($backups_fit !== null): ?>, room for approximately <strong><?php echo (int) $backups_fit; ?> more backup(s)</strong><?php endif; ?>.
                 Free up space or move old backups off-server immediately.</div>
             <?php else: ?>
                 <span class="cs-alert-icon">🟡</span>
                 <div><strong>Warning: Disk space is running low</strong> —
-                <?php echo cs_format_size((int)$free_bytes); ?> free<?php if ($backups_fit !== null): ?>, room for approximately <strong><?php echo $backups_fit; ?> more backup(s)</strong><?php endif; ?>.
+                <?php echo esc_html(cs_format_size((int)$free_bytes)); ?> free<?php if ($backups_fit !== null): ?>, room for approximately <strong><?php echo (int) $backups_fit; ?> more backup(s)</strong><?php endif; ?>.
                 Consider freeing space or reducing your retention count.</div>
             <?php endif; ?>
         </div>
         <?php endif; ?>
 
         <!-- ===================== SETTINGS ===================== -->
-        <div class="cs-section-ribbon"><span>Schedule &amp; Settings</span></div>
+        <div class="cs-section-ribbon"><span><?php esc_html_e( 'Schedule & Settings', 'cloudscale-backup' ); ?></span></div>
         <div class="cs-grid cs-grid-1" style="display:flex!important;flex-direction:column!important;gap:16px!important;">
 
             <!-- SCHEDULE CARD -->
@@ -506,13 +571,13 @@ function cs_admin_page(): void {
                 <form method="post" action="" id="cs-schedule-form">
                 <?php wp_nonce_field('cs_nonce', 'nonce'); ?>
                 <input type="hidden" name="cs_action" value="save_schedule">
-                <div class="cs-card-stripe cs-stripe--blue" style="background:linear-gradient(135deg,#1565c0 0%,#2196f3 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⏰ Backup Schedule</h2><button type="button" onclick="csScheduleExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+                <div class="cs-card-stripe cs-stripe--blue" style="background:linear-gradient(135deg,#1565c0 0%,#2196f3 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⏰ <?php echo esc_html__( 'Backup Schedule', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csScheduleExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
 
                 <!-- Enable/disable checkbox — inline with label -->
                 <div class="cs-field-group">
                     <label class="cs-enable-label">
                         <input type="checkbox" id="cs-schedule-enabled" name="schedule_enabled" value="1" <?php checked($enabled); ?>>
-                        Enable automatic backups
+                        <?php esc_html_e( 'Enable automatic backups', 'cloudscale-backup' ); ?>
                     </label>
                 </div>
 
@@ -522,23 +587,23 @@ function cs_admin_page(): void {
 
                     <!-- File backup days + components + time -->
                     <div class="cs-field-group">
-                        <span class="cs-field-label">File backup days</span>
+                        <span class="cs-field-label"><?php esc_html_e( 'File backup days', 'cloudscale-backup' ); ?></span>
                         <div class="cs-day-checks">
                             <?php foreach ($days_map as $num => $day_label): ?>
                             <label class="cs-day-check-label">
                                 <input type="checkbox"
                                        class="cs-day-check"
                                        name="run_days[]"
-                                       value="<?php echo $num; ?>"
+                                       value="<?php echo (int) $num; ?>"
                                        <?php checked(in_array($num, $run_days_sel, false)); ?>>
-                                <?php echo $day_label; ?>
+                                <?php echo esc_html($day_label); ?>
                             </label>
                             <?php endforeach; ?>
                         </div>
                     </div>
 
                     <div class="cs-field-group">
-                        <span class="cs-field-label">Include in scheduled backup</span>
+                        <span class="cs-field-label"><?php esc_html_e( 'Include in scheduled backup', 'cloudscale-backup' ); ?></span>
                         <div style="display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:6px;">
                             <?php
                             $sched_comp_map = [
@@ -555,7 +620,7 @@ function cs_admin_page(): void {
                             foreach ($sched_comp_map as $key => $label):
                             ?>
                             <label class="cs-option-label" style="margin:0;">
-                                <input type="checkbox" name="schedule_components[]" value="<?php echo $key; ?>"
+                                <input type="checkbox" name="schedule_components[]" value="<?php echo esc_attr($key); ?>"
                                     <?php checked(in_array($key, $sched_components, true)); ?>>
                                 <?php echo esc_html($label); ?>
                                 <?php if ($key === 'wpconfig'): ?><span class="cs-sensitive-badge" style="margin-left:4px;">&#9888; credentials</span><?php endif; ?>
@@ -566,23 +631,23 @@ function cs_admin_page(): void {
                     </div>
 
                     <div class="cs-field-group">
-                        <label class="cs-field-label" for="cs-run-hour">File backup time</label>
+                        <label class="cs-field-label" for="cs-run-hour"><?php esc_html_e( 'File backup time', 'cloudscale-backup' ); ?></label>
                         <div class="cs-inline">
                             <select id="cs-run-hour" name="run_hour" class="cs-input-sm">
                                 <?php for ($h = 0; $h < 24; $h++): ?>
-                                    <option value="<?php echo $h; ?>" <?php selected($hour, $h); ?>><?php echo str_pad($h, 2, '0', STR_PAD_LEFT); ?></option>
+                                    <option value="<?php echo (int) $h; ?>" <?php selected($hour, $h); ?>><?php echo esc_html(str_pad($h, 2, '0', STR_PAD_LEFT)); ?></option>
                                 <?php endfor; ?>
                             </select>
                             <span class="cs-muted-text">:</span>
                             <select id="cs-run-minute" name="run_minute" class="cs-input-sm">
                                 <?php foreach ([0, 15, 30, 45] as $m): ?>
-                                    <option value="<?php echo $m; ?>" <?php selected($minute, $m); ?>><?php echo str_pad($m, 2, '0', STR_PAD_LEFT); ?></option>
+                                    <option value="<?php echo (int) $m; ?>" <?php selected($minute, $m); ?>><?php echo esc_html(str_pad($m, 2, '0', STR_PAD_LEFT)); ?></option>
                                 <?php endforeach; ?>
                             </select>
-                            <span class="cs-muted-text">server time &nbsp;·&nbsp; now: <?php echo current_time('H:i T'); ?> &nbsp;·&nbsp; TZ: <?php echo wp_timezone_string(); ?></span>
+                            <span class="cs-muted-text">server time &nbsp;·&nbsp; now: <?php echo esc_html(current_time('H:i T')); ?> &nbsp;·&nbsp; TZ: <?php echo esc_html(wp_timezone_string()); ?></span>
                         </div>
                         <?php if ($next_run): ?>
-                        <p class="cs-help">Next file backup: <strong><?php echo get_date_from_gmt(date('Y-m-d H:i:s', $next_run), 'D j M \a\t H:i'); ?></strong></p>
+                        <p class="cs-help">Next file backup: <strong><?php echo esc_html(get_date_from_gmt(date('Y-m-d H:i:s', $next_run), 'D j M \a\t H:i')); ?></strong></p>
                         <?php endif; ?>
                     </div>
 
@@ -595,9 +660,9 @@ function cs_admin_page(): void {
                                 <input type="checkbox"
                                        class="cs-ami-day-check"
                                        name="ami_schedule_days[]"
-                                       value="<?php echo $num; ?>"
+                                       value="<?php echo (int) $num; ?>"
                                        <?php checked(in_array($num, $ami_schedule_days, false)); ?>>
-                                <?php echo $day_label; ?>
+                                <?php echo esc_html($day_label); ?>
                             </label>
                             <?php endforeach; ?>
                         </div>
@@ -605,23 +670,23 @@ function cs_admin_page(): void {
                     </div>
 
                     <div class="cs-field-group">
-                        <label class="cs-field-label" for="cs-ami-run-hour">AMI backup time</label>
+                        <label class="cs-field-label" for="cs-ami-run-hour"><?php esc_html_e( 'AMI backup time', 'cloudscale-backup' ); ?></label>
                         <div class="cs-inline">
                             <select id="cs-ami-run-hour" name="ami_run_hour" class="cs-input-sm">
                                 <?php for ($h = 0; $h < 24; $h++): ?>
-                                    <option value="<?php echo $h; ?>" <?php selected($ami_run_hour, $h); ?>><?php echo str_pad($h, 2, '0', STR_PAD_LEFT); ?></option>
+                                    <option value="<?php echo (int) $h; ?>" <?php selected($ami_run_hour, $h); ?>><?php echo esc_html(str_pad($h, 2, '0', STR_PAD_LEFT)); ?></option>
                                 <?php endfor; ?>
                             </select>
                             <span class="cs-muted-text">:</span>
                             <select id="cs-ami-run-minute" name="ami_run_minute" class="cs-input-sm">
                                 <?php foreach ([0, 15, 30, 45] as $m): ?>
-                                    <option value="<?php echo $m; ?>" <?php selected($ami_run_minute, $m); ?>><?php echo str_pad($m, 2, '0', STR_PAD_LEFT); ?></option>
+                                    <option value="<?php echo (int) $m; ?>" <?php selected($ami_run_minute, $m); ?>><?php echo esc_html(str_pad($m, 2, '0', STR_PAD_LEFT)); ?></option>
                                 <?php endforeach; ?>
                             </select>
                             <span class="cs-muted-text">server time</span>
                         </div>
                         <?php if ($ami_next_run): ?>
-                        <p class="cs-help">Next AMI backup: <strong><?php echo get_date_from_gmt(date('Y-m-d H:i:s', $ami_next_run), 'D j M \a\t H:i'); ?></strong></p>
+                        <p class="cs-help">Next AMI backup: <strong><?php echo esc_html(get_date_from_gmt(date('Y-m-d H:i:s', $ami_next_run), 'D j M \a\t H:i')); ?></strong></p>
                         <?php endif; ?>
                     </div>
 
@@ -631,7 +696,7 @@ function cs_admin_page(): void {
                     Automatic backups are <strong>off</strong>. Enable the checkbox above to configure a schedule, or run backups manually below.
                 </div>
 
-                <button type="submit" name="cs_save_schedule" class="button button-primary cs-mt">Save Schedule</button>
+                <button type="submit" name="cs_save_schedule" class="button button-primary cs-mt"><?php esc_html_e( 'Save Schedule', 'cloudscale-backup' ); ?></button>
                 <?php if ($cs_schedule_saved_msg): ?>
                 <span class="cs-saved-msg" style="display:inline;margin-left:10px">✓ <?php echo esc_html($cs_schedule_saved_msg); ?></span>
                 <?php endif; ?>
@@ -647,10 +712,10 @@ function cs_admin_page(): void {
             $ret_has_baseline = $latest_size > 0;
             ?>
             <div class="cs-card cs-card--green">
-                <div class="cs-card-stripe cs-stripe--green" style="background:linear-gradient(135deg,#2e7d32 0%,#43a047 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🗂 Retention &amp; Storage</h2><button type="button" onclick="csRetentionExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+                <div class="cs-card-stripe cs-stripe--green" style="background:linear-gradient(135deg,#2e7d32 0%,#43a047 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🗂 <?php echo esc_html__( 'Retention & Storage', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csRetentionExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
 
                 <div class="cs-field-group">
-                    <label class="cs-field-label" for="cs-backup-prefix">Backup filename prefix</label>
+                    <label class="cs-field-label" for="cs-backup-prefix"><?php esc_html_e( 'Backup filename prefix', 'cloudscale-backup' ); ?></label>
                     <div class="cs-inline">
                         <input type="text" id="cs-backup-prefix" class="cs-input-sm"
                                value="<?php echo esc_attr($backup_prefix); ?>"
@@ -661,7 +726,7 @@ function cs_admin_page(): void {
                 </div>
 
                 <div class="cs-field-group">
-                    <label class="cs-field-label">Keep last</label>
+                    <label class="cs-field-label"><?php esc_html_e( 'Keep last', 'cloudscale-backup' ); ?></label>
                     <div class="cs-inline">
                         <input type="number" id="cs-retention"
                                value="<?php echo $retention; ?>" min="1" max="9999"
@@ -683,13 +748,13 @@ function cs_admin_page(): void {
                             <span class="cs-ret-label">Estimated storage needed</span>
                             <span id="cs-retention-est"
                                   class="cs-ret-val <?php echo $ret_over ? 'cs-retention-est--over' : ''; ?>">
-                                <?php echo cs_format_size($ret_needed); ?>
+                                <?php echo esc_html(cs_format_size($ret_needed)); ?>
                             </span>
                         </div>
                         <div class="cs-ret-row">
                             <span class="cs-ret-label">Disk free space</span>
-                            <span class="cs-ret-val cs-free-<?php echo $disk_status; ?>">
-                                <?php echo $free_bytes !== false ? cs_format_size((int)$free_bytes) : 'Unknown'; ?>
+                            <span class="cs-ret-val cs-free-<?php echo esc_attr($disk_status); ?>">
+                                <?php echo $free_bytes !== false ? esc_html(cs_format_size((int)$free_bytes)) : 'Unknown'; ?>
                             </span>
                         </div>
                         <?php else: ?>
@@ -711,30 +776,30 @@ function cs_admin_page(): void {
                 <div class="cs-storage-grid">
                     <div class="cs-storage-item">
                         <span class="cs-storage-label">Backup storage used</span>
-                        <span class="cs-storage-value cs-value--blue"><?php echo cs_format_size(cs_dir_size(CS_BACKUP_DIR)); ?></span>
+                        <span class="cs-storage-value cs-value--blue"><?php echo esc_html(cs_format_size(cs_dir_size(CS_BACKUP_DIR))); ?></span>
                     </div>
                     <div class="cs-storage-item">
                         <span class="cs-storage-label">Media uploads</span>
-                        <span class="cs-storage-value"><?php echo cs_format_size($upload_size); ?></span>
+                        <span class="cs-storage-value"><?php echo esc_html(cs_format_size($upload_size)); ?></span>
                     </div>
                     <div class="cs-storage-item">
                         <span class="cs-storage-label">Plugins folder</span>
-                        <span class="cs-storage-value"><?php echo cs_format_size($plugins_size); ?></span>
+                        <span class="cs-storage-value"><?php echo esc_html(cs_format_size($plugins_size)); ?></span>
                     </div>
                     <div class="cs-storage-item">
                         <span class="cs-storage-label">Themes folder</span>
-                        <span class="cs-storage-value"><?php echo cs_format_size($themes_size); ?></span>
+                        <span class="cs-storage-value"><?php echo esc_html(cs_format_size($themes_size)); ?></span>
                     </div>
                 </div>
 
-                <button type="button" id="cs-save-retention" class="button button-primary cs-mt">Save Retention Settings</button>
+                <button type="button" id="cs-save-retention" class="button button-primary cs-mt"><?php esc_html_e( 'Save Retention Settings', 'cloudscale-backup' ); ?></button>
                 <span id="cs-retention-saved" class="cs-saved-msg" style="display:none">✓ Saved</span>
             </div>
 
             <!-- S3 REMOTE BACKUP CARD — self-contained, no script.js dependency -->
             <div class="cs-card cs-card--pink">
                 <div class="cs-card-stripe cs-stripe--pink" style="background:linear-gradient(135deg,#880e4f 0%,#e91e8c 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
-                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#9729; S3 Remote Backup</h2>
+                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#9729; <?php echo esc_html__( 'S3 Remote Backup', 'cloudscale-backup' ); ?></h2>
                     <button type="button" onclick="csS3Explain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button>
                 </div>
 
@@ -768,8 +833,8 @@ function cs_admin_page(): void {
                 </div>
 
                 <div style="margin-top:12px;">
-                    <button type="button" onclick="csS3Save()" class="button button-primary">Save S3 Settings</button>
-                    <button type="button" onclick="csS3Test()" class="button" style="margin-left:8px">Test Connection</button>
+                    <button type="button" onclick="csS3Save()" class="button button-primary"><?php esc_html_e( 'Save S3 Settings', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csS3Test()" class="button" style="margin-left:8px"><?php esc_html_e( 'Test Connection', 'cloudscale-backup' ); ?></button>
                     <span id="cs-s3-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
                 </div>
 
@@ -794,108 +859,6 @@ function cs_admin_page(): void {
                 <?php endif; ?>
             </div>
 
-            <?php
-            $cs_ajax = esc_js(admin_url('admin-ajax.php'));
-            $cs_nonce = esc_js(wp_create_nonce('cs_nonce'));
-            ?>
-            <script>
-            var CS_S3_AJAX  = '<?php echo $cs_ajax; ?>';
-            var CS_S3_NONCE = '<?php echo $cs_nonce; ?>';
-
-            function csS3Msg(text, ok) {
-                var el = document.getElementById('cs-s3-msg');
-                el.innerHTML = text;
-                el.style.color = ok ? '#2e7d32' : '#c62828';
-            }
-
-            function csS3Post(action, extra, onDone) {
-                var params = 'action=' + action + '&nonce=' + encodeURIComponent(CS_S3_NONCE);
-                if (extra) params += '&' + extra;
-                var xhr = new XMLHttpRequest();
-                xhr.open('POST', CS_S3_AJAX, true);
-                xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-                xhr.onload = function() {
-                    try { onDone(JSON.parse(xhr.responseText)); }
-                    catch(e) { onDone({success:false, data:'Bad response: ' + xhr.responseText.substring(0,100)}); }
-                };
-                xhr.onerror = function() { onDone({success:false, data:'Network error'}); };
-                xhr.send(params);
-            }
-
-            function csS3Save() {
-                var bucket = document.getElementById('cs-s3-bucket').value.trim();
-                var prefix = document.getElementById('cs-s3-prefix').value.trim() || 'backups/';
-                csS3Msg('Saving...', true);
-                csS3Post('cs_save_s3',
-                    'bucket=' + encodeURIComponent(bucket) + '&prefix=' + encodeURIComponent(prefix),
-                    function(res) { csS3Msg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success); }
-                );
-            }
-
-            function csS3Test() {
-                csS3Msg('Testing...', true);
-                csS3Post('cs_test_s3', '', function(res) {
-                    csS3Msg((res.success ? '&#10003; ' : '&#10007; ') + res.data, res.success);
-                });
-            }
-
-            function csExplainModal(id, title, gradient, contentHtml) {
-                var el = document.getElementById(id);
-                if (el) { el.style.display = 'flex'; return; }
-                var ov = document.createElement('div');
-                ov.id = id;
-                ov.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999999;display:flex;align-items:center;justify-content:center;';
-                var box = document.createElement('div');
-                box.style.cssText = 'background:#fff;border-radius:8px;max-width:600px;width:92%;max-height:80vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.4);';
-                var head = document.createElement('div');
-                head.style.cssText = 'background:' + gradient + ';padding:14px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;';
-                head.innerHTML = '<strong style="color:#fff;">' + title + '</strong>';
-                var closeBtn = document.createElement('button');
-                closeBtn.type = 'button';
-                closeBtn.innerHTML = '&times;';
-                closeBtn.setAttribute('aria-label', 'Close');
-                closeBtn.style.cssText = 'background:none;border:none;color:#fff;font-size:1.4rem;cursor:pointer;line-height:1;';
-                closeBtn.onclick = function() { ov.style.display = 'none'; };
-                head.appendChild(closeBtn);
-                var body = document.createElement('div');
-                body.style.cssText = 'overflow-y:auto;padding:20px 24px;';
-                body.innerHTML = contentHtml;
-                box.appendChild(head);
-                box.appendChild(body);
-                ov.appendChild(box);
-                ov.addEventListener('click', function(e) { if (e.target === ov) ov.style.display = 'none'; });
-                document.addEventListener('keydown', function(e) { if (e.key === 'Escape' && ov.style.display === 'flex') ov.style.display = 'none'; });
-                document.body.appendChild(ov);
-            }
-
-            function csS3SyncFile(btn, filename) {
-                btn.disabled = true;
-                btn.textContent = '…';
-                csS3Post('cs_s3_sync_file', 'filename=' + encodeURIComponent(filename), function(res) {
-                    if (res.success) {
-                        var td = btn.closest ? btn.closest('td') : btn.parentNode;
-                        if (td) td.innerHTML = '<span title="Synced to S3" style="color:#2e7d32;font-size:16px;"><svg xmlns=\'http://www.w3.org/2000/svg\' width=\'16\' height=\'16\' viewBox=\'0 0 24 24\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'2.5\' stroke-linecap=\'round\' stroke-linejoin=\'round\'><path d=\'M18 8h1a4 4 0 0 1 0 8h-1\'/><path d=\'M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z\'/><line x1=\'6\' y1=\'1\' x2=\'6\' y2=\'4\'/><line x1=\'10\' y1=\'1\' x2=\'10\' y2=\'4\'/><line x1=\'14\' y1=\'1\' x2=\'14\' y2=\'4\'/></svg></span>';
-                    } else {
-                        btn.disabled = false;
-                        btn.textContent = '↑ Retry';
-                        var errEl = btn.previousElementSibling;
-                        if (errEl) errEl.textContent = res.data || 'Sync failed';
-                        else alert('S3 sync failed: ' + (res.data || 'Unknown error'));
-                    }
-                });
-            }
-
-            function csS3Explain() {
-                csExplainModal('cs-s3-explain-overlay', 'S3 Remote Backup - Setup Guide',
-                    'linear-gradient(135deg,#880e4f,#e91e8c)',
-                    '<p><strong>How it works</strong><br>After every backup the plugin runs <code>aws s3 cp</code> to upload the zip. Local copy always kept.</p>'
-                    + '<p><strong>Install (Ubuntu/Debian)</strong></p><pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;overflow-x:auto;">curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip\nunzip awscliv2.zip &amp;&amp; sudo ./aws/install</pre>'
-                    + '<p><strong>Install (Amazon Linux)</strong></p><pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;">sudo yum install -y aws-cli</pre>'
-                    + '<p><strong>Credentials</strong><br>1. IAM instance role (recommended)<br>2. <code>aws configure</code> as web server user<br>3. Env vars: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION</p>'
-                    + '<p><strong>Minimum IAM policy</strong></p><pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;overflow-x:auto;">{\n  "Version": "2012-10-17",\n  "Statement": [{\n    "Effect": "Allow",\n    "Action": ["s3:PutObject","s3:GetObject","s3:ListBucket"],\n    "Resource": ["arn:aws:s3:::YOUR-BUCKET","arn:aws:s3:::YOUR-BUCKET/*"]\n  }]\n}</pre>'
-                );
-            }
-            </script>
 
             <!-- AMI SNAPSHOT CARD — self-contained, no script.js dependency -->
             <?php
@@ -911,12 +874,12 @@ function cs_admin_page(): void {
                 $ami_region      = '';
                 $ami_log         = [];
                 $ami_log_recent  = [];
-                error_log('[CloudScale Backup] AMI panel init error: ' . $e->getMessage());
+                cs_log('[CloudScale Backup] AMI panel init error: ' . $e->getMessage());
             }
             ?>
             <div class="cs-card cs-card--indigo">
                 <div class="cs-card-stripe cs-stripe--indigo" style="background:linear-gradient(135deg,#1a237e 0%,#3949ab 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
-                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128247; EC2 AMI Snapshot</h2>
+                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128247; <?php echo esc_html__( 'EC2 AMI Snapshot', 'cloudscale-backup' ); ?></h2>
                     <button type="button" onclick="csAmiExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button>
                 </div>
 
@@ -973,7 +936,7 @@ function cs_admin_page(): void {
                 </div>
 
                 <div style="margin-top:12px;">
-                    <button type="button" onclick="csAmiSave()" class="button button-primary">Save AMI Settings</button>
+                    <button type="button" onclick="csAmiSave()" class="button button-primary"><?php esc_html_e( 'Save AMI Settings', 'cloudscale-backup' ); ?></button>
                     <button type="button" onclick="csAmiCreate()" class="button" style="margin-left:8px;background:#1a237e!important;color:#fff!important;border-color:#1a237e!important;" <?php echo $ami_instance_id ? '' : 'disabled title="EC2 instance not detected"'; ?>>&#128247; Create AMI Now</button>
                     <button type="button" onclick="csAmiStatus()" class="button" style="margin-left:4px;" <?php echo $ami_instance_id ? '' : 'disabled'; ?>>Check Status</button>
                     <button type="button" onclick="csAmiResetAndRefresh()" class="button" id="cs-ami-refresh-all" style="margin-left:4px;background:#c2185b!important;color:#fff!important;border-color:#880e4f!important;">&#8635; Refresh All</button>
@@ -983,7 +946,7 @@ function cs_admin_page(): void {
 
                 <?php if (!empty($ami_log_recent)): ?>
                 <div class="cs-mt" style="margin-top:16px;">
-                    <p class="cs-field-label" style="margin-bottom:6px;">Recent AMI snapshots</p>
+                    <p class="cs-field-label" style="margin-bottom:6px;"><?php esc_html_e( 'Recent AMI snapshots', 'cloudscale-backup' ); ?></p>
                     <div class="cs-table-wrap">
                     <table class="widefat cs-table" style="font-size:0.82rem;">
                         <thead>
@@ -1044,340 +1007,68 @@ function cs_admin_page(): void {
                 <?php endif; ?>
             </div>
 
-            <script>
-            function csAmiMsg(text, ok) {
-                var el = document.getElementById('cs-ami-msg');
-                el.innerHTML = text;
-                el.style.color = ok ? '#2e7d32' : '#c62828';
-            }
-
-            function csAmiPost(action, extra, onDone) {
-                var params = 'action=' + action + '&nonce=' + encodeURIComponent(CS_S3_NONCE);
-                if (extra) params += '&' + extra;
-                var xhr = new XMLHttpRequest();
-                xhr.open('POST', CS_S3_AJAX, true);
-                xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-                xhr.onload = function() {
-                    try { onDone(JSON.parse(xhr.responseText)); }
-                    catch(e) { onDone({success:false, data:'Bad response: ' + xhr.responseText.substring(0,100)}); }
-                };
-                xhr.onerror = function() { onDone({success:false, data:'Network error'}); };
-                xhr.send(params);
-            }
-
-            function csAmiSave() {
-                var prefix = document.getElementById('cs-ami-prefix').value.trim();
-                var reboot = document.getElementById('cs-ami-reboot').checked ? '1' : '0';
-                var regionOverride = document.getElementById('cs-ami-region-override').value.trim();
-                var amiMax = parseInt(document.getElementById('cs-ami-max').value, 10) || 10;
-                csAmiMsg('Saving...', true);
-                csAmiPost('cs_save_ami',
-                    'prefix=' + encodeURIComponent(prefix) + '&reboot=' + reboot + '&region_override=' + encodeURIComponent(regionOverride) + '&ami_max=' + amiMax,
-                    function(res) { csAmiMsg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success); }
-                );
-            }
-
-            function csAmiCreate() {
-                var prefix = document.getElementById('cs-ami-prefix').value.trim();
-                if (!prefix) { csAmiMsg('&#10007; Enter an AMI name prefix first.', false); return; }
-                var reboot = document.getElementById('cs-ami-reboot').checked;
-                var msg = 'Create an AMI snapshot of this instance now?';
-                if (reboot) msg += '\n\nWARNING: The instance will be REBOOTED. This will cause brief downtime.';
-                if (!confirm(msg)) return;
-                csAmiMsg('Creating AMI... this may take a moment.', true);
-                csAmiPost('cs_create_ami', '', function(res) {
-                    if (res.success) {
-                        csAmiMsg('&#10003; ' + (res.data.message || 'AMI created'), true);
-                        setTimeout(function() { location.reload(); }, 2000);
-                    } else {
-                        csAmiMsg('&#10007; ' + (res.data || 'AMI creation failed'), false);
-                    }
-                });
-            }
-
-            function csAmiStatus() {
-                csAmiMsg('Checking...', true);
-                csAmiPost('cs_ami_status', '', function(res) {
-                    if (res.success) {
-                        csAmiMsg('&#10003; ' + res.data, true);
-                    } else {
-                        csAmiMsg('&#10007; ' + (res.data || 'Could not check status'), false);
-                    }
-                });
-            }
-
-            function csAmiRefreshAll() {
-                var btn = document.getElementById('cs-ami-refresh-all');
-                if (btn) { btn.disabled = true; btn.textContent = '⏳ Refreshing...'; }
-                csAmiMsg('Refreshing all AMI states...', true);
-                csAmiPost('cs_ami_refresh_all', '', function(res) {
-                    if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh All'; }
-                    if (!res.success) {
-                        csAmiMsg('&#10007; ' + (res.data || 'Refresh failed'), false);
-                        return;
-                    }
-                    var results = res.data.results || [];
-                    var updated = 0;
-                    results.forEach(function(r) {
-                        var amiId = r.ami_id;
-                        var state = r.state;
-                        var stateCell   = document.getElementById('cs-ami-state-' + amiId);
-                        var actionsCell = document.getElementById('cs-ami-actions-' + amiId);
-                        var row         = document.getElementById('cs-ami-row-' + amiId);
-                        if (!stateCell) return;
-                        updated++;
-                        if (state === 'deleted in AWS') {
-                            var fadedCells = row ? row.querySelectorAll('td:not(:last-child)') : [];
-                            fadedCells.forEach(function(td) { td.style.opacity = '0.45'; });
-                            stateCell.innerHTML = '<span style="color:#999;font-weight:600;">&#128465; deleted in AWS</span>';
-                            if (actionsCell) actionsCell.innerHTML = '<button type="button" onclick="csAmiDelete(\'' + amiId + '\', \'' + r.name.replace(/'/g, '') + '\', true)" class="button button-small" title="Remove record" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Remove</button>';
-                        } else {
-                            if (row) row.querySelectorAll('td').forEach(function(td) { td.style.opacity = ''; });
-                            var color = state === 'available' ? '#2e7d32' : (state === 'pending' ? '#e65100' : '#757575');
-                            var icon  = state === 'available' ? '&#10003;' : (state === 'pending' ? '&#9203;' : '&#10007;');
-                            stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + state + '</span>';
-                            if (actionsCell) actionsCell.innerHTML = '<button type="button" onclick="csAmiDelete(\'' + amiId + '\', \'' + r.name.replace(/'/g, '') + '\', false)" class="button button-small" title="Deregister AMI" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>';
-                        }
-                    });
-                    csAmiMsg('&#10003; Refreshed ' + updated + ' AMI' + (updated !== 1 ? 's' : ''), true);
-                });
-            }
-
-            function csAmiResetAndRefresh() {
-                var btn = document.getElementById('cs-ami-refresh-all');
-                if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Refreshing...'; }
-                csAmiMsg('Resetting and refreshing...', true);
-                csAmiPost('cs_ami_reset_deleted', '', function(res) {
-                    if (!res.success) {
-                        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh All'; }
-                        csAmiMsg('\u2717 Reset failed: ' + res.data, false);
-                        return;
-                    }
-                    csAmiRefreshAll();
-                });
-            }
-
-            function csAmiRefreshOne(amiId) {
-                var stateCell = document.getElementById('cs-ami-state-' + amiId);
-                if (stateCell) {
-                    stateCell.innerHTML = '<span style="color:#888;">&#8635; checking...</span>';
-                }
-                csAmiPost('cs_ami_status', 'ami_id=' + encodeURIComponent(amiId), function(res) {
-                    if (!stateCell) return;
-                    if (res.success && res.data && res.data.state) {
-                        var state  = res.data.state;
-                        var color  = state === 'available' ? '#2e7d32' : (state === 'pending' ? '#e65100' : '#757575');
-                        var icon   = state === 'available' ? '&#10003;' : (state === 'pending' ? '&#9203;' : '&#10007;');
-                        stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + state + '</span>';
-                    } else {
-                        stateCell.innerHTML = '<span style="color:#c62828;">&#10007; ' + (res.data || 'error') + '</span>';
-                    }
-                });
-            }
-
-            function csAmiDelete(amiId, amiName, alreadyDeleted) {
-                var label = amiName ? amiName + ' (' + amiId + ')' : amiId;
-                if (alreadyDeleted) {
-                    if (!confirm('Remove this record from the log?\n\n' + label + '\n\nThis AMI has already been deleted in AWS. This will only remove the local record.')) return;
-                    csAmiMsg('Removing record...', true);
-                    csAmiPost('cs_ami_remove_record', 'ami_id=' + encodeURIComponent(amiId), function(res) {
-                        if (res.success) {
-                            csAmiMsg('&#10003; Record removed', true);
-                            var row = document.getElementById('cs-ami-row-' + amiId);
-                            if (row) row.remove();
-                        } else {
-                            csAmiMsg('&#10007; ' + (res.data || 'Remove failed'), false);
-                        }
-                    });
-                    return;
-                }
-                if (!confirm('Deregister (delete) this AMI?\n\n' + label + '\n\nThis will deregister the AMI from AWS. Associated EBS snapshots will NOT be deleted automatically.')) return;
-                csAmiMsg('Deregistering ' + amiId + '...', true);
-                csAmiPost('cs_deregister_ami', 'ami_id=' + encodeURIComponent(amiId), function(res) {
-                    if (res.success) {
-                        csAmiMsg('&#10003; ' + (res.data || 'AMI deregistered'), true);
-                        var row = document.getElementById('cs-ami-row-' + amiId);
-                        if (row) row.remove();
-                    } else {
-                        csAmiMsg('&#10007; ' + (res.data || 'Deregister failed'), false);
-                    }
-                });
-            }
-
-            function csAmiRemoveFailed(name) {
-                if (!confirm('Remove this failed record from the log?\n\n' + name)) return;
-                csAmiMsg('Removing...', true);
-                csAmiPost('cs_ami_remove_failed', 'name=' + encodeURIComponent(name), function(res) {
-                    if (res.success) {
-                        csAmiMsg('&#10003; Record removed', true);
-                        // Remove the row — find by scanning all rows for matching name cell
-                        var rows = document.querySelectorAll('#cs-ami-tbody tr');
-                        rows.forEach(function(row) {
-                            var cells = row.querySelectorAll('td');
-                            if (cells.length && cells[0].textContent.trim() === name) row.remove();
-                        });
-                    } else {
-                        csAmiMsg('&#10007; ' + (res.data || 'Remove failed'), false);
-                    }
-                });
-            }
-
-            function csAmiExplain() {
-                csExplainModal('cs-ami-explain-overlay', 'EC2 AMI Snapshot - Setup Guide',
-                    'linear-gradient(135deg,#1a237e,#3949ab)',
-                    '<p><strong>How it works</strong><br>Creates an Amazon Machine Image (AMI) of the running EC2 instance. This is a full disk snapshot that can be used to launch an identical replacement server.</p>'
-                    + '<p><strong>Requirements</strong></p><ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li>Instance must be running on EC2 with IMDSv1 or IMDSv2 enabled</li><li>AWS CLI installed and configured on the server</li><li>IAM role or credentials with the required permissions</li></ul>'
-                    + '<p><strong>Scheduling AMI backups</strong><br>Use the <strong>Backup Schedule</strong> card at the top of this page to automate AMI creation. Pick your AMI snapshot days and AMI backup time there &mdash; these run on a separate cron event from file backups, so they are fully independent. Set the prefix below first or scheduled runs will be skipped.</p>'
-                    + '<p><strong>AMI naming</strong><br>You provide a prefix (e.g. <code>prod-web01</code>) and the plugin appends a timestamp: <code>prod-web01_20260227_1430</code></p>'
-                    + '<p><strong>Max AMIs to keep</strong><br>Controls how many AMIs are retained in AWS. The default is 10. Each time a new AMI is created, the plugin counts your existing AMIs. If creating the new one would push the total above this limit, the oldest AMI is automatically deregistered from AWS and removed from the log before the new one is created. This keeps your AWS AMI list and costs under control without manual housekeeping.</p>'
-                    + '<p>Choosing a number: consider your recovery window and AWS storage costs. AMIs are billed for the EBS snapshots they reference. A limit of 3 to 5 gives you a short rolling window; 10 to 14 gives roughly two weeks of daily snapshots.</p>'
-                    + '<p><strong>Reboot option</strong><br>With reboot enabled, EC2 cleanly shuts down the instance before snapshotting, ensuring filesystem consistency. Without reboot, the snapshot is crash consistent (like pulling the power). If scheduling with reboot enabled, choose days that don\'t overlap with your file backup days to avoid two disruptions on the same day.</p>'
-                    + '<p><strong>Minimum IAM policy</strong></p><pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;overflow-x:auto;">{\n  "Version": "2012-10-17",\n  "Statement": [{\n    "Effect": "Allow",\n    "Action": [\n      "ec2:CreateImage",\n      "ec2:DeregisterImage",\n      "ec2:DescribeImages",\n      "ec2:DescribeInstances",\n      "ec2:RebootInstances"\n    ],\n    "Resource": "*"\n  }]\n}</pre>'
-                    + '<p><strong>Restoring from AMI</strong><br>In the AWS Console: EC2 &rarr; AMIs &rarr; select your AMI &rarr; Launch Instance. Or use <code>aws ec2 run-instances --image-id ami-xxx</code>.</p>'
-                );
-            }
-
-            function csScheduleExplain() {
-                csExplainModal('cs-schedule-explain-overlay', 'Backup Schedule - How It Works',
-                    'linear-gradient(135deg,#1565c0,#2196f3)',
-                    '<p><strong>How scheduling works</strong><br>The plugin uses WordPress cron (WP-Cron) to trigger scheduled backups. WP-Cron is a pseudo-cron system that fires when someone visits your site, so backups run at approximately the scheduled time rather than at the exact second.</p>'
-                    + '<p><strong>Two independent schedules</strong><br>The card has two separate day pickers and two separate times:</p>'
-                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>File backup days / File backup time</strong> &mdash; when regular zip backups run. Non-destructive, no downtime.</li><li><strong>AMI snapshot days / AMI backup time</strong> &mdash; when EC2 AMI snapshots are created. Requires AWS CLI and a prefix configured in the AMI settings card. If reboot is enabled there, the instance goes offline briefly on those days.</li></ul>'
-                    + '<p>The two schedules run on completely separate WP-Cron events, so they are independent of each other. Choosing different days avoids two operations hitting the server on the same day.</p>'
-                    + '<p><strong>File backup day strategies</strong></p>'
-                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>Daily</strong> &mdash; all 7 days for maximum protection</li><li><strong>Weekdays</strong> &mdash; Mon through Fri, skip quiet weekends</li><li><strong>MWF</strong> &mdash; good balance of protection and storage usage</li></ul>'
-                    + '<p><strong>AMI snapshot day strategies</strong></p>'
-                    + '<p style="font-size:0.9rem;margin:4px 0 8px;">Whether the instance reboots depends on the <strong>Reboot instance</strong> checkbox in the AMI settings card. It defaults to <strong>off</strong> (crash-consistent snapshot, no downtime).</p>'
-                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>Reboot OFF (default)</strong> &mdash; snapshot is crash-consistent. Daily or MWF is fine; no downtime to worry about.</li><li><strong>Reboot ON</strong> &mdash; instance briefly goes offline. Weekly (e.g. Sunday) avoids disrupting users on working days. Choose a day that does not overlap with your file backup days.</li></ul>'
-                    + '<p><strong>Time settings</strong><br>Both times use your server\'s configured timezone. The times are independent &mdash; for example file backup at 03:00 and AMI at 03:30 staggers the workload. Choose low-traffic hours to minimise visitor impact.</p>'
-                    + '<p><strong>Low-traffic sites</strong><br>If your site receives very few visits, WP-Cron may not fire reliably. Set up a system cron job to call <code>wp-cron.php</code> periodically:</p>'
-                    + '<pre style="background:#f4f4f4;padding:10px;border-radius:4px;font-size:12px;overflow-x:auto;">*/15 * * * * curl -s https://yoursite.com/wp-cron.php > /dev/null 2>&1</pre>'
-                    + '<p><strong>Retention interaction</strong><br>Scheduled file backups automatically enforce your retention limit. After each backup, files beyond the retention count are deleted oldest first. AMI retention is controlled separately by the Max AMIs setting in the AMI card.</p>'
-                );
-            }
-
-            function csRetentionExplain() {
-                csExplainModal('cs-retention-explain-overlay', 'Retention and Storage - How It Works',
-                    'linear-gradient(135deg,#2e7d32,#43a047)',
-                    '<p><strong>What retention means</strong><br>The retention number controls how many backup zip files are kept on disk. After every backup (manual or scheduled), the plugin counts all stored backups and deletes the oldest files that exceed this limit.</p>'
-                    + '<p><strong>Choosing a retention number</strong><br>Consider your backup frequency and recovery needs:</p>'
-                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>3 to 5</strong> &mdash; low storage, suitable for small sites with daily backups</li><li><strong>7 to 14</strong> &mdash; two weeks of daily backups, good for most sites</li><li><strong>20 to 30</strong> &mdash; a full month if you have the disk space</li></ul>'
-                    + '<p><strong>Storage estimation</strong><br>The estimated storage is calculated as: <code>retention count &times; latest backup size</code>. This is an approximation because backup sizes can vary as your content changes. The traffic-light indicator turns red when the estimate exceeds your available free disk space.</p>'
-                    + '<p><strong>Storage breakdown</strong><br>The storage grid below shows the raw (uncompressed) sizes of each backup component. Actual zip files are typically 40 to 60% smaller due to compression, depending on content type. Media files (images, video) compress less than database dumps and PHP code.</p>'
-                );
-            }
-
-            function csSystemExplain() {
-                csExplainModal('cs-system-explain-overlay', 'System Info - What It Means',
-                    'linear-gradient(135deg,#6a1b9a,#8e24aa)',
-                    '<p><strong>Backup method</strong><br><code>mysqldump (native)</code> means the server has the <code>mysqldump</code> binary available. This is significantly faster and more reliable for large databases. <code>PHP streamed</code> is the fallback that works everywhere but is slower because it reads data through WordPress\'s PHP database layer.</p>'
-                    + '<p><strong>Restore method</strong><br>Same principle as backup: <code>mysql CLI (native)</code> pipes the SQL file directly into the MySQL client binary for maximum speed. <code>PHP streamed</code> splits the SQL into individual statements and executes them one by one through WordPress.</p>'
-                    + '<p><strong>PHP memory limit</strong><br>Controls the maximum amount of RAM PHP can use. For large backups, 256M or higher is recommended. If backups fail with memory errors, increase this in <code>php.ini</code> or <code>.htaccess</code>.</p>'
-                    + '<p><strong>Max execution time</strong><br>How long PHP is allowed to run before being killed. The plugin sets this to unlimited during backup/restore, but some hosting providers enforce hard limits regardless. If backups time out, contact your host.</p>'
-                    + '<p><strong>Disk free space traffic light</strong></p>'
-                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><span style="color:#2e7d32;font-weight:700;">Green</span> &mdash; room for 10+ more backups</li><li><span style="color:#e65100;font-weight:700;">Amber</span> &mdash; room for 4 to 9 more backups</li><li><span style="color:#c62828;font-weight:700;">Red</span> &mdash; fewer than 4 backups fit, free up space immediately</li></ul>'
-                );
-            }
-
-            function csBackupExplain() {
-                csExplainModal('cs-backup-explain-overlay', 'Manual Backup - Component Guide',
-                    'linear-gradient(135deg,#e65100,#f57c00)',
-                    '<p><strong>What gets backed up</strong><br>You can select any combination of components. The plugin creates a single zip file containing everything you selected.</p>'
-                    + '<p><strong>Core components</strong></p>'
-                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>Database</strong> &mdash; all WordPress tables (posts, pages, users, settings, custom tables). This is the most critical component. A database-only backup lets you restore all content even if files are intact.</li><li><strong>Media uploads</strong> &mdash; everything in <code>wp-content/uploads/</code> (images, PDFs, videos). Often the largest component.</li><li><strong>Plugins</strong> &mdash; the entire <code>wp-content/plugins/</code> directory. Can be reinstalled from wordpress.org, but custom configs live here.</li><li><strong>Themes</strong> &mdash; all installed themes in <code>wp-content/themes/</code>.</li></ul>'
-                    + '<p><strong>Other components</strong></p>'
-                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>Must-use plugins</strong> &mdash; <code>wp-content/mu-plugins/</code>, auto-loaded by WordPress</li><li><strong>Languages</strong> &mdash; translation files in <code>wp-content/languages/</code></li><li><strong>Dropins</strong> &mdash; special PHP files like <code>object-cache.php</code> in <code>wp-content/</code></li><li><strong>.htaccess</strong> &mdash; Apache rewrite rules at the site root</li><li><strong>wp-config.php</strong> &mdash; contains database credentials and secret keys. Marked with a warning because the backup will contain sensitive credentials.</li></ul>'
-                    + '<p><strong>Size estimates</strong><br>The uncompressed total is the raw filesystem size. The zipped estimate is based on your last backup\'s compression ratio, or a rough 50% estimate if no prior backup exists. Actual size depends on content type.</p>'
-                );
-            }
-
-            function csHistoryExplain() {
-                csExplainModal('cs-history-explain-overlay', 'Backup History - Reading the Table',
-                    'linear-gradient(135deg,#004d40,#00897b)',
-                    '<p><strong>Backup types</strong><br>Each backup is labelled by what it contains:</p>'
-                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>Full</strong> &mdash; database + media + plugins + themes (the four core components)</li><li><strong>Full+</strong> &mdash; all four core components plus one or more "other" items (mu-plugins, languages, dropins, .htaccess, wp-config)</li><li><strong>DB</strong> &mdash; database only</li><li><strong>Media</strong> &mdash; media uploads only</li><li><strong>DB + Media</strong>, <strong>DB + Plugins</strong>, etc. &mdash; custom combinations</li></ul>'
-                    + '<p><strong>Actions</strong></p>'
-                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><span style="color:#1565c0;font-weight:700;">Download</span> (blue arrow) &mdash; saves the zip to your local machine</li><li><span style="color:#2e7d32;font-weight:700;">Restore</span> (green arrow, only on backups containing a database) &mdash; opens the restore confirmation dialog</li><li><span style="color:#c62828;font-weight:700;">Delete</span> (red bin) &mdash; permanently removes the backup file from the server</li></ul>'
-                    + '<p><strong>S3 column</strong><br>If S3 remote backup is configured, a cloud icon shows the sync status: green checkmark for synced, red X for failed, dash for not yet synced.</p>'
-                    + '<p><strong>Retention</strong><br>The oldest backups beyond your retention limit are deleted automatically after each backup run. You can also delete individual backups manually.</p>'
-                );
-            }
-
-            function csRestoreExplain() {
-                csExplainModal('cs-restore-explain-overlay', 'Restore from File - How It Works',
-                    'linear-gradient(135deg,#b71c1c,#e53935)',
-                    '<p><strong>What this does</strong><br>Upload a backup file to restore your database. This is useful when migrating between servers or recovering from a disaster where the backup directory was lost.</p>'
-                    + '<p><strong>Accepted formats</strong></p>'
-                    + '<ul style="margin:8px 0 12px 20px;font-size:0.9rem;"><li><strong>.zip</strong> &mdash; a backup created by this plugin. The plugin extracts <code>database.sql</code> from the zip and restores it.</li><li><strong>.sql</strong> &mdash; a raw SQL dump file (e.g. from phpMyAdmin, mysqldump, or another backup tool). The plugin executes it directly.</li></ul>'
-                    + '<p><strong>The restore process</strong></p>'
-                    + '<ol style="margin:8px 0 12px 20px;font-size:0.9rem;"><li>Site enters <strong>maintenance mode</strong> (visitors see a maintenance page)</li><li>Existing database tables are <strong>dropped and recreated</strong> from the backup</li><li>Maintenance mode is <strong>removed</strong> and the site comes back online</li></ol>'
-                    + '<p><strong>&#9888; Critical: Take a snapshot first</strong><br>Before restoring, always take a server snapshot or VM snapshot from your hosting control panel or AWS console. If the restore goes wrong (corrupted file, incompatible SQL), you can roll back the entire server to the snapshot instantly. This plugin cannot undo a failed restore without a prior backup.</p>'
-                    + '<p><strong>File uploads</strong><br>The maximum upload size depends on your PHP configuration (<code>upload_max_filesize</code> and <code>post_max_size</code>). If your backup is too large to upload, place it in the backup directory on the server and use the restore button in the history table instead.</p>'
-                );
-            }
-            </script>
 
             <!-- SYSTEM INFO CARD -->
             <div class="cs-card cs-card--purple">
-                <div class="cs-card-stripe cs-stripe--purple" style="background:linear-gradient(135deg,#6a1b9a 0%,#8e24aa 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⚙ System Info</h2><button type="button" onclick="csSystemExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+                <div class="cs-card-stripe cs-stripe--purple" style="background:linear-gradient(135deg,#6a1b9a 0%,#8e24aa 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⚙ <?php echo esc_html__( 'System Info', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csSystemExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
 
                 <div class="cs-info-row">
-                    <span>Backup method</span>
+                    <span><?php esc_html_e( 'Backup method', 'cloudscale-backup' ); ?></span>
                     <strong><?php echo esc_html($dump_method); ?></strong>
                 </div>
                 <div class="cs-info-row">
-                    <span>Restore method</span>
+                    <span><?php esc_html_e( 'Restore method', 'cloudscale-backup' ); ?></span>
                     <strong><?php echo esc_html($restore_method); ?></strong>
                 </div>
                 <div class="cs-info-row">
-                    <span>PHP memory limit</span>
-                    <strong><?php echo ini_get('memory_limit'); ?></strong>
+                    <span><?php esc_html_e( 'PHP memory limit', 'cloudscale-backup' ); ?></span>
+                    <strong><?php echo esc_html(ini_get('memory_limit')); ?></strong>
                 </div>
                 <div class="cs-info-row">
-                    <span>Max execution time</span>
-                    <strong><?php echo ini_get('max_execution_time') === '0' ? 'Unlimited' : ini_get('max_execution_time') . 's'; ?></strong>
+                    <span><?php esc_html_e( 'Max execution time', 'cloudscale-backup' ); ?></span>
+                    <strong><?php echo ini_get('max_execution_time') === '0' ? esc_html__( 'Unlimited', 'cloudscale-backup' ) : esc_html(ini_get('max_execution_time')) . 's'; ?></strong>
                 </div>
                 <div class="cs-info-row">
-                    <span>Database</span>
+                    <span><?php esc_html_e( 'Database', 'cloudscale-backup' ); ?></span>
                     <strong><?php echo esc_html($db_label); ?></strong>
                 </div>
                 <div class="cs-info-row">
-                    <span>Total backups stored</span>
+                    <span><?php esc_html_e( 'Total backups stored', 'cloudscale-backup' ); ?></span>
                     <strong><?php echo count($backups); ?></strong>
                 </div>
                 <div class="cs-info-row">
-                    <span>Backup directory</span>
+                    <span><?php esc_html_e( 'Backup directory', 'cloudscale-backup' ); ?></span>
                     <strong class="cs-path"><?php echo esc_html(CS_BACKUP_DIR); ?></strong>
                 </div>
 
                 <!-- Traffic-light disk row -->
                 <div class="cs-info-row cs-disk-row">
-                    <span>Disk free space</span>
-                    <strong class="cs-tl cs-tl--<?php echo $disk_status; ?>">
+                    <span><?php esc_html_e( 'Disk free space', 'cloudscale-backup' ); ?></span>
+                    <strong class="cs-tl cs-tl--<?php echo esc_attr($disk_status); ?>">
                         <span class="cs-tl-dot"></span>
-                        <?php echo $free_bytes !== false ? cs_format_size((int)$free_bytes) : 'Unavailable'; ?>
+                        <?php echo $free_bytes !== false ? esc_html(cs_format_size((int)$free_bytes)) : 'Unavailable'; ?>
                         <?php if ($total_bytes): ?>
-                            <span class="cs-disk-of">/ <?php echo cs_format_size((int)$total_bytes); ?></span>
+                            <span class="cs-disk-of">/ <?php echo esc_html(cs_format_size((int)$total_bytes)); ?></span>
                         <?php endif; ?>
                     </strong>
                 </div>
                 <div class="cs-info-row">
-                    <span>Latest backup size</span>
-                    <strong><?php echo $latest_size > 0 ? cs_format_size($latest_size) : '—'; ?></strong>
+                    <span><?php esc_html_e( 'Latest backup size', 'cloudscale-backup' ); ?></span>
+                    <strong><?php echo $latest_size > 0 ? esc_html(cs_format_size($latest_size)) : '—'; ?></strong>
                 </div>
 
                 <?php if ($free_pct !== null): ?>
                 <div class="cs-info-row">
-                    <span>Percentage free space</span>
-                    <strong class="cs-tl cs-tl--<?php echo $disk_status; ?>">
+                    <span><?php esc_html_e( 'Percentage free space', 'cloudscale-backup' ); ?></span>
+                    <strong class="cs-tl cs-tl--<?php echo esc_attr($disk_status); ?>">
                         <span class="cs-tl-dot"></span>
-                        <?php echo $free_pct; ?>%
+                        <?php echo (int) $free_pct; ?>%
                     </strong>
                 </div>
                 <div class="cs-disk-bar-wrap">
                     <div class="cs-disk-bar">
-                        <div class="cs-disk-bar-fill cs-disk-fill--<?php echo $disk_status; ?>"
-                             style="width:<?php echo $free_pct; ?>%"></div>
+                        <div class="cs-disk-bar-fill cs-disk-fill--<?php echo esc_attr($disk_status); ?>"
+                             style="width:<?php echo (int) $free_pct; ?>%"></div>
                     </div>
                 </div>
                 <?php endif; ?>
@@ -1386,9 +1077,9 @@ function cs_admin_page(): void {
         </div><!-- /cs-grid-1 -->
 
         <!-- ===================== MANUAL BACKUP ===================== -->
-        <div class="cs-section-ribbon"><span>Manual Backup</span></div>
+        <div class="cs-section-ribbon"><span><?php esc_html_e( 'Manual Backup', 'cloudscale-backup' ); ?></span></div>
         <div class="cs-card cs-card--orange cs-full">
-            <div class="cs-card-stripe cs-stripe--orange" style="background:linear-gradient(135deg,#e65100 0%,#f57c00 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">▶ Run Backup Now</h2><button type="button" onclick="csBackupExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+            <div class="cs-card-stripe cs-stripe--orange" style="background:linear-gradient(135deg,#e65100 0%,#f57c00 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">▶ <?php echo esc_html__( 'Run Backup Now', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csBackupExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
             <?php
             // Pass sizes to JS for live total calculation
             $backup_sizes = [
@@ -1404,29 +1095,27 @@ function cs_admin_page(): void {
                 'free'      => $free_bytes !== false ? (int)$free_bytes : 0,
                 'latest'    => $latest_size,  // actual compressed size of last backup
             ];
+            wp_add_inline_script( 'cs-script', 'window.CS_BACKUP_SIZES = ' . wp_json_encode( $backup_sizes ) . ';', 'before' );
             ?>
-            <script>
-            window.CS_BACKUP_SIZES = <?php echo json_encode($backup_sizes); ?>;
-            </script>
             <div class="cs-run-grid">
                 <!-- Column 1: Core -->
                 <div class="cs-options-col">
                     <p class="cs-options-col-heading">Core</p>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-db" checked data-size="<?php echo $db_size; ?>"> Database <code><?php echo $db_size > 0 ? cs_format_size($db_size) : '~unknown'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-media" checked data-size="<?php echo $upload_size; ?>"> Media uploads <code><?php echo cs_format_size($upload_size); ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-plugins" checked data-size="<?php echo $plugins_size; ?>"> Plugins <code><?php echo cs_format_size($plugins_size); ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-themes" checked data-size="<?php echo $themes_size; ?>"> Themes <code><?php echo cs_format_size($themes_size); ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-db" checked data-size="<?php echo (int) $db_size; ?>"> Database <code><?php echo $db_size > 0 ? esc_html(cs_format_size($db_size)) : '~unknown'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-media" checked data-size="<?php echo (int) $upload_size; ?>"> Media uploads <code><?php echo esc_html(cs_format_size($upload_size)); ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-plugins" checked data-size="<?php echo (int) $plugins_size; ?>"> Plugins <code><?php echo esc_html(cs_format_size($plugins_size)); ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-themes" checked data-size="<?php echo (int) $themes_size; ?>"> Themes <code><?php echo esc_html(cs_format_size($themes_size)); ?></code></label>
                 </div>
                 <!-- Column 2: Other -->
                 <div class="cs-options-col cs-options-col--other">
                     <p class="cs-options-col-heading">Other</p>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-mu" <?php echo $mu_size > 0 ? 'checked' : ''; ?> data-size="<?php echo $mu_size; ?>"> Must-use plugins <code><?php echo $mu_size > 0 ? cs_format_size($mu_size) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-languages" <?php echo $lang_size > 0 ? 'checked' : ''; ?> data-size="<?php echo $lang_size; ?>"> Languages <code><?php echo $lang_size > 0 ? cs_format_size($lang_size) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-dropins" data-size="<?php echo $dropins_size; ?>"> Dropins <small>(object-cache.php…)</small> <code><?php echo $dropins_size > 0 ? cs_format_size($dropins_size) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-htaccess" <?php echo $htaccess_size > 0 ? 'checked' : ''; ?> data-size="<?php echo $htaccess_size; ?>"> .htaccess <code><?php echo $htaccess_size > 0 ? cs_format_size($htaccess_size) : 'not found'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-mu" <?php echo $mu_size > 0 ? 'checked' : ''; ?> data-size="<?php echo (int) $mu_size; ?>"> Must-use plugins <code><?php echo $mu_size > 0 ? esc_html(cs_format_size($mu_size)) : '0 B'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-languages" <?php echo $lang_size > 0 ? 'checked' : ''; ?> data-size="<?php echo (int) $lang_size; ?>"> Languages <code><?php echo $lang_size > 0 ? esc_html(cs_format_size($lang_size)) : '0 B'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-dropins" data-size="<?php echo (int) $dropins_size; ?>"> Dropins <small>(object-cache.php…)</small> <code><?php echo $dropins_size > 0 ? esc_html(cs_format_size($dropins_size)) : '0 B'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-htaccess" <?php echo $htaccess_size > 0 ? 'checked' : ''; ?> data-size="<?php echo (int) $htaccess_size; ?>"> .htaccess <code><?php echo $htaccess_size > 0 ? esc_html(cs_format_size($htaccess_size)) : 'not found'; ?></code></label>
                     <label class="cs-option-label cs-option-sensitive">
-                        <input type="checkbox" id="cs-include-wpconfig" data-size="<?php echo $wpconfig_size; ?>">
-                        wp-config.php <code><?php echo $wpconfig_size > 0 ? cs_format_size($wpconfig_size) : 'not found'; ?></code>
+                        <input type="checkbox" id="cs-include-wpconfig" data-size="<?php echo (int) $wpconfig_size; ?>">
+                        wp-config.php <code><?php echo $wpconfig_size > 0 ? esc_html(cs_format_size($wpconfig_size)) : 'not found'; ?></code>
                         <span class="cs-sensitive-badge">⚠ credentials</span>
                     </label>
                 </div>
@@ -1440,14 +1129,14 @@ function cs_admin_page(): void {
                         <div class="cs-backup-summary-row">
                             <span class="cs-summary-label">Disk free space</span>
                             <span class="cs-summary-value <?php echo 'cs-free-' . $disk_status; ?>" id="cs-free-space">
-                                <?php echo $free_bytes !== false ? cs_format_size((int)$free_bytes) : 'Unknown'; ?>
+                                <?php echo $free_bytes !== false ? esc_html( cs_format_size( (int) $free_bytes ) ) : 'Unknown'; ?>
                             </span>
                         </div>
                         <div class="cs-backup-summary-row" id="cs-space-warn-row" style="display:none">
                             <span class="cs-summary-warn" id="cs-space-warn"></span>
                         </div>
                     </div>
-                    <button type="button" id="cs-run-backup" class="button button-primary cs-btn-lg">▶ Run Backup Now</button>
+                    <button type="button" id="cs-run-backup" class="button button-primary cs-btn-lg">▶ <?php esc_html_e( 'Run Backup Now', 'cloudscale-backup' ); ?></button>
                     <div id="cs-backup-progress" style="display:none" class="cs-progress-panel">
                         <p id="cs-backup-msg" class="cs-progress-msg">Starting backup...</p>
                         <div class="cs-progress-bar"><div id="cs-backup-fill" class="cs-progress-fill"></div></div>
@@ -1458,24 +1147,24 @@ function cs_admin_page(): void {
         </div>
 
         <!-- ===================== BACKUP HISTORY ===================== -->
-        <div class="cs-section-ribbon"><span>Backup History</span></div>
+        <div class="cs-section-ribbon"><span><?php esc_html_e( 'Backup History', 'cloudscale-backup' ); ?></span></div>
         <div class="cs-card cs-card--teal cs-full">
-            <div class="cs-card-stripe cs-stripe--teal" style="background:linear-gradient(135deg,#004d40 0%,#00897b 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🕓 Backup History</h2><button type="button" onclick="csHistoryExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+            <div class="cs-card-stripe cs-stripe--teal" style="background:linear-gradient(135deg,#004d40 0%,#00897b 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🕓 <?php echo esc_html__( 'Backup History', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csHistoryExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
             <?php if (empty($backups)): ?>
-                <p class="cs-empty">No backups yet. Run your first backup above.</p>
+                <p class="cs-empty"><?php esc_html_e( 'No backups yet. Run your first backup above.', 'cloudscale-backup' ); ?></p>
             <?php else: ?>
             <div class="cs-table-wrap">
             <table class="widefat cs-table">
                 <thead>
                     <tr>
-                        <th class="cs-col-actions" style="width:72px!important;min-width:72px!important;max-width:72px!important;">Actions</th>
+                        <th class="cs-col-actions" style="width:72px!important;min-width:72px!important;max-width:72px!important;"><?php esc_html_e( 'Actions', 'cloudscale-backup' ); ?></th>
                         <th class="cs-col-num" style="width:18px!important;min-width:18px!important;max-width:18px!important;padding-left:4px!important;padding-right:4px!important;">#</th>
-                        <th>Filename</th>
-                        <th class="cs-col-size">Size</th>
-                        <th class="cs-col-meta">Created</th>
-                        <th class="cs-col-age">Age</th>
-                        <th class="cs-col-type">Type</th>
-                        <?php if ($s3_bucket): ?><th class="cs-col-s3" style="width:36px!important;text-align:center;" title="S3 sync status">S3</th><?php endif; ?>
+                        <th><?php esc_html_e( 'Filename', 'cloudscale-backup' ); ?></th>
+                        <th class="cs-col-size"><?php esc_html_e( 'Size', 'cloudscale-backup' ); ?></th>
+                        <th class="cs-col-meta"><?php esc_html_e( 'Created', 'cloudscale-backup' ); ?></th>
+                        <th class="cs-col-age"><?php esc_html_e( 'Age', 'cloudscale-backup' ); ?></th>
+                        <th class="cs-col-type"><?php esc_html_e( 'Type', 'cloudscale-backup' ); ?></th>
+                        <?php if ($s3_bucket): ?><th class="cs-col-s3" style="width:36px!important;text-align:center;" title="<?php esc_attr_e( 'S3 sync status', 'cloudscale-backup' ); ?>">S3</th><?php endif; ?>
                     </tr>
                 </thead>
                 <tbody>
@@ -1520,8 +1209,8 @@ function cs_admin_page(): void {
                                 </span>
                             <?php elseif (!empty($s3_entry['retry_at']) && $s3_entry['retry_at'] > time()): ?>
                                 <?php $mins = max(1, (int) ceil(($s3_entry['retry_at'] - time()) / 60)); ?>
-                                <span style="color:#e65100;font-size:10px;" title="Sync failed — auto-retry in ~<?php echo $mins; ?> min">
-                                    ⏱ ~<?php echo $mins; ?>m
+                                <span style="color:#e65100;font-size:10px;" title="Sync failed — auto-retry in ~<?php echo (int) $mins; ?> min">
+                                    ⏱ ~<?php echo (int) $mins; ?>m
                                 </span>
                             <?php else: ?>
                                 <div style="font-size:10px;color:#c62828;line-height:1.3;text-align:left;">
@@ -1547,14 +1236,14 @@ function cs_admin_page(): void {
         </div>
 
         <!-- ===================== RESTORE FROM UPLOAD ===================== -->
-        <div class="cs-section-ribbon"><span>Restore from File</span></div>
+        <div class="cs-section-ribbon"><span><?php esc_html_e( 'Restore from File', 'cloudscale-backup' ); ?></span></div>
         <div class="cs-card cs-card--red cs-full">
-            <div class="cs-card-stripe cs-stripe--red" style="background:linear-gradient(135deg,#b71c1c 0%,#e53935 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">↩ Restore from Uploaded File</h2><button type="button" onclick="csRestoreExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+            <div class="cs-card-stripe cs-stripe--red" style="background:linear-gradient(135deg,#b71c1c 0%,#e53935 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">↩ <?php echo esc_html__( 'Restore from Uploaded File', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csRestoreExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
             <div class="cs-restore-upload-grid">
                 <div>
                     <p>Upload a <code>.zip</code> (from this plugin) or a raw <code>.sql</code> file to restore the database.</p>
                     <input type="file" id="cs-restore-file" accept=".zip,.sql">
-                    <button type="button" id="cs-restore-upload-btn" class="button button-secondary cs-mt">↩ Restore from Upload</button>
+                    <button type="button" id="cs-restore-upload-btn" class="button button-secondary cs-mt">↩ <?php esc_html_e( 'Restore from Upload', 'cloudscale-backup' ); ?></button>
                 </div>
                 <div id="cs-restore-upload-progress" style="display:none" class="cs-progress-panel">
                     <p id="cs-restore-upload-msg" class="cs-progress-msg">Uploading...</p>
@@ -1567,10 +1256,10 @@ function cs_admin_page(): void {
 
         <div id="cs-restore-modal" class="cs-modal" style="display:none">
             <div class="cs-modal-box">
-                <h2>⚠ Restore Database</h2>
+                <h2>⚠ <?php esc_html_e( 'Restore Database', 'cloudscale-backup' ); ?></h2>
                 <div class="cs-modal-body">
                     <div class="cs-warning-box">
-                        <strong>BEFORE YOU RESTORE — TAKE A SNAPSHOT</strong>
+                        <strong><?php esc_html_e( 'BEFORE YOU RESTORE — TAKE A SNAPSHOT', 'cloudscale-backup' ); ?></strong>
                         <ul>
                             <li>Take a server/VM snapshot in your hosting control panel or AWS console <strong>right now</strong>.</li>
                             <li>If anything goes wrong you can roll back to the snapshot instantly.</li>
@@ -1588,8 +1277,8 @@ function cs_admin_page(): void {
                     </div>
                 </div>
                 <div class="cs-modal-footer">
-                    <button type="button" id="cs-modal-cancel" class="button">Cancel — keep current database</button>
-                    <button type="button" id="cs-modal-confirm" class="button button-primary cs-btn-danger" disabled>Restore Now</button>
+                    <button type="button" id="cs-modal-cancel" class="button"><?php esc_html_e( 'Cancel — keep current database', 'cloudscale-backup' ); ?></button>
+                    <button type="button" id="cs-modal-confirm" class="button button-primary cs-btn-danger" disabled><?php esc_html_e( 'Restore Now', 'cloudscale-backup' ); ?></button>
                 </div>
                 <div id="cs-modal-progress" style="display:none" class="cs-modal-progress">
                     <p id="cs-modal-progress-msg" class="cs-progress-msg">Enabling maintenance mode...</p>
@@ -1757,7 +1446,7 @@ add_action('wp_ajax_cs_test_s3', function (): void {
     $real_tmp = realpath($tmp) ?: $tmp;
     $cmd = escapeshellarg($aws) . ' s3 cp ' . escapeshellarg($real_tmp) . ' ' . escapeshellarg($dest) . ' 2>&1';
     $out = trim((string) shell_exec($cmd));
-    @unlink($tmp);
+    wp_delete_file($tmp);
     // AWS CLI outputs nothing on success with --only-show-errors, but without that flag
     // it outputs "upload: /path to s3://..." which is a success message not an error
     if ($out && stripos($out, 'upload:') === false && stripos($out, 'completed') === false) {
@@ -1781,10 +1470,10 @@ add_action('wp_ajax_cs_save_s3', function (): void {
 add_action('cs_s3_retry', function (string $filename): void {
     $path = CS_BACKUP_DIR . $filename;
     if (!file_exists($path)) {
-        error_log('[CloudScale Backup] S3 retry: file no longer exists: ' . $filename);
+        cs_log('[CloudScale Backup] S3 retry: file no longer exists: ' . $filename);
         return;
     }
-    error_log('[CloudScale Backup] S3 retry attempt for ' . $filename);
+    cs_log('[CloudScale Backup] S3 retry attempt for ' . $filename);
     cs_sync_to_s3($path, false); // false = no further retries on second failure
 });
 
@@ -1900,8 +1589,8 @@ add_action('wp_ajax_cs_create_ami', function (): void {
 
         // Schedule the first state poll in 10 minutes if not already queued
         if (!wp_next_scheduled('cs_ami_poll')) {
-            wp_schedule_single_event(time() + CS_AMI_POLL_INTERVAL, 'cs_ami_poll');
-            error_log('[CloudScale Backup] AMI poll: first check scheduled in ' . (CS_AMI_POLL_INTERVAL / 60) . ' min for ' . $ami_id);
+            wp_schedule_single_event(time() + CS_BACKUP_AMI_POLL_INTERVAL, 'cs_ami_poll');
+            cs_log('[CloudScale Backup] AMI poll: first check scheduled in ' . (CS_BACKUP_AMI_POLL_INTERVAL / 60) . ' min for ' . $ami_id);
         }
 
         wp_send_json_success(['message' => $msg, 'ami_id' => $ami_id, 'name' => $ami_name]);
@@ -1916,7 +1605,7 @@ add_action('wp_ajax_cs_create_ami', function (): void {
         if (count($log) > 20) $log = array_slice($log, -20);
         update_option('cs_ami_log', $log, false);
 
-        error_log('[CloudScale Backup] AMI creation failed: ' . $out);
+        cs_log('[CloudScale Backup] AMI creation failed: ' . $out);
         wp_send_json_error('AMI creation failed: ' . $out);
     }
 });
@@ -1925,6 +1614,15 @@ add_action('wp_ajax_cs_create_ami', function (): void {
 // AMI retention enforcement — deregisters oldest AMIs from AWS
 // ============================================================
 
+/**
+ * Enforce the maximum AMI retention limit, deregistering the oldest AMIs from AWS as needed.
+ *
+ * @since 2.74.0
+ * @param array  $log    Current AMI log array.
+ * @param string $aws    Absolute path to the AWS CLI binary.
+ * @param string $region AWS region, or empty string to let the CLI use its default.
+ * @return array Updated AMI log array with pruned entries removed.
+ */
 function cs_ami_enforce_max(array $log, string $aws, string $region): array {
     $ami_max      = max(1, intval(get_option('cs_ami_max', 10)));
     $ok_entries   = array_values(array_filter($log, fn($e) => !empty($e['ok']) && !empty($e['ami_id'])));
@@ -1953,10 +1651,10 @@ function cs_ami_enforce_max(array $log, string $aws, string $region): array {
             $already_gone = str_contains($out, 'InvalidAMIID') || str_contains($out, 'does not exist');
             if ($out === '' || $already_gone) {
                 // Deregistered (or already gone) — safe to drop local record
-                error_log('[CloudScale Backup] AMI auto-deregistered: ' . $ami_id . ' (' . ($old['name'] ?? '') . ')');
+                cs_log('[CloudScale Backup] AMI auto-deregistered: ' . $ami_id . ' (' . ($old['name'] ?? '') . ')');
             } else {
                 // Deregistration failed — keep the record so the user can see and retry
-                error_log('[CloudScale Backup] AMI auto-deregister FAILED for ' . $ami_id . ': ' . $out . ' — keeping local record');
+                cs_log('[CloudScale Backup] AMI auto-deregister FAILED for ' . $ami_id . ': ' . $out . ' — keeping local record');
                 $keep[] = $old;
             }
         }
@@ -1982,6 +1680,8 @@ function cs_ami_enforce_max(array $log, string $aws, string $region): array {
  *   'ami_id' => string|null
  *   'name'   => string
  *   'error'  => string  (only present when ok === false)
+ *
+ * @since 2.74.0
  */
 function cs_do_create_ami(): array {
     $instance_id = cs_get_instance_id();
@@ -2040,7 +1740,7 @@ function cs_do_create_ami(): array {
         cs_ami_enforce_max($log, $aws, $region);
 
         if (!wp_next_scheduled('cs_ami_poll')) {
-            wp_schedule_single_event(time() + CS_AMI_POLL_INTERVAL, 'cs_ami_poll');
+            wp_schedule_single_event(time() + CS_BACKUP_AMI_POLL_INTERVAL, 'cs_ami_poll');
         }
 
         return ['ok' => true, 'ami_id' => $ami_id, 'name' => $ami_name];
@@ -2153,7 +1853,7 @@ add_action('wp_ajax_cs_deregister_ami', function (): void {
 
         wp_send_json_success('AMI ' . $ami_id . ' deregistered successfully.');
     } else {
-        error_log('[CloudScale Backup] AMI deregister failed: ' . $out);
+        cs_log('[CloudScale Backup] AMI deregister failed: ' . $out);
         wp_send_json_error('Deregister failed: ' . $out);
     }
 });
@@ -2174,7 +1874,7 @@ add_action('wp_ajax_cs_ami_refresh_all', function (): void {
     // Read directly from DB — bypasses object cache which may serve stale state
     // after cs_ami_reset_deleted has just written new values
     global $wpdb;
-    $raw_log = $wpdb->get_var("SELECT option_value FROM {$wpdb->options} WHERE option_name = 'cs_ami_log'");
+    $raw_log = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'cs_ami_log' ) );
     $log     = $raw_log ? (array) maybe_unserialize($raw_log) : [];
 
     $region      = cs_get_instance_region();
@@ -2209,7 +1909,7 @@ add_action('wp_ajax_cs_ami_refresh_all', function (): void {
             }
         }
 
-        error_log('[CloudScale Backup] Refresh All: ' . $ami_id . ' → ' . $new_state);
+        cs_log('[CloudScale Backup] Refresh All: ' . $ami_id . ' → ' . $new_state);
 
         // Always write the state — never skip based on previous value
         $entry['state'] = $new_state;
@@ -2327,17 +2027,57 @@ add_action('admin_post_cs_download', function (): void {
 });
 
 // ============================================================
+// Quick backup from dashboard widget
+// ============================================================
+
+/**
+ * Handle the dashboard widget "Run Backup Now" form POST.
+ *
+ * Runs a full backup (db + media + plugins + themes) and redirects
+ * to the plugin admin page. Uses admin-post.php for correct POST handling.
+ *
+ * @since 3.2.1
+ * @return void
+ */
+add_action( 'admin_post_cs_quick_backup', function (): void {
+    check_admin_referer( 'cs_quick_backup', '_cs_quick_nonce' );
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_die( 'Forbidden' );
+    }
+
+    set_time_limit( 0 );
+    ignore_user_abort( true );
+    cs_ensure_backup_dir();
+
+    try {
+        cs_create_backup( true, true, true, true );
+        cs_enforce_retention();
+    } catch ( Exception $e ) {
+        cs_log( '[CloudScale Backup] Quick backup from dashboard widget failed: ' . $e->getMessage() );
+    }
+
+    wp_safe_redirect( admin_url( 'tools.php?page=cloudscale-backup' ) );
+    exit;
+} );
+
+// ============================================================
 // Dashboard widget
 // ============================================================
 
 add_action('wp_dashboard_setup', function (): void {
     wp_add_dashboard_widget(
         'cs_backup_status_widget',
-        '&#128736; CloudScale Backup Status',
+        '&#128736; ' . esc_html__( 'CloudScale Backup Status', 'cloudscale-backup' ),
         'cs_render_dashboard_widget'
     );
 });
 
+/**
+ * Render the Dashboard quick-backup widget.
+ *
+ * @since 1.0.0
+ * @return void
+ */
 function cs_render_dashboard_widget(): void {
     $backups    = cs_list_backups();
     $count      = count($backups);
@@ -2378,26 +2118,26 @@ function cs_render_dashboard_widget(): void {
     $value_style  = 'font-size: 14px; font-weight: 700; color: #1d2327;';
     $btn_base     = 'display:block; width:100%; padding:11px 0; text-align:center; font-size:13px; font-weight:700; color:#fff; text-decoration:none; border:none; cursor:pointer; letter-spacing:0.02em;';
     ?>
-    <div style="<?php echo $widget_style; ?>">
-        <div style="<?php echo $stats_style; ?>">
+    <div style="<?php echo esc_attr( $widget_style ); ?>">
+        <div style="<?php echo esc_attr( $stats_style ); ?>">
 
-            <div style="<?php echo $row_style; ?>">
-                <span style="<?php echo $label_style; ?>">Last backup</span>
-                <span style="<?php echo $value_style; ?> color:<?php echo $age_color; ?>">
+            <div style="<?php echo esc_attr( $row_style ); ?>">
+                <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Last backup', 'cloudscale-backup' ); ?></span>
+                <span style="<?php echo esc_attr( $value_style . ' color:' . $age_color ); ?>">
                     <?php echo esc_html($age_label); ?>
                 </span>
             </div>
 
-            <div style="<?php echo $row_style; ?>">
-                <span style="<?php echo $label_style; ?>">Last backup size</span>
-                <span style="<?php echo $value_style; ?>">
+            <div style="<?php echo esc_attr( $row_style ); ?>">
+                <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Last backup size', 'cloudscale-backup' ); ?></span>
+                <span style="<?php echo esc_attr( $value_style ); ?>">
                     <?php echo $latest ? esc_html(cs_format_size((int)$latest['size'])) : '—'; ?>
                 </span>
             </div>
 
-            <div style="<?php echo $row_style; ?>">
-                <span style="<?php echo $label_style; ?>">Backups stored</span>
-                <span style="<?php echo $value_style; ?>">
+            <div style="<?php echo esc_attr( $row_style ); ?>">
+                <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Backups stored', 'cloudscale-backup' ); ?></span>
+                <span style="<?php echo esc_attr( $value_style ); ?>">
                     <?php
                     $retention = (int) get_option('cs_retention', 8);
                     echo esc_html($count . ' / ' . $retention);
@@ -2405,9 +2145,9 @@ function cs_render_dashboard_widget(): void {
                 </span>
             </div>
 
-            <div style="<?php echo $row_style; ?> border-bottom:none;">
-                <span style="<?php echo $label_style; ?>">Free disk space</span>
-                <span style="<?php echo $value_style; ?>">
+            <div style="<?php echo esc_attr( $row_style . ' border-bottom:none;' ); ?>">
+                <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Free disk space', 'cloudscale-backup' ); ?></span>
+                <span style="<?php echo esc_attr( $value_style ); ?>">
                     <?php echo $free_bytes !== false ? esc_html(cs_format_size((int)$free_bytes)) : '—'; ?>
                 </span>
             </div>
@@ -2415,13 +2155,16 @@ function cs_render_dashboard_widget(): void {
         </div>
 
         <a href="<?php echo esc_url($settings_url); ?>"
-           style="<?php echo $btn_base; ?> background: linear-gradient(90deg, #e65100 0%, #b71c1c 100%); margin-top:8px;">
-            &#128736; CloudScale Backup &amp; Restore
+           style="<?php echo esc_attr( $btn_base . ' background: linear-gradient(90deg, #e65100 0%, #b71c1c 100%); margin-top:8px;' ); ?>">
+            &#128736; <?php esc_html_e( 'CloudScale Backup & Restore', 'cloudscale-backup' ); ?>
         </a>
-        <a href="<?php echo esc_url(wp_nonce_url(admin_url('admin-ajax.php?action=cs_run_backup&quick=1'), 'cs_quick_backup')); ?>"
-           style="<?php echo $btn_base; ?> background: linear-gradient(90deg, #00897b 0%, #1b5e20 100%); margin-top:2px; border-radius: 0 0 3px 3px;">
-            &#9654; Run Backup Now
-        </a>
+        <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0;padding:0;">
+            <?php wp_nonce_field( 'cs_quick_backup', '_cs_quick_nonce' ); ?>
+            <input type="hidden" name="action" value="cs_quick_backup">
+            <button type="submit" style="<?php echo esc_attr( $btn_base ); ?> background: linear-gradient(90deg, #00897b 0%, #1b5e20 100%); margin-top:2px; border-radius: 0 0 3px 3px; width:100%; border:none; cursor:pointer;">
+                &#9654; <?php esc_html_e( 'Run Backup Now', 'cloudscale-backup' ); ?>
+            </button>
+        </form>
     </div>
     <?php
 }
@@ -2430,14 +2173,26 @@ function cs_render_dashboard_widget(): void {
 // Maintenance mode
 // ============================================================
 
+/**
+ * Enable WordPress maintenance mode by writing the .maintenance file.
+ *
+ * @since 1.0.0
+ * @return void
+ */
 function cs_maintenance_on(): void {
     $php = '<?php $upgrading = ' . time() . '; ?>';
-    file_put_contents(CS_MAINT_FILE, $php);
+    file_put_contents(CS_BACKUP_MAINT_FILE, $php);
 }
 
+/**
+ * Disable WordPress maintenance mode by deleting the .maintenance file.
+ *
+ * @since 1.0.0
+ * @return void
+ */
 function cs_maintenance_off(): void {
-    if (file_exists(CS_MAINT_FILE)) {
-        @unlink(CS_MAINT_FILE);
+    if (file_exists(CS_BACKUP_MAINT_FILE)) {
+        wp_delete_file(CS_BACKUP_MAINT_FILE);
     }
 }
 
@@ -2445,6 +2200,21 @@ function cs_maintenance_off(): void {
 // Core — Create backup
 // ============================================================
 
+/**
+ * Create a backup zip containing the requested components.
+ *
+ * @since 1.0.0
+ * @param bool $include_db        Include a full database dump.
+ * @param bool $include_media     Include wp-content/uploads/.
+ * @param bool $include_plugins   Include wp-content/plugins/.
+ * @param bool $include_themes    Include wp-content/themes/.
+ * @param bool $include_mu        Include wp-content/mu-plugins/.
+ * @param bool $include_languages Include wp-content/languages/.
+ * @param bool $include_dropins   Include wp-content/ drop-in PHP files.
+ * @param bool $include_htaccess  Include the root .htaccess file.
+ * @param bool $include_wpconfig  Include wp-config.php.
+ * @return void
+ */
 function cs_create_backup(
     bool $include_db, bool $include_media,
     bool $include_plugins  = false, bool $include_themes    = false,
@@ -2531,7 +2301,7 @@ function cs_create_backup(
     }
 
     $zip->addFromString('backup-meta.json', json_encode([
-        'plugin_version'    => CS_VERSION,
+        'plugin_version'    => CS_BACKUP_VERSION,
         'created'           => date('c'),
         'wp_version'        => get_bloginfo('version'),
         'site_url'          => get_site_url(),
@@ -2563,6 +2333,14 @@ function cs_create_backup(
 // EC2 metadata helpers
 // ============================================================
 
+/**
+ * Fetch an IMDSv2 session token from the EC2 instance metadata service.
+ *
+ * Returns an empty string when not running on EC2 or when curl is unavailable.
+ *
+ * @since 2.74.0
+ * @return string IMDSv2 token, or empty string on failure.
+ */
 function cs_get_imds_token(): string {
     if (!function_exists('curl_init')) return '';
     try {
@@ -2584,6 +2362,15 @@ function cs_get_imds_token(): string {
     }
 }
 
+/**
+ * Fetch a value from the EC2 instance metadata service (IMDS).
+ *
+ * Tries IMDSv2 first and falls back to IMDSv1 if the token request fails.
+ *
+ * @since 2.74.0
+ * @param string $path IMDS path, e.g. 'latest/meta-data/instance-id'.
+ * @return string Metadata value, or empty string on failure.
+ */
 function cs_imds_get(string $path): string {
     if (!function_exists('curl_init')) return '';
     try {
@@ -2609,6 +2396,15 @@ function cs_imds_get(string $path): string {
     }
 }
 
+/**
+ * Return the EC2 instance ID, or an empty string when not running on EC2.
+ *
+ * Result is cached in a static variable for the request lifetime.
+ * Also checked against a one-hour WordPress transient to avoid repeated IMDS calls.
+ *
+ * @since 2.74.0
+ * @return string Instance ID (e.g. 'i-0abc123def456') or empty string.
+ */
 function cs_get_instance_id(): string {
     static $cached = null;
     if ($cached !== null) return $cached;
@@ -2622,6 +2418,15 @@ function cs_get_instance_id(): string {
     return $cached;
 }
 
+/**
+ * Return the AWS region of the running EC2 instance, or an empty string.
+ *
+ * Respects the cs_ami_region_override option. Result cached per request and
+ * in a one-hour WordPress transient.
+ *
+ * @since 2.74.0
+ * @return string Region code (e.g. 'us-east-1') or empty string.
+ */
 function cs_get_instance_region(): string {
     static $cached = null;
     if ($cached !== null) return $cached;
@@ -2644,6 +2449,12 @@ function cs_get_instance_region(): string {
     return $cached;
 }
 
+/**
+ * Return the absolute path to the AWS CLI binary, or an empty string if not found.
+ *
+ * @since 2.74.0
+ * @return string Absolute path to 'aws', e.g. '/usr/local/bin/aws', or ''.
+ */
 function cs_find_aws(): string {
     $candidates = [
         trim((string) shell_exec('which aws 2>/dev/null')),
@@ -2660,6 +2471,14 @@ function cs_find_aws(): string {
     return '';
 }
 
+/**
+ * Upload a local backup file to the configured S3 bucket using the AWS CLI.
+ *
+ * @since 3.0.0
+ * @param string $local_path     Absolute filesystem path to the backup zip.
+ * @param bool   $schedule_retry Whether to schedule a WP-Cron retry on failure. Default true.
+ * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
+ */
 function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
     $bucket = get_option('cs_s3_bucket', '');
     if (!$bucket) return ['skipped' => true];
@@ -2682,13 +2501,13 @@ function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
     $log      = (array) get_option('cs_s3_log', []);
 
     if ($out) {
-        error_log('[CloudScale Backup] S3 sync error: ' . $out);
+        cs_log('[CloudScale Backup] S3 sync error: ' . $out);
         $result = ['ok' => false, 'dest' => $dest, 'error' => $out];
         $retry_at = null;
         if ($schedule_retry && !wp_next_scheduled('cs_s3_retry', [$filename])) {
             wp_schedule_single_event(time() + 300, 'cs_s3_retry', [$filename]);
             $retry_at = time() + 300;
-            error_log('[CloudScale Backup] S3 retry scheduled in 5 min for ' . $filename);
+            cs_log('[CloudScale Backup] S3 retry scheduled in 5 min for ' . $filename);
         }
         $log[$filename] = array_filter([
             'ok'       => false,
@@ -2698,7 +2517,7 @@ function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
             'retry_at' => $retry_at,
         ], fn($v) => $v !== null);
     } else {
-        error_log('[CloudScale Backup] S3 sync OK: ' . $dest);
+        cs_log('[CloudScale Backup] S3 sync OK: ' . $dest);
         $result = ['ok' => true, 'dest' => $dest];
         $log[$filename] = ['ok' => true, 'time' => time(), 'dest' => $dest];
     }
@@ -2717,15 +2536,38 @@ function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
 // Core — Database dump
 // ============================================================
 
+/**
+ * Dump the full WordPress database to a SQL string using the best available method.
+ *
+ * Uses mysqldump CLI if available, otherwise falls back to the PHP streamed implementation.
+ *
+ * @since 1.0.0
+ * @return string Complete SQL dump as a string.
+ */
 function cs_dump_database(): string {
     return cs_mysqldump_available() ? cs_dump_via_mysqldump() : cs_dump_via_php($GLOBALS['wpdb']);
 }
 
+/**
+ * Check whether the mysqldump CLI binary is available on the server.
+ *
+ * @since 1.0.0
+ * @return bool True if mysqldump is found in PATH.
+ */
 function cs_mysqldump_available(): bool {
     exec('which mysqldump 2>/dev/null', $out, $rc);
     return $rc === 0;
 }
 
+/**
+ * Dump the database using the native mysqldump CLI for maximum speed.
+ *
+ * Uses --single-transaction --quick --lock-tables=false for a non-locking dump.
+ * The database password is passed via the MYSQL_PWD environment variable, not a shell argument.
+ *
+ * @since 1.0.0
+ * @return string Complete SQL dump as a string.
+ */
 function cs_dump_via_mysqldump(): string {
     [$host, $port] = cs_parse_db_host(DB_HOST);
     $tmp = tempnam(sys_get_temp_dir(), 'cs_dump_') . '.sql';
@@ -2743,7 +2585,7 @@ function cs_dump_via_mysqldump(): string {
     exec($cmd, $output, $rc);
 
     if ($rc !== 0 || !file_exists($tmp) || filesize($tmp) < 100) {
-        @unlink($tmp);
+        wp_delete_file($tmp);
         return cs_dump_via_php($GLOBALS['wpdb']);
     }
 
@@ -2752,9 +2594,19 @@ function cs_dump_via_mysqldump(): string {
     return $sql;
 }
 
+/**
+ * Dump the database via PHP, reading each table in 500-row chunks.
+ *
+ * Used as a fallback when mysqldump is not available. Never loads the full
+ * database into memory at once.
+ *
+ * @since 1.0.0
+ * @param \wpdb $wpdb WordPress database object.
+ * @return string Complete SQL dump as a string.
+ */
 function cs_dump_via_php(\wpdb $wpdb): string {
     $out   = [];
-    $out[] = '-- CloudScale Free Backup v' . CS_VERSION;
+    $out[] = '-- CloudScale Free Backup v' . CS_BACKUP_VERSION;
     $out[] = '-- Generated: ' . date('Y-m-d H:i:s');
     $out[] = '-- Site: ' . get_site_url();
     $out[] = '-- Database: ' . DB_NAME;
@@ -2767,19 +2619,20 @@ function cs_dump_via_php(\wpdb $wpdb): string {
     $tables = $wpdb->get_col('SHOW TABLES');
 
     foreach ($tables as $table) {
-        $create  = $wpdb->get_row("SHOW CREATE TABLE `{$table}`", ARRAY_N);
-        $out[]   = "DROP TABLE IF EXISTS `{$table}`;";
-        $out[]   = $create[1] . ';';
-        $out[]   = '';
+        $safe_table = esc_sql( $table );
+        $create     = $wpdb->get_row( "SHOW CREATE TABLE `{$safe_table}`", ARRAY_N );
+        $out[]      = "DROP TABLE IF EXISTS `{$safe_table}`;";
+        $out[]      = $create[1] . ';';
+        $out[]      = '';
 
-        $total   = (int) $wpdb->get_var("SELECT COUNT(*) FROM `{$table}`");
-        $columns = $wpdb->get_col("DESCRIBE `{$table}`");
+        $total   = (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$safe_table}`" );
+        $columns = $wpdb->get_col( "DESCRIBE `{$safe_table}`" );
         $chunk   = 500;
         $offset  = 0;
 
         while ($offset < $total) {
             $rows = $wpdb->get_results(
-                $wpdb->prepare("SELECT * FROM `{$table}` LIMIT %d OFFSET %d", $chunk, $offset),
+                $wpdb->prepare("SELECT * FROM `{$safe_table}` LIMIT %d OFFSET %d", $chunk, $offset),
                 ARRAY_N
             );
             if (empty($rows)) break;
@@ -2791,7 +2644,7 @@ function cs_dump_via_php(\wpdb $wpdb): string {
                 $vals[]  = '(' . implode(', ', $escaped) . ')';
             }
 
-            $out[] = "INSERT INTO `{$table}` ({$col_list}) VALUES";
+            $out[] = "INSERT INTO `{$safe_table}` ({$col_list}) VALUES";
             $out[] = implode(",\n", $vals) . ';';
             $out[] = '';
             $offset += $chunk;
@@ -2804,6 +2657,15 @@ function cs_dump_via_php(\wpdb $wpdb): string {
     return implode("\n", $out);
 }
 
+/**
+ * Recursively add all files from a directory into an open ZipArchive.
+ *
+ * @since 1.0.0
+ * @param ZipArchive $zip    Open ZipArchive instance.
+ * @param string     $dir    Absolute path to the source directory.
+ * @param string     $prefix Path prefix to use inside the zip (e.g. 'uploads/').
+ * @return void
+ */
 function cs_add_dir_to_zip(ZipArchive $zip, string $dir, string $prefix): void {
     if (!is_dir($dir)) return;
     $it = new RecursiveIteratorIterator(
@@ -2822,6 +2684,14 @@ function cs_add_dir_to_zip(ZipArchive $zip, string $dir, string $prefix): void {
 // Core — Restore
 // ============================================================
 
+/**
+ * Extract database.sql from a backup zip and restore it.
+ *
+ * @since 1.0.0
+ * @param string $zip_path Absolute path to the backup zip file.
+ * @return void
+ * @throws \Exception If the zip cannot be opened or contains no database.sql.
+ */
 function cs_restore_from_zip(string $zip_path): void {
     $zip = new ZipArchive();
     if ($zip->open($zip_path) !== true) {
@@ -2844,6 +2714,14 @@ function cs_restore_from_zip(string $zip_path): void {
     cs_execute_sql_string($sql);
 }
 
+/**
+ * Read a .sql file from disk and execute it against the database.
+ *
+ * @since 1.0.0
+ * @param string $path Absolute path to the .sql file.
+ * @return void
+ * @throws \Exception If the file is empty or unreadable.
+ */
 function cs_restore_sql_file(string $path): void {
     $sql = file_get_contents($path);
     if (empty($sql)) {
@@ -2852,6 +2730,15 @@ function cs_restore_sql_file(string $path): void {
     cs_execute_sql_string($sql);
 }
 
+/**
+ * Execute a SQL string against the database using the best available method.
+ *
+ * Uses the mysql CLI if available, otherwise falls back to the PHP character-level parser.
+ *
+ * @since 1.0.0
+ * @param string $sql Complete SQL to execute.
+ * @return void
+ */
 function cs_execute_sql_string(string $sql): void {
     global $wpdb;
 
@@ -2869,18 +2756,35 @@ function cs_execute_sql_string(string $sql): void {
         }
         $wpdb->query($stmt);
         if ($wpdb->last_error) {
-            error_log('CS Restore statement error: ' . $wpdb->last_error . ' | ' . substr($stmt, 0, 200));
+            cs_log('CS Restore statement error: ' . $wpdb->last_error . ' | ' . substr($stmt, 0, 200));
         }
     }
 
     $wpdb->query('SET FOREIGN_KEY_CHECKS=1');
 }
 
+/**
+ * Check whether the mysql CLI client binary is available on the server.
+ *
+ * @since 1.0.0
+ * @return bool True if mysql is found in PATH.
+ */
 function cs_mysql_cli_available(): bool {
     exec('which mysql 2>/dev/null', $out, $rc);
     return $rc === 0;
 }
 
+/**
+ * Restore a SQL string by piping it through the mysql CLI binary.
+ *
+ * Writes the SQL to a temp file and passes it to mysql via stdin.
+ * The database password is passed via the MYSQL_PWD environment variable.
+ *
+ * @since 1.0.0
+ * @param string $sql Complete SQL to execute.
+ * @return void
+ * @throws \Exception If the restore command exits with a non-zero status.
+ */
 function cs_restore_via_mysql_cli(string $sql): void {
     $tmp = tempnam(sys_get_temp_dir(), 'cs_restore_') . '.sql';
     file_put_contents($tmp, $sql);
@@ -2905,6 +2809,16 @@ function cs_restore_via_mysql_cli(string $sql): void {
     }
 }
 
+/**
+ * Split a SQL dump string into individual statements.
+ *
+ * Uses a character-level parser that correctly handles quoted strings, escaped
+ * characters, and multi-line INSERT statements.
+ *
+ * @since 1.0.0
+ * @param string $sql Raw SQL dump string.
+ * @return string[] Array of individual SQL statements (without trailing semicolons).
+ */
 function cs_split_sql(string $sql): array {
     $stmts      = [];
     $current    = '';
@@ -2944,6 +2858,13 @@ function cs_split_sql(string $sql): array {
 // Utilities
 // ============================================================
 
+/**
+ * Parse a DB_HOST value into a [host, port] pair.
+ *
+ * @since 1.0.0
+ * @param string $host Raw DB_HOST value, e.g. 'localhost' or '127.0.0.1:3307'.
+ * @return array{string, string} Two-element array: [hostname, port].
+ */
 function cs_parse_db_host(string $host): array {
     $port = '3306';
     if (str_contains($host, ':')) {
@@ -2952,6 +2873,12 @@ function cs_parse_db_host(string $host): array {
     return [$host, $port];
 }
 
+/**
+ * Return an array of all backup files stored in the backup directory, newest first.
+ *
+ * @since 1.0.0
+ * @return array<int, array{name: string, path: string, size: int, mtime: int, date: string, type: string}> Backup entries.
+ */
 function cs_list_backups(): array {
     $backups = [];
     if (!is_dir(CS_BACKUP_DIR)) return $backups;
@@ -3013,14 +2940,27 @@ function cs_list_backups(): array {
     return $backups;
 }
 
+/**
+ * Delete backup files that exceed the configured retention count (oldest first).
+ *
+ * @since 1.0.0
+ * @return void
+ */
 function cs_enforce_retention(): void {
     $keep    = intval(get_option('cs_retention', 8));
     $backups = cs_list_backups();
     foreach (array_slice($backups, $keep) as $b) {
-        @unlink(CS_BACKUP_DIR . $b['name']);
+        wp_delete_file(CS_BACKUP_DIR . $b['name']);
     }
 }
 
+/**
+ * Return the total size in bytes of all files under a directory, recursively.
+ *
+ * @since 1.0.0
+ * @param string $dir Absolute path to the directory.
+ * @return int Total size in bytes, or 0 if the directory does not exist.
+ */
 function cs_dir_size(string $dir): int {
     $size = 0;
     if (!is_dir($dir)) return 0;
@@ -3030,6 +2970,13 @@ function cs_dir_size(string $dir): int {
     return $size;
 }
 
+/**
+ * Format a byte count as a human-readable string (B / KB / MB / GB).
+ *
+ * @since 1.0.0
+ * @param int $bytes Size in bytes.
+ * @return string Formatted string, e.g. '12.5 MB'.
+ */
 function cs_format_size(int $bytes): string {
     if ($bytes >= 1073741824) return round($bytes / 1073741824, 2) . ' GB';
     if ($bytes >= 1048576)    return round($bytes / 1048576, 2) . ' MB';
@@ -3037,6 +2984,13 @@ function cs_format_size(int $bytes): string {
     return $bytes . ' B';
 }
 
+/**
+ * Return a human-readable relative age string for a Unix timestamp.
+ *
+ * @since 1.0.0
+ * @param int $timestamp Unix timestamp to describe.
+ * @return string E.g. '5 min ago', '3 hr ago', '12 days ago', or a formatted date.
+ */
 function cs_human_age(int $timestamp): string {
     $diff = time() - $timestamp;
     if ($diff < 3600)   return round($diff / 60) . ' min ago';
@@ -3045,6 +2999,14 @@ function cs_human_age(int $timestamp): string {
     return wp_date('j M Y', $timestamp);
 }
 
+/**
+ * Verify that the current AJAX request has a valid nonce and sufficient permissions.
+ *
+ * Sends a JSON error response and exits if either check fails.
+ *
+ * @since 1.0.0
+ * @return void
+ */
 function cs_verify_nonce(): void {
     if (!current_user_can('manage_options')) {
         wp_send_json_error('Insufficient permissions.');

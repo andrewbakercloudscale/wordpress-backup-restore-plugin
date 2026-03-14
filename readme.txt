@@ -2,10 +2,10 @@
 Contributors: cloudscale
 Tags: backup, restore, database, media, plugins, themes, mysqldump, maintenance mode, scheduled backup
 Requires at least: 6.0
-Tested up to: 6.7
+Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 3.2.0
-License: GPLv2 or later
+Stable tag: 3.2.1
+License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
 Professional WordPress backup and restore. Backs up your database, media uploads, plugins and themes into a single zip — no timeouts, no external services, no limits.
@@ -164,6 +164,10 @@ Yes. Run a full backup on the old site, install WordPress on the new host, insta
 2. Manual backup panel with individual component checkboxes and live progress bar, plus the full backup history table showing stored backups with type badges, age, and Download / Restore DB / Delete actions.
 
 == Changelog ==
+
+= 3.2.1 =
+* Renamed internal constants with CS_BACKUP_ prefix to avoid collisions with other plugins
+* Replaced @unlink(), @copy(), @rmdir() with wp_delete_file(), copy(), rmdir() per WordPress coding standards
 
 = 3.2.0 =
 * NEW: Split backup scheduling into two independent cron events — file backup and AMI snapshot each have their own day picker and time selector
