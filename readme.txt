@@ -1,5 +1,5 @@
 === CloudScale Free Backup and Restore ===
-Contributors: cloudscale
+Contributors: andrewjbaker
 Tags: backup, restore, database, media, plugins, themes, mysqldump, maintenance mode, scheduled backup
 Requires at least: 6.0
 Tested up to: 6.9

@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v2.34 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.1 */
 jQuery(function ($) {
     'use strict';
 
@@ -310,84 +310,6 @@ jQuery(function ($) {
             error: function (xhr, status) {
                 progress('cs-restore-upload-fill', 'cs-restore-upload-msg', '✗ Upload failed: ' + status, 'error');
                 $btn.prop('disabled', false).text('↩ Restore from Upload');
-            }
-        });
-    });
-
-    // ================================================================
-    // Save Schedule
-    // ================================================================
-
-    $('#cs-save-schedule').on('click', function () {
-        var $btn = $(this);
-        $btn.prop('disabled', true).text('Saving...');
-
-        // Temporarily remove disabled from fieldset so we can read checkbox state
-        // A disabled fieldset greys out inputs but their .checked property still
-        // reflects visual state — HOWEVER some browsers reset checked on disable
-        var $fieldset = $('#cs-schedule-controls');
-        var wasDisabled = $fieldset.prop('disabled');
-        $fieldset.prop('disabled', false);
-
-        var days = [];
-        document.querySelectorAll('.cs-day-check').forEach(function(cb) {
-            if (cb.checked) days.push(parseInt(cb.value, 10));
-        });
-
-        // Restore fieldset state
-        $fieldset.prop('disabled', wasDisabled);
-
-        var daysStr = days.join(',');
-        console.log('[CS] Saving days:', days, '| joined:', daysStr, '| enabled:', $('#cs-schedule-enabled').is(':checked'));
-
-        var postData = {
-            action:    'cs_save_schedule',
-            nonce:     CS.nonce,
-            enabled:   $('#cs-schedule-enabled').is(':checked') ? 1 : 0,
-            run_hour:  $('#cs-run-hour').val(),
-            run_days:  daysStr,
-        };
-
-        console.log('[CS] Full postData:', postData);
-
-        $.ajax({
-            url:     CS.ajax_url,
-            type:    'POST',
-            data:    postData,
-            success: function (res) {
-                console.log('[CS] Save response:', res);
-                if (res.success) {
-                    $btn.text('✓ Saved').removeClass('button-primary').addClass('button-secondary');
-                    setTimeout(function () {
-                        $btn.text('Save Schedule').removeClass('button-secondary').addClass('button-primary');
-                        $btn.prop('disabled', false);
-                    }, 2000);
-                } else {
-                    alert('Save error: ' + JSON.stringify(res.data));
-                    $btn.prop('disabled', false).text('Save Schedule');
-                }
-            },
-            error: function (xhr) {
-                alert('Save failed. Status: ' + xhr.status + ' Response: ' + xhr.responseText.substring(0, 200));
-                $btn.prop('disabled', false).text('Save Schedule');
-            }
-        });
-    });
-
-    // Debug button — reads back what is actually in the DB right now
-    $('#cs-debug-schedule').on('click', function () {
-        $.post(CS.ajax_url, { action: 'cs_debug_schedule', nonce: CS.nonce }, function (res) {
-            if (res.success) {
-                var d = res.data;
-                alert(
-                    'DB cs_run_days: ' + JSON.stringify(d.cs_run_days) + '\n' +
-                    'DB raw: ' + d.cs_run_days_raw + '\n' +
-                    'DB saved flag: ' + d.cs_run_days_saved + '\n' +
-                    'DB enabled: ' + d.cs_schedule_enabled + '\n' +
-                    'DB hour: ' + d.cs_run_hour + '\n' +
-                    'cs_get_run_days(): ' + JSON.stringify(d.cs_get_run_days) + '\n' +
-                    'Last POST run_days: ' + JSON.stringify(d.POST.run_days)
-                );
             }
         });
     });

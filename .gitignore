@@ -10,12 +10,12 @@ vendor/
 wp-config.php
 wp-content/uploads/
 
-# Local deploy tooling
+# Local deploy tooling — not part of the distributed plugin
+repo/
 build.sh
 deploy-wordpress.sh
 backup-s3.sh
 purge-cloudflare.sh
 rollback-wordpress.sh
-repo/
 .claude/
 .claude-flow/
