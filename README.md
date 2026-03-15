@@ -1,6 +1,6 @@
 # WordPress Backup and Restore Plugin
 
-![WordPress](https://img.shields.io/badge/WordPress-6.0%2B-blue) ![PHP](https://img.shields.io/badge/PHP-8.1%2B-purple) ![License](https://img.shields.io/badge/License-GPLv2-green) ![Version](https://img.shields.io/badge/Version-2.76.0-orange)
+![WordPress](https://img.shields.io/badge/WordPress-6.0%2B-blue) ![PHP](https://img.shields.io/badge/PHP-8.1%2B-purple) ![License](https://img.shields.io/badge/License-GPLv2-green) ![Version](https://img.shields.io/badge/Version-3.2.1-orange)
 
 No nonsense WordPress backup and restore. Backs up your database, media, plugins, and themes into a single zip file. Scheduled or manual, with safe restore and maintenance mode. Completely free.
 
