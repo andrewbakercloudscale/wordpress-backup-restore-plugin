@@ -9,7 +9,7 @@
  * License:           GPL-2.0-or-later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  * Requires at least: 6.0
- * Tested up to:      6.7
+ * Tested up to:      6.9
  * Requires PHP:      8.1
  * Text Domain:       cloudscale-backup
  */
@@ -23,18 +23,19 @@ define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('CS_BACKUP_DIR', WP_CONTENT_DIR . '/cloudscale-backups/');
 define('CS_BACKUP_MAINT_FILE', ABSPATH . '.maintenance');
 
+require_once CS_BACKUP_PLUGIN_DIR . 'includes/class-cloudscale-backup-utils.php';
+
 /**
  * Write a message to the PHP error log when WP_DEBUG is enabled.
- * Replaces bare error_log() calls throughout the plugin so they are
- * silenced in production and only visible during development.
  *
+ * Delegates to CloudScale_Backup_Utils::log(). Silenced in production.
+ *
+ * @since 1.0.0
  * @param string $message Message to write to the PHP error log.
  * @return void
  */
 function cs_log( string $message ): void {
-    if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-        error_log( $message );
-    }
+    CloudScale_Backup_Utils::log( $message );
 }
 
 // ============================================================
@@ -69,9 +70,11 @@ function cs_deactivate() {
     wp_clear_scheduled_hook('cs_s3_retry');
     cs_maintenance_off();
 
-    // Wipe all asset files so Deactivate > Delete > Upload leaves no stale code
+    // Delete only versioned asset copies — never the canonical script.js / style.css source files.
+    // Deleting the sources would break the admin UI on Deactivate → Reactivate without a fresh upload.
     $dir = plugin_dir_path(__FILE__);
-    foreach (glob($dir . '*.{js,css}', GLOB_BRACE) as $f) { wp_delete_file($f); }
+    foreach (glob($dir . 'script-*.js') ?: [] as $f) { wp_delete_file($f); }
+    foreach (glob($dir . 'style-*.css') ?: [] as $f) { wp_delete_file($f); }
 
     // Clean old assets/ subdirectory from previous versions
     $assets = $dir . 'assets/';
@@ -516,7 +519,8 @@ function cs_admin_page(): void {
     $restore_method = cs_mysql_cli_available() ? 'mysql CLI (native — fast)' : 'PHP streamed (compatible)';
 
     // MySQL version
-    $mysql_version = $wpdb->get_var('SELECT VERSION()') ?: 'Unknown';
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoPrepare -- static query, no user input
+    $mysql_version = $wpdb->get_var( 'SELECT VERSION()' ) ?: 'Unknown';
     $db_label      = 'MySQL ' . $mysql_version . ' — ' . DB_NAME;
 
     // Disk usage percentage for bar fill
@@ -729,7 +733,7 @@ function cs_admin_page(): void {
                     <label class="cs-field-label"><?php esc_html_e( 'Keep last', 'cloudscale-backup' ); ?></label>
                     <div class="cs-inline">
                         <input type="number" id="cs-retention"
-                               value="<?php echo $retention; ?>" min="1" max="9999"
+                               value="<?php echo (int) $retention; ?>" min="1" max="9999"
                                class="cs-input-sm <?php echo $ret_over ? 'cs-retention-over' : ''; ?>">
                         <span class="cs-muted-text">backups</span>
                         <?php if ($ret_has_baseline): ?>
@@ -850,7 +854,7 @@ function cs_admin_page(): void {
                 ?>
                 <div class="cs-info-row">
                     <span>Backups in S3</span>
-                    <strong><?php echo count($s3_synced); ?> of <?php echo count($backups); ?></strong>
+                    <strong><?php echo (int) count($s3_synced); ?> of <?php echo (int) count($backups); ?></strong>
                 </div>
                 <div class="cs-info-row">
                     <span>Last S3 sync</span>
@@ -981,10 +985,10 @@ function cs_admin_page(): void {
                                         ?>
                                         <span style="color:<?php echo $sc; ?>;font-weight:600;"><?php echo $si; ?> <?php echo esc_html($entry_state ?: 'Created'); ?></span>
                                     <?php else: ?>
-                                        <?php $err_msg = esc_html(substr($entry['error'] ?? '', 0, 120)); ?>
-                                        <span style="color:#c62828;font-weight:600;" title="<?php echo $err_msg ?: 'No error detail recorded'; ?>">&#10007; Failed</span>
-                                        <?php if ($err_msg): ?>
-                                        <br><span style="color:#c62828;font-size:0.72rem;word-break:break-word;display:block;max-width:180px;line-height:1.3;margin-top:2px;"><?php echo $err_msg; ?></span>
+                                        <?php $err_raw = substr($entry['error'] ?? '', 0, 120); ?>
+                                        <span style="color:#c62828;font-weight:600;" title="<?php echo esc_attr($err_raw ?: 'No error detail recorded'); ?>">&#10007; Failed</span>
+                                        <?php if ($err_raw): ?>
+                                        <br><span style="color:#c62828;font-size:0.72rem;word-break:break-word;display:block;max-width:180px;line-height:1.3;margin-top:2px;"><?php echo esc_html($err_raw); ?></span>
                                         <?php endif; ?>
                                     <?php endif; ?>
                                 </td>
@@ -993,7 +997,7 @@ function cs_admin_page(): void {
                                     <?php if (!$is_deleted): ?>
                                     <button type="button" onclick="csAmiRefreshOne('<?php echo $row_ami_id; ?>')" class="button button-small" title="Refresh this AMI state from AWS" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
                                     <?php endif; ?>
-                                    <button type="button" onclick="csAmiDelete('<?php echo $row_ami_id; ?>', '<?php echo esc_attr($entry['name'] ?? ''); ?>', <?php echo $is_deleted ? 'true' : 'false'; ?>)" class="button button-small" title="<?php echo $is_deleted ? 'Remove record' : 'Deregister AMI'; ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? 'Remove' : 'Delete'; ?></button>
+                                    <button type="button" onclick="csAmiDelete('<?php echo $row_ami_id; ?>', '<?php echo esc_js($entry['name'] ?? ''); ?>', <?php echo $is_deleted ? 'true' : 'false'; ?>)" class="button button-small" title="<?php echo $is_deleted ? 'Remove record' : 'Deregister AMI'; ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? 'Remove' : 'Delete'; ?></button>
                                     <?php else: ?>
                                     <button type="button" onclick="csAmiRemoveFailed('<?php echo esc_js($entry['name'] ?? ''); ?>')" class="button button-small" title="Remove failed record" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Remove</button>
                                     <?php endif; ?>
@@ -1034,7 +1038,7 @@ function cs_admin_page(): void {
                 </div>
                 <div class="cs-info-row">
                     <span><?php esc_html_e( 'Total backups stored', 'cloudscale-backup' ); ?></span>
-                    <strong><?php echo count($backups); ?></strong>
+                    <strong><?php echo (int) count($backups); ?></strong>
                 </div>
                 <div class="cs-info-row">
                     <span><?php esc_html_e( 'Backup directory', 'cloudscale-backup' ); ?></span>
@@ -1188,7 +1192,7 @@ function cs_admin_page(): void {
                                 <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                             </button>
                         </td>
-                        <td class="cs-col-num cs-idx" style="padding:6px 8px!important;vertical-align:middle!important;white-space:nowrap;"><?php echo $i + 1; ?><?php if ($i === 0) echo '&nbsp;<span class="cs-latest-badge">latest</span>'; ?></td>
+                        <td class="cs-col-num cs-idx" style="padding:6px 8px!important;vertical-align:middle!important;white-space:nowrap;"><?php echo (int) ( $i + 1 ); ?><?php if ($i === 0) echo wp_kses( '&nbsp;<span class="cs-latest-badge">latest</span>', [ 'span' => [ 'class' => [] ] ] ); ?></td>
                         <td class="cs-filename" style="padding:6px 8px!important;vertical-align:middle!important;" title="<?php echo esc_attr($b['name']); ?>"><?php echo esc_html($b['name']); ?></td>
                         <td class="cs-col-size" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html(cs_format_size($b['size'])); ?></td>
                         <td class="cs-col-meta cs-created" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html($b['date']); ?></td>
@@ -1231,7 +1235,7 @@ function cs_admin_page(): void {
                 </tbody>
             </table>
             </div><!-- .cs-table-wrap -->
-            <p class="cs-help cs-mt">Showing <?php echo count($backups); ?> backup(s). Retention limit: <?php echo $retention; ?>. Oldest backups are removed automatically after each run.</p>
+            <p class="cs-help cs-mt">Showing <?php echo (int) count($backups); ?> backup(s). Retention limit: <?php echo (int) $retention; ?>. Oldest backups are removed automatically after each run.</p>
             <?php endif; ?>
         </div>
 
@@ -1298,6 +1302,9 @@ function cs_admin_page(): void {
 // ============================================================
 
 add_action('wp_ajax_cs_run_backup', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
     cs_ensure_backup_dir();
 
@@ -1349,6 +1356,9 @@ add_action('wp_ajax_cs_run_backup', function (): void {
 // ============================================================
 
 add_action('wp_ajax_cs_delete_backup', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
     $file = sanitize_file_name($_POST['file'] ?? '');
     $path = CS_BACKUP_DIR . $file;
@@ -1364,6 +1374,9 @@ add_action('wp_ajax_cs_delete_backup', function (): void {
 // ============================================================
 
 add_action('wp_ajax_cs_restore_backup', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
     set_time_limit(0);
     ignore_user_abort(true);
@@ -1391,6 +1404,9 @@ add_action('wp_ajax_cs_restore_backup', function (): void {
 // ============================================================
 
 add_action('wp_ajax_cs_restore_upload', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
     set_time_limit(0);
     ignore_user_abort(true);
@@ -1428,6 +1444,9 @@ add_action('wp_ajax_cs_restore_upload', function (): void {
 // ============================================================
 
 add_action('wp_ajax_cs_test_s3', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
     $bucket = get_option('cs_s3_bucket', '');
     $prefix = get_option('cs_s3_prefix', 'backups/');
@@ -1456,6 +1475,9 @@ add_action('wp_ajax_cs_test_s3', function (): void {
 });
 
 add_action('wp_ajax_cs_save_s3', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
     $bucket = sanitize_text_field($_POST['bucket'] ?? '');
     $prefix = sanitize_text_field($_POST['prefix'] ?? 'backups/');
@@ -1478,6 +1500,9 @@ add_action('cs_s3_retry', function (string $filename): void {
 });
 
 add_action('wp_ajax_cs_s3_sync_file', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
     $filename = sanitize_file_name($_POST['filename'] ?? '');
     if (!$filename || !str_ends_with($filename, '.zip')) {
@@ -1503,6 +1528,9 @@ add_action('wp_ajax_cs_s3_sync_file', function (): void {
 // ============================================================
 
 add_action('wp_ajax_cs_save_ami', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
     $prefix          = sanitize_text_field($_POST['prefix'] ?? '');
     $reboot          = !empty($_POST['reboot']);
@@ -1520,6 +1548,9 @@ add_action('wp_ajax_cs_save_ami', function (): void {
 });
 
 add_action('wp_ajax_cs_create_ami', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
     set_time_limit(120);
 
@@ -1759,6 +1790,9 @@ function cs_do_create_ami(): array {
 }
 
 add_action('wp_ajax_cs_ami_status', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
 
     $aws = cs_find_aws();
@@ -1823,6 +1857,9 @@ add_action('wp_ajax_cs_ami_status', function (): void {
 });
 
 add_action('wp_ajax_cs_deregister_ami', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
 
     $ami_id = sanitize_text_field($_POST['ami_id'] ?? '');
@@ -1863,6 +1900,9 @@ add_action('wp_ajax_cs_deregister_ami', function (): void {
 // ============================================================
 
 add_action('wp_ajax_cs_ami_refresh_all', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
     set_time_limit(0);
 
@@ -1945,6 +1985,9 @@ add_action('wp_ajax_cs_ami_refresh_all', function (): void {
 // ============================================================
 
 add_action('wp_ajax_cs_ami_reset_deleted', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
     $log     = (array) get_option('cs_ami_log', []);
     $reset   = 0;
@@ -1965,6 +2008,9 @@ add_action('wp_ajax_cs_ami_reset_deleted', function (): void {
 // ============================================================
 
 add_action('wp_ajax_cs_ami_remove_record', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
 
     $ami_id = sanitize_text_field($_POST['ami_id'] ?? '');
@@ -1980,6 +2026,9 @@ add_action('wp_ajax_cs_ami_remove_record', function (): void {
 });
 
 add_action('wp_ajax_cs_ami_remove_failed', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
     $name = sanitize_text_field($_POST['name'] ?? '');
     if (!$name) {
@@ -1995,6 +2044,9 @@ add_action('wp_ajax_cs_ami_remove_failed', function (): void {
 });
 
 add_action('wp_ajax_cs_save_retention', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
     cs_verify_nonce();
     $r = max(1, min(9999, intval($_POST['retention'] ?? 8)));
     update_option('cs_retention', $r);
@@ -2616,16 +2668,20 @@ function cs_dump_via_php(\wpdb $wpdb): string {
     $out[] = 'SET NAMES utf8mb4;';
     $out[] = '';
 
-    $tables = $wpdb->get_col('SHOW TABLES');
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoPrepare -- SHOW TABLES has no parameters; prepare() not applicable
+    $tables = $wpdb->get_col( 'SHOW TABLES' );
 
     foreach ($tables as $table) {
         $safe_table = esc_sql( $table );
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoPrepare,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- schema queries; table name from SHOW TABLES, escaped via esc_sql()
         $create     = $wpdb->get_row( "SHOW CREATE TABLE `{$safe_table}`", ARRAY_N );
         $out[]      = "DROP TABLE IF EXISTS `{$safe_table}`;";
         $out[]      = $create[1] . ';';
         $out[]      = '';
 
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoPrepare,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name sanitised via esc_sql()
         $total   = (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$safe_table}`" );
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoPrepare,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name sanitised via esc_sql()
         $columns = $wpdb->get_col( "DESCRIBE `{$safe_table}`" );
         $chunk   = 500;
         $offset  = 0;
@@ -2735,6 +2791,11 @@ function cs_restore_sql_file(string $path): void {
  *
  * Uses the mysql CLI if available, otherwise falls back to the PHP character-level parser.
  *
+ * The PHP fallback executes pre-parsed SQL statements verbatim via $wpdb->query().
+ * prepare() cannot be applied here: the statements are complete DDL/DML from a trusted
+ * backup file (CREATE TABLE, INSERT … VALUES …), not parameterised templates.
+ * Access is gated behind manage_options + nonce before this function is ever called.
+ *
  * @since 1.0.0
  * @param string $sql Complete SQL to execute.
  * @return void
@@ -2747,13 +2808,14 @@ function cs_execute_sql_string(string $sql): void {
         return;
     }
 
-    $wpdb->query('SET FOREIGN_KEY_CHECKS=0');
+    $wpdb->query('SET FOREIGN_KEY_CHECKS=0'); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoPrepare
 
     foreach (cs_split_sql($sql) as $stmt) {
         $stmt = trim($stmt);
         if (empty($stmt) || str_starts_with($stmt, '--') || str_starts_with($stmt, '/*')) {
             continue;
         }
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoPrepare,WordPress.DB.PreparedSQL.NotPrepared -- full SQL statements from a trusted backup file; prepare() is not applicable to DDL/DML replay
         $wpdb->query($stmt);
         if ($wpdb->last_error) {
             cs_log('CS Restore statement error: ' . $wpdb->last_error . ' | ' . substr($stmt, 0, 200));
@@ -2865,12 +2927,8 @@ function cs_split_sql(string $sql): array {
  * @param string $host Raw DB_HOST value, e.g. 'localhost' or '127.0.0.1:3307'.
  * @return array{string, string} Two-element array: [hostname, port].
  */
-function cs_parse_db_host(string $host): array {
-    $port = '3306';
-    if (str_contains($host, ':')) {
-        [$host, $port] = explode(':', $host, 2);
-    }
-    return [$host, $port];
+function cs_parse_db_host( string $host ): array {
+    return CloudScale_Backup_Utils::parse_db_host( $host );
 }
 
 /**
@@ -2961,13 +3019,8 @@ function cs_enforce_retention(): void {
  * @param string $dir Absolute path to the directory.
  * @return int Total size in bytes, or 0 if the directory does not exist.
  */
-function cs_dir_size(string $dir): int {
-    $size = 0;
-    if (!is_dir($dir)) return 0;
-    foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS)) as $f) {
-        $size += $f->getSize();
-    }
-    return $size;
+function cs_dir_size( string $dir ): int {
+    return CloudScale_Backup_Utils::dir_size( $dir );
 }
 
 /**
@@ -2977,11 +3030,8 @@ function cs_dir_size(string $dir): int {
  * @param int $bytes Size in bytes.
  * @return string Formatted string, e.g. '12.5 MB'.
  */
-function cs_format_size(int $bytes): string {
-    if ($bytes >= 1073741824) return round($bytes / 1073741824, 2) . ' GB';
-    if ($bytes >= 1048576)    return round($bytes / 1048576, 2) . ' MB';
-    if ($bytes >= 1024)       return round($bytes / 1024, 2) . ' KB';
-    return $bytes . ' B';
+function cs_format_size( int $bytes ): string {
+    return CloudScale_Backup_Utils::format_size( $bytes );
 }
 
 /**
@@ -2991,27 +3041,22 @@ function cs_format_size(int $bytes): string {
  * @param int $timestamp Unix timestamp to describe.
  * @return string E.g. '5 min ago', '3 hr ago', '12 days ago', or a formatted date.
  */
-function cs_human_age(int $timestamp): string {
-    $diff = time() - $timestamp;
-    if ($diff < 3600)   return round($diff / 60) . ' min ago';
-    if ($diff < 86400)  return round($diff / 3600) . ' hr ago';
-    if ($diff < 604800) return round($diff / 86400) . ' days ago';
-    return wp_date('j M Y', $timestamp);
+function cs_human_age( int $timestamp ): string {
+    return CloudScale_Backup_Utils::human_age( $timestamp );
 }
 
 /**
- * Verify that the current AJAX request has a valid nonce and sufficient permissions.
+ * Verify that the current AJAX request carries a valid nonce.
  *
- * Sends a JSON error response and exits if either check fails.
+ * Capability must be checked independently by each handler before calling this
+ * function so that every action has a visible, self-contained permission gate.
+ * Sends a JSON error response and exits if the nonce check fails.
  *
  * @since 1.0.0
  * @return void
  */
 function cs_verify_nonce(): void {
-    if (!current_user_can('manage_options')) {
-        wp_send_json_error('Insufficient permissions.');
-    }
-    if (!check_ajax_referer('cs_nonce', 'nonce', false)) {
-        wp_send_json_error('Security check failed.');
+    if ( ! check_ajax_referer( 'cs_nonce', 'nonce', false ) ) {
+        wp_send_json_error( 'Security check failed.' );
     }
 }

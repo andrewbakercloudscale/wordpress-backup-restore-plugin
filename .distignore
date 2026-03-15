@@ -1,0 +1,20 @@
+# Files and directories to exclude from the WordPress.org distribution zip.
+# Used by: wp dist-zip, rsync-based build scripts, and any zip packaging tool.
+# WordPress.org rejects zips containing dot-files (hidden_files error).
+
+# Hidden / OS files
+.DS_Store
+._*
+.git
+.gitignore
+.claude
+.claude-flow
+
+# Development tooling at repo root (not plugin code)
+repo/
+purge-cloudflare.sh
+build.sh
+deploy-wordpress.sh
+backup-s3.sh
+rollback-wordpress.sh
+README.md
