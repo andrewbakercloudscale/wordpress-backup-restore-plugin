@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.1
+ * Version:           3.2.4
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -14,9 +14,9 @@
  * Text Domain:       cloudscale-backup
  */
 
-defined('ABSPATH') || exit;
+defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.1');
+define('CS_BACKUP_VERSION',    '3.2.4');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -51,7 +51,7 @@ register_deactivation_hook(__FILE__, 'cs_deactivate');
  * @since 1.0.0
  * @return void
  */
-function cs_activate() {
+function cs_activate(): void {
     cs_ensure_backup_dir();
     cs_reschedule();
 }
@@ -63,7 +63,7 @@ function cs_activate() {
  * @since 1.0.0
  * @return void
  */
-function cs_deactivate() {
+function cs_deactivate(): void {
     wp_clear_scheduled_hook('cs_scheduled_backup');
     wp_clear_scheduled_hook('cs_scheduled_ami_backup');
     wp_clear_scheduled_hook('cs_ami_poll');
@@ -95,7 +95,7 @@ function cs_deactivate() {
  * @param string $ext File extension — 'js' or 'css'.
  * @return string Filename (not path) of the versioned asset, e.g. 'script-3-2-0.js'.
  */
-function cs_get_versioned_asset(string $ext): string {
+function cs_get_versioned_asset( string $ext ): string {
     $ver_slug  = str_replace('.', '-', CS_BACKUP_VERSION);
     $src_name  = ($ext === 'js') ? 'script.' . $ext : 'style.' . $ext;
     $dest_name = ($ext === 'js') ? 'script-' . $ver_slug . '.js' : 'style-' . $ver_slug . '.css';
@@ -341,7 +341,7 @@ add_action('cs_scheduled_backup', function () {
     ignore_user_abort(true);
     cs_ensure_backup_dir();
 
-    $c = (array) get_option('cs_schedule_components', ['db','media','plugins','themes']);
+    $c = (array) get_option('cs_schedule_components', ['db', 'media', 'plugins', 'themes']);
     cs_create_backup(
         in_array('db',        $c, true),
         in_array('media',     $c, true),
@@ -416,7 +416,7 @@ function cs_admin_page(): void {
     $plugins_size  = cs_dir_size(WP_PLUGIN_DIR);
     $themes_size   = cs_dir_size(get_theme_root());
     // "Other" backup targets
-    $mu_path       = defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins';
+    $mu_path       = defined( 'WPMU_PLUGIN_DIR' ) ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins';
     $mu_size       = is_dir($mu_path) ? cs_dir_size($mu_path) : 0;
     $lang_path     = WP_CONTENT_DIR . '/languages';
     $lang_size     = is_dir($lang_path) ? cs_dir_size($lang_path) : 0;
@@ -472,11 +472,11 @@ function cs_admin_page(): void {
         update_option('cs_run_minute',        max(0,  min(59, intval($_POST['run_minute']        ?? 0))));
         update_option('cs_ami_run_hour',      max(0,  min(23, intval($_POST['ami_run_hour']      ?? 3))));
         update_option('cs_ami_run_minute',    max(0,  min(59, intval($_POST['ami_run_minute']    ?? 30))));
-        $valid_components = ['db','media','plugins','themes','mu','languages','dropins','htaccess','wpconfig'];
+        $valid_components = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'htaccess', 'wpconfig'];
         $raw_components   = isset($_POST['schedule_components']) && is_array($_POST['schedule_components']) ? $_POST['schedule_components'] : [];
         $clean_components = array_values(array_intersect($raw_components, $valid_components));
         // Default to core four if nothing selected
-        if (empty($clean_components)) { $clean_components = ['db','media','plugins','themes']; }
+        if (empty($clean_components)) { $clean_components = ['db', 'media', 'plugins', 'themes']; }
         update_option('cs_schedule_components', $clean_components);
         $raw_ami_days   = isset($_POST['ami_schedule_days']) && is_array($_POST['ami_schedule_days']) ? $_POST['ami_schedule_days'] : [];
         $clean_ami_days = array_values(array_filter(array_map('intval', $raw_ami_days), fn($d) => $d >= 1 && $d <= 7));
@@ -504,7 +504,7 @@ function cs_admin_page(): void {
     $minute          = intval(get_option('cs_run_minute',    0));
     $ami_run_hour    = intval(get_option('cs_ami_run_hour',  3));
     $ami_run_minute  = intval(get_option('cs_ami_run_minute', 30));
-    $sched_components = (array) get_option('cs_schedule_components', ['db','media','plugins','themes']);
+    $sched_components = (array) get_option('cs_schedule_components', ['db', 'media', 'plugins', 'themes']);
     $retention      = intval(get_option('cs_retention', 8));
     $backup_prefix  = sanitize_key(get_option('cs_backup_prefix', 'bkup')) ?: 'bkup';
     $s3_bucket    = get_option('cs_s3_bucket', '');
@@ -536,7 +536,7 @@ function cs_admin_page(): void {
         <div class="cs-header">
             <div class="cs-header-title">
                 <h1>☁ <?php echo esc_html__( 'CloudScale Free Backup & Restore', 'cloudscale-backup' ); ?></h1>
-                <p class="cs-header-sub"><?php esc_html_e( 'Database · media · plugins · themes. No timeouts, no external services.', 'cloudscale-backup' ); ?></p>
+                <p class="cs-header-sub"><?php esc_html_e( 'Database · media · plugins · themes. No timeouts, no external services.', 'cloudscale-backup' ); ?> <span style="opacity:0.6;font-size:0.8em;">v<?php echo esc_html( CS_BACKUP_VERSION ); ?></span></p>
                 <p class="cs-header-free">✅ <?php esc_html_e( '100% free forever — no licence, no premium tier, no feature restrictions. Everything is included.', 'cloudscale-backup' ); ?></p>
             </div>
             <div class="cs-header-status">
@@ -1237,6 +1237,7 @@ function cs_admin_page(): void {
             </div><!-- .cs-table-wrap -->
             <p class="cs-help cs-mt">Showing <?php echo (int) count($backups); ?> backup(s). Retention limit: <?php echo (int) $retention; ?>. Oldest backups are removed automatically after each run.</p>
             <?php endif; ?>
+            <p class="cs-help" style="margin-top:6px;word-break:break-all;">&#128193; <?php esc_html_e( 'Stored at:', 'cloudscale-backup' ); ?> <code id="cs-backup-path"><?php echo esc_html( CS_BACKUP_DIR ); ?></code> <button type="button" id="cs-copy-path" onclick="csCopyBackupPath()" style="margin-left:6px;padding:2px 8px;font-size:0.75rem;cursor:pointer;vertical-align:middle;" class="button button-small">Copy</button></p>
         </div>
 
         <!-- ===================== RESTORE FROM UPLOAD ===================== -->
@@ -2061,7 +2062,9 @@ add_action('wp_ajax_cs_save_retention', function (): void {
 
 add_action('admin_post_cs_download', function (): void {
     check_admin_referer('cs_download');
-    if (!current_user_can('manage_options')) wp_die('Forbidden');
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_die( 'Forbidden' );
+    }
 
     $file = sanitize_file_name($_GET['file'] ?? '');
     $path = CS_BACKUP_DIR . $file;
@@ -2327,7 +2330,7 @@ function cs_create_backup(
     }
 
     if ($include_mu) {
-        $mu_path = defined('WPMU_PLUGIN_DIR') ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins';
+        $mu_path = defined( 'WPMU_PLUGIN_DIR' ) ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins';
         if (is_dir($mu_path)) cs_add_dir_to_zip($zip, $mu_path, 'mu-plugins');
     }
 

@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.1 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.4 */
 jQuery(function ($) {
     'use strict';
 
@@ -374,3 +374,124 @@ jQuery(function ($) {
     });
 
 });
+
+// ================================================================
+// Explain modal — shared helper and per-section functions
+// ================================================================
+
+function csShowExplain(title, body) {
+    var $ = window.jQuery;
+    var modalId = 'cs-explain-modal';
+    if (!$('#' + modalId).length) {
+        $('body').append(
+            '<div id="cs-explain-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99998;"></div>' +
+            '<div id="cs-explain-modal" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);' +
+            'background:#fff;border-radius:10px;padding:28px 32px;max-width:540px;width:90%;z-index:99999;' +
+            'box-shadow:0 8px 32px rgba(0,0,0,0.25);font-family:inherit;">' +
+            '<h2 id="cs-explain-title" style="margin:0 0 14px;font-size:1.05rem;"></h2>' +
+            '<div id="cs-explain-body" style="font-size:0.9rem;line-height:1.6;color:#333;"></div>' +
+            '<button id="cs-explain-close" class="button button-primary" style="margin-top:20px;">Got it</button>' +
+            '</div>'
+        );
+        $('#cs-explain-close, #cs-explain-overlay').on('click', function () {
+            $('#cs-explain-overlay, #cs-explain-modal').hide();
+        });
+    }
+    $('#cs-explain-title').text(title);
+    $('#cs-explain-body').html(body);
+    $('#cs-explain-overlay, #cs-explain-modal').show();
+}
+
+window.csScheduleExplain = function () {
+    csShowExplain('Backup Schedule',
+        '<p>Configure when automatic backups run. Choose a day of the week and a time — the plugin creates a backup at that point every week.</p>' +
+        '<p>Backups run via WP-Cron, which fires on the next page load at or after the scheduled time. On low-traffic sites you can add a real server cron job to keep timing accurate.</p>' +
+        '<p>Disable the schedule here if you prefer to run backups manually only.</p>'
+    );
+};
+
+window.csRetentionExplain = function () {
+    csShowExplain('Retention & Storage',
+        '<p>Set how many backup files to keep on disk. After each backup the oldest files beyond this limit are deleted automatically.</p>' +
+        '<p>The storage estimate shows how much space your chosen retention count will use, based on the size of your most recent backup. Keep retention low on servers with limited disk space.</p>'
+    );
+};
+
+window.csS3Explain = function () {
+    csShowExplain('S3 Remote Backup',
+        '<p>After each backup the zip file is synced to your AWS S3 bucket using the AWS CLI. This gives you an off-site copy that survives server failure.</p>' +
+        '<p><strong>Requirements:</strong> AWS CLI must be installed on the server and configured with credentials that have <code>s3:PutObject</code> and <code>s3:ListBucket</code> permissions on the target bucket.</p>' +
+        '<p>Set a bucket name and optional path prefix (e.g. <code>my-bucket/backups/</code>). Failed syncs are retried automatically.</p>'
+    );
+};
+
+window.csAmiExplain = function () {
+    csShowExplain('EC2 AMI Snapshot',
+        '<p>Creates a full Amazon Machine Image (AMI) of this EC2 instance — a complete disk-level snapshot you can use to launch a new instance or roll back the entire server.</p>' +
+        '<p><strong>Requirements:</strong> AWS CLI installed, with <code>ec2:CreateImage</code>, <code>ec2:DescribeImages</code>, <code>ec2:DeregisterImage</code>, and <code>ec2:RebootInstances</code> IAM permissions.</p>' +
+        '<p>AMI creation happens asynchronously. The plugin polls AWS every 10 minutes and updates the status log when the image becomes available.</p>'
+    );
+};
+
+window.csSystemExplain = function () {
+    csShowExplain('System Info',
+        '<p>A snapshot of your server environment relevant to backup operations: PHP version, available disk space, max execution time, memory limit, and whether key tools like <code>mysqldump</code> and the AWS CLI are present.</p>' +
+        '<p>Use this to diagnose backup failures — for example, a low <code>max_execution_time</code> can cause timeouts on large sites.</p>'
+    );
+};
+
+window.csBackupExplain = function () {
+    csShowExplain('Run Backup Now',
+        '<p>Run a one-off backup immediately. Choose which components to include:</p>' +
+        '<ul style="margin:8px 0 8px 18px;padding:0;">' +
+        '<li><strong>Database</strong> — all MySQL tables via <code>mysqldump</code></li>' +
+        '<li><strong>Media</strong> — your <code>wp-content/uploads/</code> folder</li>' +
+        '<li><strong>Plugins / Themes</strong> — <code>wp-content/plugins/</code> and <code>wp-content/themes/</code></li>' +
+        '<li><strong>Must-Use Plugins</strong> — <code>wp-content/mu-plugins/</code></li>' +
+        '<li><strong>Languages / Drop-ins</strong> — translation files and drop-in files</li>' +
+        '<li><strong>.htaccess / wp-config.php</strong> — server and WordPress config files</li>' +
+        '</ul>' +
+        '<p>Everything is packaged into a single <code>.zip</code> stored on the server. If S3 is configured the zip is synced off-site immediately after.</p>'
+    );
+};
+
+window.csHistoryExplain = function () {
+    csShowExplain('Backup History',
+        '<p>All backups stored on this server. For each backup you can:</p>' +
+        '<ul style="margin:8px 0 8px 18px;padding:0;">' +
+        '<li><strong>Download</strong> — save the zip to your local machine</li>' +
+        '<li><strong>Restore</strong> — drop and reimport the database from this backup (Full and DB backups only)</li>' +
+        '<li><strong>Delete</strong> — permanently remove the file from the server</li>' +
+        '</ul>' +
+        '<p>Backups are stored as zip files on the server. The storage path is shown at the bottom of this panel. The directory is protected by <code>.htaccess</code> to prevent direct browser access.</p>'
+    );
+};
+
+window.csCopyBackupPath = function () {
+    var path = document.getElementById('cs-backup-path').textContent;
+    var btn  = document.getElementById('cs-copy-path');
+    navigator.clipboard.writeText(path).then(function () {
+        btn.textContent = 'Copied!';
+        setTimeout(function () { btn.textContent = 'Copy'; }, 2000);
+    }).catch(function () {
+        // Fallback for older browsers
+        var ta = document.createElement('textarea');
+        ta.value = path;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        btn.textContent = 'Copied!';
+        setTimeout(function () { btn.textContent = 'Copy'; }, 2000);
+    });
+};
+
+window.csRestoreExplain = function () {
+    csShowExplain('Restore from Uploaded File',
+        '<p>Upload a backup zip (created by this plugin) or a raw <code>.sql</code> file from your local machine to restore the database.</p>' +
+        '<p><strong>What happens:</strong> The site is put into maintenance mode, all database tables are dropped, the SQL is imported, then maintenance mode is lifted.</p>' +
+        '<p><strong>Take a server snapshot before restoring.</strong> A database restore is irreversible — if something goes wrong a snapshot lets you recover instantly.</p>'
+    );
+};
