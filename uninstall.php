@@ -7,7 +7,7 @@
  * left on disk so that a reinstall or manual restore remains possible.
  */
 
-defined( 'ABSPATH' )             || exit;
+defined( 'ABSPATH' ) || exit;
 defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
 
 // Remove all plugin options.

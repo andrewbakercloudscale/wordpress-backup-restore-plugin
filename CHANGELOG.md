@@ -3,6 +3,16 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.4] - 2026-03-16
+- NEW: Copy button next to backup storage path in Backup History panel
+
+## [3.2.3] - 2026-03-16
+- NEW: Version number now displayed in the admin page header
+
+## [3.2.2] - 2026-03-16
+- FIX: All "Explain…" buttons now work — added missing JS functions for all 8 panel sections
+- NEW: Backup History panel now shows the server path where backup files are stored
+
 ## [3.2.1] - 2026-03-14
 - Renamed internal constants with `CS_BACKUP_` prefix to avoid collisions with other plugins
 - Replaced `@unlink()`, `@copy()`, `@rmdir()` with `wp_delete_file()`, `copy()`, `rmdir()` per WordPress coding standards
