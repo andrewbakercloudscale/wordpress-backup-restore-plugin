@@ -3,6 +3,13 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.6] - 2026-03-16
+- FIX: S3 and AMI card buttons (Save, Test, Create AMI, Check Status, Refresh, Delete) were non-functional — restored missing JS functions removed during WordPress.org standards pass
+- FIX: "Existing backups" checkbox in Backup Schedule now saves correctly
+- NEW: Version number displayed as a prominent separate badge in the header
+- UX: Region override input now full-width
+- UX: All Explain… modal texts rewritten with accurate, detailed descriptions of each section
+
 ## [3.2.5] - 2026-03-16
 - NEW: "Existing backups" checkbox — optionally include the cloudscale-backups/ directory in a backup; Explain modal updated
 
