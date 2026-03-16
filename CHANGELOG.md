@@ -3,6 +3,12 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.9] - 2026-03-16
+- UX: Region override input same width as AMI name prefix input
+
+## [3.2.8] - 2026-03-16
+- BUILD: Auto-increment patch version at start of every build, before AI review runs; build fails on any model API error or missing BUILD_STATUS
+
 ## [3.2.7] - 2026-03-16
 - NEW: "Save as defaults" button on Run Backup Now — persists component selection across page loads
 
