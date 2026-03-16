@@ -3,6 +3,9 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.5] - 2026-03-16
+- NEW: "Existing backups" checkbox — optionally include the cloudscale-backups/ directory in a backup; Explain modal updated
+
 ## [3.2.4] - 2026-03-16
 - NEW: Copy button next to backup storage path in Backup History panel
 
