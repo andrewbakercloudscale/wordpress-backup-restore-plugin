@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.7
+ * Version:           3.2.9
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.7');
+define('CS_BACKUP_VERSION',    '3.2.9');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -915,7 +915,7 @@ function cs_admin_page(): void {
                 <div class="cs-field-row cs-mt">
                     <label for="cs-ami-region-override"><strong>Region override</strong></label>
                     <input type="text" id="cs-ami-region-override" class="cs-input-sm" placeholder="e.g. af-south-1"
-                           value="<?php echo esc_attr($ami_region_override); ?>" style="width:100%;max-width:100%;box-sizing:border-box;">
+                           value="<?php echo esc_attr($ami_region_override); ?>" style="width:calc(20em - 50px);min-width:140px;">
                     <p class="cs-help">Set this if the region shown above is wrong or Unknown. Bypasses IMDS detection entirely. Example: <code>af-south-1</code></p>
                 </div>
 
