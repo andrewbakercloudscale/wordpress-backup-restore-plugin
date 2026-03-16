@@ -3,6 +3,9 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.7] - 2026-03-16
+- NEW: "Save as defaults" button on Run Backup Now — persists component selection across page loads
+
 ## [3.2.6] - 2026-03-16
 - FIX: S3 and AMI card buttons (Save, Test, Create AMI, Check Status, Refresh, Delete) were non-functional — restored missing JS functions removed during WordPress.org standards pass
 - FIX: "Existing backups" checkbox in Backup Schedule now saves correctly

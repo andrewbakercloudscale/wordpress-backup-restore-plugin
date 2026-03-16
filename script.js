@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.6 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.7 */
 jQuery(function ($) {
     'use strict';
 
@@ -169,6 +169,45 @@ jQuery(function ($) {
                 progress('cs-backup-fill', 'cs-backup-msg', '✗ Request failed (' + status + '). Check server error log.', 'error');
                 $btn.prop('disabled', false).text('▶ Run Backup Now');
             }
+        });
+    });
+
+    // ================================================================
+    // Save manual backup defaults
+    // ================================================================
+
+    $('#cs-save-manual-defaults').on('click', function () {
+        var $btn = $(this);
+        var $msg = $('#cs-manual-defaults-msg');
+
+        var components = [];
+        if ($('#cs-include-db').is(':checked'))          components.push('db');
+        if ($('#cs-include-media').is(':checked'))       components.push('media');
+        if ($('#cs-include-plugins').is(':checked'))     components.push('plugins');
+        if ($('#cs-include-themes').is(':checked'))      components.push('themes');
+        if ($('#cs-include-mu').is(':checked'))          components.push('mu');
+        if ($('#cs-include-languages').is(':checked'))   components.push('languages');
+        if ($('#cs-include-dropins').is(':checked'))     components.push('dropins');
+        if ($('#cs-include-backups-dir').is(':checked')) components.push('backups_dir');
+        if ($('#cs-include-htaccess').is(':checked'))    components.push('htaccess');
+        if ($('#cs-include-wpconfig').is(':checked'))    components.push('wpconfig');
+
+        $btn.prop('disabled', true);
+        $msg.text('Saving…').css('color', '#888').show();
+
+        $.post(CS.ajax_url, { action: 'cs_save_manual_defaults', nonce: CS.nonce, components: components },
+            function (res) {
+                if (res.success) {
+                    $msg.text('✓ Saved').css('color', '#2e7d32');
+                } else {
+                    $msg.text('✗ ' + res.data).css('color', '#c62828');
+                }
+            }
+        ).fail(function () {
+            $msg.text('✗ Request failed').css('color', '#c62828');
+        }).always(function () {
+            $btn.prop('disabled', false);
+            setTimeout(function () { $msg.fadeOut(); }, 3000);
         });
     });
 

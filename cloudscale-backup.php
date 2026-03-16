@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.6
+ * Version:           3.2.7
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.6');
+define('CS_BACKUP_VERSION',    '3.2.7');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -506,7 +506,9 @@ function cs_admin_page(): void {
     $minute          = intval(get_option('cs_run_minute',    0));
     $ami_run_hour    = intval(get_option('cs_ami_run_hour',  3));
     $ami_run_minute  = intval(get_option('cs_ami_run_minute', 30));
-    $sched_components = (array) get_option('cs_schedule_components', ['db', 'media', 'plugins', 'themes']);
+    $sched_components  = (array) get_option('cs_schedule_components', ['db', 'media', 'plugins', 'themes']);
+    $manual_defaults   = get_option('cs_manual_defaults', null);
+    $md                = is_array($manual_defaults) ? $manual_defaults : null; // null = no saved defaults yet
     $retention      = intval(get_option('cs_retention', 8));
     $backup_prefix  = sanitize_key(get_option('cs_backup_prefix', 'bkup')) ?: 'bkup';
     $s3_bucket    = get_option('cs_s3_bucket', '');
@@ -1112,21 +1114,27 @@ function cs_admin_page(): void {
                 <!-- Column 1: Core -->
                 <div class="cs-options-col">
                     <p class="cs-options-col-heading">Core</p>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-db" checked data-size="<?php echo (int) $db_size; ?>"> Database <code><?php echo $db_size > 0 ? esc_html(cs_format_size($db_size)) : '~unknown'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-media" checked data-size="<?php echo (int) $upload_size; ?>"> Media uploads <code><?php echo esc_html(cs_format_size($upload_size)); ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-plugins" checked data-size="<?php echo (int) $plugins_size; ?>"> Plugins <code><?php echo esc_html(cs_format_size($plugins_size)); ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-themes" checked data-size="<?php echo (int) $themes_size; ?>"> Themes <code><?php echo esc_html(cs_format_size($themes_size)); ?></code></label>
+                    <?php
+                    // Helper: checked if saved default exists for key, otherwise fall back to $fallback
+                    $mc = function(string $key, bool $fallback) use ($md): string {
+                        return ($md !== null ? in_array($key, $md, true) : $fallback) ? 'checked' : '';
+                    };
+                    ?>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-db" <?php echo $mc('db', true); ?> data-size="<?php echo (int) $db_size; ?>"> Database <code><?php echo $db_size > 0 ? esc_html(cs_format_size($db_size)) : '~unknown'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-media" <?php echo $mc('media', true); ?> data-size="<?php echo (int) $upload_size; ?>"> Media uploads <code><?php echo esc_html(cs_format_size($upload_size)); ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-plugins" <?php echo $mc('plugins', true); ?> data-size="<?php echo (int) $plugins_size; ?>"> Plugins <code><?php echo esc_html(cs_format_size($plugins_size)); ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-themes" <?php echo $mc('themes', true); ?> data-size="<?php echo (int) $themes_size; ?>"> Themes <code><?php echo esc_html(cs_format_size($themes_size)); ?></code></label>
                 </div>
                 <!-- Column 2: Other -->
                 <div class="cs-options-col cs-options-col--other">
                     <p class="cs-options-col-heading">Other</p>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-mu" <?php echo $mu_size > 0 ? 'checked' : ''; ?> data-size="<?php echo (int) $mu_size; ?>"> Must-use plugins <code><?php echo $mu_size > 0 ? esc_html(cs_format_size($mu_size)) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-languages" <?php echo $lang_size > 0 ? 'checked' : ''; ?> data-size="<?php echo (int) $lang_size; ?>"> Languages <code><?php echo $lang_size > 0 ? esc_html(cs_format_size($lang_size)) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-dropins" data-size="<?php echo (int) $dropins_size; ?>"> Dropins <small>(object-cache.php…)</small> <code><?php echo $dropins_size > 0 ? esc_html(cs_format_size($dropins_size)) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-backups-dir" data-size="<?php echo (int) $backups_dir_size; ?>"> Existing backups <small>(cloudscale-backups/)</small> <code><?php echo $backups_dir_size > 0 ? esc_html(cs_format_size($backups_dir_size)) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-htaccess" <?php echo $htaccess_size > 0 ? 'checked' : ''; ?> data-size="<?php echo (int) $htaccess_size; ?>"> .htaccess <code><?php echo $htaccess_size > 0 ? esc_html(cs_format_size($htaccess_size)) : 'not found'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-mu" <?php echo $mc('mu', $mu_size > 0); ?> data-size="<?php echo (int) $mu_size; ?>"> Must-use plugins <code><?php echo $mu_size > 0 ? esc_html(cs_format_size($mu_size)) : '0 B'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-languages" <?php echo $mc('languages', $lang_size > 0); ?> data-size="<?php echo (int) $lang_size; ?>"> Languages <code><?php echo $lang_size > 0 ? esc_html(cs_format_size($lang_size)) : '0 B'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-dropins" <?php echo $mc('dropins', false); ?> data-size="<?php echo (int) $dropins_size; ?>"> Dropins <small>(object-cache.php…)</small> <code><?php echo $dropins_size > 0 ? esc_html(cs_format_size($dropins_size)) : '0 B'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-backups-dir" <?php echo $mc('backups_dir', false); ?> data-size="<?php echo (int) $backups_dir_size; ?>"> Existing backups <small>(cloudscale-backups/)</small> <code><?php echo $backups_dir_size > 0 ? esc_html(cs_format_size($backups_dir_size)) : '0 B'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-htaccess" <?php echo $mc('htaccess', $htaccess_size > 0); ?> data-size="<?php echo (int) $htaccess_size; ?>"> .htaccess <code><?php echo $htaccess_size > 0 ? esc_html(cs_format_size($htaccess_size)) : 'not found'; ?></code></label>
                     <label class="cs-option-label cs-option-sensitive">
-                        <input type="checkbox" id="cs-include-wpconfig" data-size="<?php echo (int) $wpconfig_size; ?>">
+                        <input type="checkbox" id="cs-include-wpconfig" <?php echo $mc('wpconfig', false); ?> data-size="<?php echo (int) $wpconfig_size; ?>">
                         wp-config.php <code><?php echo $wpconfig_size > 0 ? esc_html(cs_format_size($wpconfig_size)) : 'not found'; ?></code>
                         <span class="cs-sensitive-badge">⚠ credentials</span>
                     </label>
@@ -1149,6 +1157,10 @@ function cs_admin_page(): void {
                         </div>
                     </div>
                     <button type="button" id="cs-run-backup" class="button button-primary cs-btn-lg">▶ <?php esc_html_e( 'Run Backup Now', 'cloudscale-backup' ); ?></button>
+                    <div style="margin-top:8px;">
+                        <button type="button" id="cs-save-manual-defaults" class="button"><?php esc_html_e( 'Save as defaults', 'cloudscale-backup' ); ?></button>
+                        <span id="cs-manual-defaults-msg" style="margin-left:8px;font-size:0.82rem;font-weight:600;display:none;"></span>
+                    </div>
                     <div id="cs-backup-progress" style="display:none" class="cs-progress-panel">
                         <p id="cs-backup-msg" class="cs-progress-msg">Starting backup...</p>
                         <div class="cs-progress-bar"><div id="cs-backup-fill" class="cs-progress-fill"></div></div>
@@ -1449,6 +1461,22 @@ add_action('wp_ajax_cs_restore_upload', function (): void {
 });
 
 // Schedule is now saved via plain HTML form POST (see page handler above)
+
+// ============================================================
+// AJAX — Save manual backup defaults
+// ============================================================
+
+add_action('wp_ajax_cs_save_manual_defaults', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
+    cs_verify_nonce();
+    $valid = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'backups_dir', 'htaccess', 'wpconfig'];
+    $raw   = isset($_POST['components']) && is_array($_POST['components']) ? $_POST['components'] : [];
+    $clean = array_values(array_intersect($raw, $valid));
+    update_option('cs_manual_defaults', $clean);
+    wp_send_json_success('Defaults saved');
+});
 
 // ============================================================
 // AJAX — Save retention
