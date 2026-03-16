@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.5
+ * Version:           3.2.6
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.5');
+define('CS_BACKUP_VERSION',    '3.2.6');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -474,7 +474,7 @@ function cs_admin_page(): void {
         update_option('cs_run_minute',        max(0,  min(59, intval($_POST['run_minute']        ?? 0))));
         update_option('cs_ami_run_hour',      max(0,  min(23, intval($_POST['ami_run_hour']      ?? 3))));
         update_option('cs_ami_run_minute',    max(0,  min(59, intval($_POST['ami_run_minute']    ?? 30))));
-        $valid_components = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'htaccess', 'wpconfig'];
+        $valid_components = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'backups_dir', 'htaccess', 'wpconfig'];
         $raw_components   = isset($_POST['schedule_components']) && is_array($_POST['schedule_components']) ? $_POST['schedule_components'] : [];
         $clean_components = array_values(array_intersect($raw_components, $valid_components));
         // Default to core four if nothing selected
@@ -537,8 +537,11 @@ function cs_admin_page(): void {
         <!-- ===================== HEADER ===================== -->
         <div class="cs-header">
             <div class="cs-header-title">
-                <h1>☁ <?php echo esc_html__( 'CloudScale Free Backup & Restore', 'cloudscale-backup' ); ?></h1>
-                <p class="cs-header-sub"><?php esc_html_e( 'Database · media · plugins · themes. No timeouts, no external services.', 'cloudscale-backup' ); ?> <span style="opacity:0.6;font-size:0.8em;">v<?php echo esc_html( CS_BACKUP_VERSION ); ?></span></p>
+                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+                    <h1 style="margin:0;">☁ <?php echo esc_html__( 'CloudScale Free Backup & Restore', 'cloudscale-backup' ); ?></h1>
+                    <span style="display:inline-block;background:#fff;color:#1565c0;font-size:0.95rem;font-weight:800;letter-spacing:0.04em;padding:3px 14px;border-radius:20px;font-family:monospace;line-height:1.6;flex-shrink:0;">v<?php echo esc_html( CS_BACKUP_VERSION ); ?></span>
+                </div>
+                <p class="cs-header-sub"><?php esc_html_e( 'Database · media · plugins · themes. No timeouts, no external services.', 'cloudscale-backup' ); ?></p>
                 <p class="cs-header-free">✅ <?php esc_html_e( '100% free forever — no licence, no premium tier, no feature restrictions. Everything is included.', 'cloudscale-backup' ); ?></p>
             </div>
             <div class="cs-header-status">
@@ -613,15 +616,16 @@ function cs_admin_page(): void {
                         <div style="display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:6px;">
                             <?php
                             $sched_comp_map = [
-                                'db'        => 'Database',
-                                'media'     => 'Media uploads',
-                                'plugins'   => 'Plugins',
-                                'themes'    => 'Themes',
-                                'mu'        => 'Must-use plugins',
-                                'languages' => 'Languages',
-                                'dropins'   => 'Dropins',
-                                'htaccess'  => '.htaccess',
-                                'wpconfig'  => 'wp-config.php',
+                                'db'          => 'Database',
+                                'media'       => 'Media uploads',
+                                'plugins'     => 'Plugins',
+                                'themes'      => 'Themes',
+                                'mu'          => 'Must-use plugins',
+                                'languages'   => 'Languages',
+                                'dropins'     => 'Dropins',
+                                'backups_dir' => 'Existing backups',
+                                'htaccess'    => '.htaccess',
+                                'wpconfig'    => 'wp-config.php',
                             ];
                             foreach ($sched_comp_map as $key => $label):
                             ?>
@@ -909,7 +913,7 @@ function cs_admin_page(): void {
                 <div class="cs-field-row cs-mt">
                     <label for="cs-ami-region-override"><strong>Region override</strong></label>
                     <input type="text" id="cs-ami-region-override" class="cs-input-sm" placeholder="e.g. af-south-1"
-                           value="<?php echo esc_attr($ami_region_override); ?>" style="width:320px;">
+                           value="<?php echo esc_attr($ami_region_override); ?>" style="width:100%;max-width:100%;box-sizing:border-box;">
                     <p class="cs-help">Set this if the region shown above is wrong or Unknown. Bypasses IMDS detection entirely. Example: <code>af-south-1</code></p>
                 </div>
 

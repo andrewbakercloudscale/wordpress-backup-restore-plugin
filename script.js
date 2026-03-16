@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.5 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.6 */
 jQuery(function ($) {
     'use strict';
 
@@ -408,67 +408,84 @@ function csShowExplain(title, body) {
 
 window.csScheduleExplain = function () {
     csShowExplain('Backup Schedule',
-        '<p>Configure when automatic backups run. Choose a day of the week and a time — the plugin creates a backup at that point every week.</p>' +
-        '<p>Backups run via WP-Cron, which fires on the next page load at or after the scheduled time. On low-traffic sites you can add a real server cron job to keep timing accurate.</p>' +
-        '<p>Disable the schedule here if you prefer to run backups manually only.</p>'
+        '<p>Two independent backup types, each with their own day and time schedule:</p>' +
+        '<ul style="margin:8px 0 8px 18px;padding:0;">' +
+        '<li><strong>File backup</strong> — packages your chosen components (database, media, plugins, themes, etc.) into a single <code>.zip</code> stored on the server. If S3 is configured the zip is synced off-site straight after.</li>' +
+        '<li><strong>AMI snapshot</strong> — creates a full Amazon Machine Image of this EC2 instance via the AWS CLI: a complete disk-level snapshot you can use to launch a new server or roll back everything. Requires AWS CLI and <code>ec2:CreateImage</code> / <code>ec2:RebootInstances</code> IAM permissions.</li>' +
+        '</ul>' +
+        '<p>For each type, tick the days of the week it should run and set the time. You can pick multiple days — for example Monday, Wednesday, Friday for file backups and Sunday for AMI snapshots.</p>' +
+        '<p>Backups fire via WP-Cron, which triggers on the next page load at or after the scheduled time. On low-traffic sites add a real server cron (<code>*/5 * * * * wget -q -O- yoursite.com/wp-cron.php</code>) for accurate timing.</p>' +
+        '<p>Leave all days unchecked (or disable the toggle) to turn off automatic backups and run manually only.</p>'
     );
 };
 
 window.csRetentionExplain = function () {
     csShowExplain('Retention & Storage',
-        '<p>Set how many backup files to keep on disk. After each backup the oldest files beyond this limit are deleted automatically.</p>' +
-        '<p>The storage estimate shows how much space your chosen retention count will use, based on the size of your most recent backup. Keep retention low on servers with limited disk space.</p>'
+        '<p>Controls how many backup zips are kept on disk. After every backup (scheduled or manual) the oldest files beyond this limit are deleted automatically.</p>' +
+        '<p><strong>Filename prefix</strong> — the prefix is prepended to every backup zip name (e.g. <code>mysite_f12.zip</code>). Changing it does not affect existing backups.</p>' +
+        '<p><strong>Storage estimate</strong> — based on the size of your most recent backup multiplied by your retention count. If the estimate exceeds free disk space the counter turns red — lower retention or free up space before the next backup.</p>'
     );
 };
 
 window.csS3Explain = function () {
     csShowExplain('S3 Remote Backup',
-        '<p>After each backup the zip file is synced to your AWS S3 bucket using the AWS CLI. This gives you an off-site copy that survives server failure.</p>' +
-        '<p><strong>Requirements:</strong> AWS CLI must be installed on the server and configured with credentials that have <code>s3:PutObject</code> and <code>s3:ListBucket</code> permissions on the target bucket.</p>' +
-        '<p>Set a bucket name and optional path prefix (e.g. <code>my-bucket/backups/</code>). Failed syncs are retried automatically.</p>'
+        '<p>After every backup (scheduled or manual) the zip is copied to your AWS S3 bucket — an off-site copy that survives server failure or data loss.</p>' +
+        '<p><strong>Requirements:</strong> AWS CLI installed on the server with credentials granting <code>s3:PutObject</code> and <code>s3:ListBucket</code> on the target bucket. Use the <em>Test connection</em> button to verify before relying on it.</p>' +
+        '<p><strong>Bucket</strong> — just the bucket name (e.g. <code>my-backups</code>). <strong>Path prefix</strong> — optional subfolder inside the bucket (e.g. <code>backups/prod/</code>). Leave prefix blank to put files in the bucket root.</p>' +
+        '<p>If a sync fails, the plugin retries automatically after 5 minutes. Sync status for each file is shown in the Backup History table.</p>'
     );
 };
 
 window.csAmiExplain = function () {
     csShowExplain('EC2 AMI Snapshot',
-        '<p>Creates a full Amazon Machine Image (AMI) of this EC2 instance — a complete disk-level snapshot you can use to launch a new instance or roll back the entire server.</p>' +
-        '<p><strong>Requirements:</strong> AWS CLI installed, with <code>ec2:CreateImage</code>, <code>ec2:DescribeImages</code>, <code>ec2:DeregisterImage</code>, and <code>ec2:RebootInstances</code> IAM permissions.</p>' +
-        '<p>AMI creation happens asynchronously. The plugin polls AWS every 10 minutes and updates the status log when the image becomes available.</p>'
+        '<p>Creates a full Amazon Machine Image (AMI) of this EC2 instance — a disk-level snapshot of the entire server you can use to launch a replacement instance or roll back to a known-good state.</p>' +
+        '<p>Unlike a file backup (which only captures WordPress files and the database), an AMI captures the whole disk: OS, web server config, PHP, every file. It is the safest recovery option if the server itself becomes unrecoverable.</p>' +
+        '<p><strong>Requirements:</strong> AWS CLI installed on this instance, with IAM permissions: <code>ec2:CreateImage</code>, <code>ec2:DescribeImages</code>, <code>ec2:DeregisterImage</code>, <code>ec2:RebootInstances</code>. Set an AMI name prefix to identify snapshots.</p>' +
+        '<p>⚠ AMI creation briefly reboots the instance by default. Schedule it during low-traffic hours.</p>' +
+        '<p>Creation is asynchronous — the plugin polls AWS every 10 minutes and logs when the image becomes available. Old AMIs beyond the retention limit are deregistered automatically.</p>'
     );
 };
 
 window.csSystemExplain = function () {
     csShowExplain('System Info',
-        '<p>A snapshot of your server environment relevant to backup operations: PHP version, available disk space, max execution time, memory limit, and whether key tools like <code>mysqldump</code> and the AWS CLI are present.</p>' +
-        '<p>Use this to diagnose backup failures — for example, a low <code>max_execution_time</code> can cause timeouts on large sites.</p>'
+        '<p>A live snapshot of your server environment. Use it to diagnose backup problems before they happen:</p>' +
+        '<ul style="margin:8px 0 8px 18px;padding:0;">' +
+        '<li><strong>mysqldump</strong> — must be present and executable for database backups to work.</li>' +
+        '<li><strong>AWS CLI</strong> — required for S3 sync and AMI snapshots.</li>' +
+        '<li><strong>max_execution_time / memory_limit</strong> — low values cause timeouts or out-of-memory errors on large sites. Set to <code>0</code> (unlimited) in <code>php.ini</code> or via <code>wp-config.php</code> if backups are failing.</li>' +
+        '<li><strong>Free disk space</strong> — must comfortably exceed your backup size × retention count.</li>' +
+        '</ul>'
     );
 };
 
 window.csBackupExplain = function () {
     csShowExplain('Run Backup Now',
-        '<p>Run a one-off backup immediately. Choose which components to include:</p>' +
+        '<p>Creates a backup zip immediately with the components you select. Sizes shown are uncompressed estimates — the final zip is typically smaller.</p>' +
         '<ul style="margin:8px 0 8px 18px;padding:0;">' +
-        '<li><strong>Database</strong> — all MySQL tables via <code>mysqldump</code></li>' +
-        '<li><strong>Media</strong> — your <code>wp-content/uploads/</code> folder</li>' +
-        '<li><strong>Plugins / Themes</strong> — <code>wp-content/plugins/</code> and <code>wp-content/themes/</code></li>' +
-        '<li><strong>Must-Use Plugins</strong> — <code>wp-content/mu-plugins/</code></li>' +
-        '<li><strong>Languages / Drop-ins</strong> — translation files and drop-in files</li>' +
-        '<li><strong>Existing backups</strong> — the <code>cloudscale-backups/</code> directory containing all prior backup zips</li>' +
-        '<li><strong>.htaccess / wp-config.php</strong> — server and WordPress config files</li>' +
+        '<li><strong>Database</strong> — full SQL dump of all MySQL tables via <code>mysqldump</code>. Required for a restorable backup.</li>' +
+        '<li><strong>Media uploads</strong> — <code>wp-content/uploads/</code>. Often the largest component on media-heavy sites.</li>' +
+        '<li><strong>Plugins / Themes</strong> — <code>wp-content/plugins/</code> and <code>wp-content/themes/</code>. Safe to omit if you can reinstall from WordPress.org.</li>' +
+        '<li><strong>Must-use plugins</strong> — <code>wp-content/mu-plugins/</code>. Usually small; include if you have custom mu-plugins.</li>' +
+        '<li><strong>Languages</strong> — <code>wp-content/languages/</code> translation files.</li>' +
+        '<li><strong>Dropins</strong> — special files like <code>object-cache.php</code> in <code>wp-content/</code>.</li>' +
+        '<li><strong>Existing backups</strong> — includes the <code>cloudscale-backups/</code> folder itself. Useful for a full archive copy; skip it for routine backups to avoid recursive bloat.</li>' +
+        '<li><strong>.htaccess</strong> — Apache rewrite rules and server config.</li>' +
+        '<li><strong>wp-config.php</strong> — contains database credentials. Handle the resulting zip with care.</li>' +
         '</ul>' +
-        '<p>Everything is packaged into a single <code>.zip</code> stored on the server. If S3 is configured the zip is synced off-site immediately after.</p>'
+        '<p>The zip is stored on the server. If S3 is configured it is synced off-site immediately after.</p>'
     );
 };
 
 window.csHistoryExplain = function () {
     csShowExplain('Backup History',
-        '<p>All backups stored on this server. For each backup you can:</p>' +
+        '<p>All backup zips currently stored on the server, newest first. For each entry:</p>' +
         '<ul style="margin:8px 0 8px 18px;padding:0;">' +
-        '<li><strong>Download</strong> — save the zip to your local machine</li>' +
-        '<li><strong>Restore</strong> — drop and reimport the database from this backup (Full and DB backups only)</li>' +
-        '<li><strong>Delete</strong> — permanently remove the file from the server</li>' +
+        '<li><strong>Download</strong> — save the zip to your local machine for off-site storage.</li>' +
+        '<li><strong>Restore</strong> — drops all database tables and reimports from this backup. Only available on Full and DB-only backups. The site enters maintenance mode during the restore and comes back online automatically.</li>' +
+        '<li><strong>Delete</strong> — permanently removes the file from the server (cannot be undone).</li>' +
         '</ul>' +
-        '<p>Backups are stored as zip files on the server. The storage path is shown at the bottom of this panel. The directory is protected by <code>.htaccess</code> to prevent direct browser access.</p>'
+        '<p>The <strong>Type</strong> column shows what was included: <em>Full</em> (all components), <em>DB</em> (database only), or a custom combination. The <strong>S3</strong> column shows sync status if S3 is configured.</p>' +
+        '<p>Backups are stored in <code>cloudscale-backups/</code> inside <code>wp-content/</code>. The directory is protected by <code>.htaccess</code> to block direct browser access.</p>'
     );
 };
 
@@ -495,8 +512,229 @@ window.csCopyBackupPath = function () {
 
 window.csRestoreExplain = function () {
     csShowExplain('Restore from Uploaded File',
-        '<p>Upload a backup zip (created by this plugin) or a raw <code>.sql</code> file from your local machine to restore the database.</p>' +
-        '<p><strong>What happens:</strong> The site is put into maintenance mode, all database tables are dropped, the SQL is imported, then maintenance mode is lifted.</p>' +
-        '<p><strong>Take a server snapshot before restoring.</strong> A database restore is irreversible — if something goes wrong a snapshot lets you recover instantly.</p>'
+        '<p>Upload a backup zip from this plugin or a raw <code>.sql</code> file from your local machine to restore the database on this server.</p>' +
+        '<p><strong>What happens:</strong> The site enters maintenance mode → all existing database tables are dropped → the SQL is imported → maintenance mode is lifted automatically.</p>' +
+        '<p><strong>Accepted files:</strong> <code>.zip</code> (must contain a <code>.sql</code> dump inside, as created by this plugin) or a plain <code>.sql</code> file.</p>' +
+        '<p><strong>This is irreversible.</strong> Take an AMI snapshot or download a fresh backup before restoring. If the import fails for any reason, maintenance mode is removed and the error is shown — but your previous database content will be gone.</p>'
     );
+};
+
+// ================================================================
+// S3 card functions
+// ================================================================
+
+function csS3Msg(text, ok) {
+    var el = document.getElementById('cs-s3-msg');
+    el.innerHTML = text;
+    el.style.color = ok ? '#2e7d32' : '#c62828';
+}
+
+function csS3Post(action, extra, onDone) {
+    var params = 'action=' + action + '&nonce=' + encodeURIComponent(CS.nonce);
+    if (extra) params += '&' + extra;
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', CS.ajax_url, true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.onload = function () {
+        try { onDone(JSON.parse(xhr.responseText)); }
+        catch (e) { onDone({ success: false, data: 'Bad response: ' + xhr.responseText.substring(0, 100) }); }
+    };
+    xhr.onerror = function () { onDone({ success: false, data: 'Network error' }); };
+    xhr.send(params);
+}
+
+window.csS3Save = function () {
+    var bucket = document.getElementById('cs-s3-bucket').value.trim();
+    var prefix = document.getElementById('cs-s3-prefix').value.trim() || 'backups/';
+    csS3Msg('Saving...', true);
+    csS3Post('cs_save_s3',
+        'bucket=' + encodeURIComponent(bucket) + '&prefix=' + encodeURIComponent(prefix),
+        function (res) { csS3Msg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success); }
+    );
+};
+
+window.csS3Test = function () {
+    csS3Msg('Testing...', true);
+    csS3Post('cs_test_s3', '', function (res) {
+        csS3Msg((res.success ? '&#10003; ' : '&#10007; ') + res.data, res.success);
+    });
+};
+
+window.csS3SyncFile = function (btn, filename) {
+    btn.disabled = true;
+    btn.textContent = '…';
+    csS3Post('cs_s3_sync_file', 'filename=' + encodeURIComponent(filename), function (res) {
+        if (res.success) {
+            var td = btn.closest ? btn.closest('td') : btn.parentNode;
+            if (td) td.innerHTML = '<span style="color:#2e7d32;font-size:16px;">&#10003;</span>';
+        } else {
+            btn.disabled = false;
+            btn.textContent = '↑ Retry';
+            var errEl = btn.previousElementSibling;
+            if (errEl) errEl.textContent = res.data || 'Sync failed';
+            else alert('S3 sync failed: ' + (res.data || 'Unknown error'));
+        }
+    });
+};
+
+// ================================================================
+// AMI card functions
+// ================================================================
+
+function csAmiMsg(text, ok) {
+    var el = document.getElementById('cs-ami-msg');
+    el.innerHTML = text;
+    el.style.color = ok ? '#2e7d32' : '#c62828';
+}
+
+function csAmiPost(action, extra, onDone) {
+    csS3Post(action, extra, onDone); // same transport, reuse helper
+}
+
+window.csAmiSave = function () {
+    var prefix         = document.getElementById('cs-ami-prefix').value.trim();
+    var reboot         = document.getElementById('cs-ami-reboot').checked ? '1' : '0';
+    var regionOverride = document.getElementById('cs-ami-region-override').value.trim();
+    var amiMax         = parseInt(document.getElementById('cs-ami-max').value, 10) || 10;
+    csAmiMsg('Saving...', true);
+    csAmiPost('cs_save_ami',
+        'prefix=' + encodeURIComponent(prefix) +
+        '&reboot=' + reboot +
+        '&region_override=' + encodeURIComponent(regionOverride) +
+        '&ami_max=' + amiMax,
+        function (res) { csAmiMsg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success); }
+    );
+};
+
+window.csAmiCreate = function () {
+    var prefix = document.getElementById('cs-ami-prefix').value.trim();
+    if (!prefix) { csAmiMsg('&#10007; Enter an AMI name prefix first.', false); return; }
+    var reboot = document.getElementById('cs-ami-reboot').checked;
+    var msg = 'Create an AMI snapshot of this instance now?';
+    if (reboot) msg += '\n\nWARNING: The instance will be REBOOTED. This will cause brief downtime.';
+    if (!confirm(msg)) return;
+    csAmiMsg('Creating AMI\u2026 this may take a moment.', true);
+    csAmiPost('cs_create_ami', '', function (res) {
+        if (res.success) {
+            csAmiMsg('&#10003; ' + (res.data.message || 'AMI created'), true);
+            setTimeout(function () { location.reload(); }, 2000);
+        } else {
+            csAmiMsg('&#10007; ' + (res.data || 'AMI creation failed'), false);
+        }
+    });
+};
+
+window.csAmiStatus = function () {
+    csAmiMsg('Checking\u2026', true);
+    csAmiPost('cs_ami_status', '', function (res) {
+        csAmiMsg((res.success ? '&#10003; ' + res.data : '&#10007; ' + (res.data || 'Could not check status')), res.success);
+    });
+};
+
+function csAmiRefreshAll() {
+    var btn = document.getElementById('cs-ami-refresh-all');
+    if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Refreshing\u2026'; }
+    csAmiMsg('Refreshing all AMI states\u2026', true);
+    csAmiPost('cs_ami_refresh_all', '', function (res) {
+        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh All'; }
+        if (!res.success) { csAmiMsg('&#10007; ' + (res.data || 'Refresh failed'), false); return; }
+        var results = res.data.results || [];
+        var updated = 0;
+        results.forEach(function (r) {
+            var amiId       = r.ami_id;
+            var state       = r.state;
+            var stateCell   = document.getElementById('cs-ami-state-' + amiId);
+            var actionsCell = document.getElementById('cs-ami-actions-' + amiId);
+            var row         = document.getElementById('cs-ami-row-' + amiId);
+            if (!stateCell) return;
+            updated++;
+            if (state === 'deleted in AWS') {
+                if (row) row.querySelectorAll('td:not(:last-child)').forEach(function (td) { td.style.opacity = '0.45'; });
+                stateCell.innerHTML = '<span style="color:#999;font-weight:600;">&#128465; deleted in AWS</span>';
+                if (actionsCell) actionsCell.innerHTML = '<button type="button" onclick="csAmiDelete(\'' + amiId + '\',\'' + r.name.replace(/'/g, '') + '\',true)" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Remove</button>';
+            } else {
+                if (row) row.querySelectorAll('td').forEach(function (td) { td.style.opacity = ''; });
+                var color = state === 'available' ? '#2e7d32' : (state === 'pending' ? '#e65100' : '#757575');
+                var icon  = state === 'available' ? '&#10003;' : (state === 'pending' ? '&#9203;' : '&#10007;');
+                stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + state + '</span>';
+                if (actionsCell) actionsCell.innerHTML = '<button type="button" onclick="csAmiDelete(\'' + amiId + '\',\'' + r.name.replace(/'/g, '') + '\',false)" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>';
+            }
+        });
+        csAmiMsg('&#10003; Refreshed ' + updated + ' AMI' + (updated !== 1 ? 's' : ''), true);
+    });
+}
+
+window.csAmiResetAndRefresh = function () {
+    var btn = document.getElementById('cs-ami-refresh-all');
+    if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Refreshing\u2026'; }
+    csAmiMsg('Resetting and refreshing\u2026', true);
+    csAmiPost('cs_ami_reset_deleted', '', function (res) {
+        if (!res.success) {
+            if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh All'; }
+            csAmiMsg('&#10007; Reset failed: ' + res.data, false);
+            return;
+        }
+        csAmiRefreshAll();
+    });
+};
+
+window.csAmiRefreshOne = function (amiId) {
+    var stateCell = document.getElementById('cs-ami-state-' + amiId);
+    if (stateCell) stateCell.innerHTML = '<span style="color:#888;">&#8635; checking\u2026</span>';
+    csAmiPost('cs_ami_status', 'ami_id=' + encodeURIComponent(amiId), function (res) {
+        if (!stateCell) return;
+        if (res.success && res.data && res.data.state) {
+            var state = res.data.state;
+            var color = state === 'available' ? '#2e7d32' : (state === 'pending' ? '#e65100' : '#757575');
+            var icon  = state === 'available' ? '&#10003;' : (state === 'pending' ? '&#9203;' : '&#10007;');
+            stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + state + '</span>';
+        } else {
+            stateCell.innerHTML = '<span style="color:#c62828;">&#10007; ' + (res.data || 'error') + '</span>';
+        }
+    });
+};
+
+window.csAmiDelete = function (amiId, amiName, alreadyDeleted) {
+    var label = amiName ? amiName + ' (' + amiId + ')' : amiId;
+    if (alreadyDeleted) {
+        if (!confirm('Remove this record from the log?\n\n' + label + '\n\nThis AMI has already been deleted in AWS.')) return;
+        csAmiMsg('Removing record\u2026', true);
+        csAmiPost('cs_ami_remove_record', 'ami_id=' + encodeURIComponent(amiId), function (res) {
+            if (res.success) {
+                csAmiMsg('&#10003; Record removed', true);
+                var row = document.getElementById('cs-ami-row-' + amiId);
+                if (row) row.remove();
+            } else {
+                csAmiMsg('&#10007; ' + (res.data || 'Remove failed'), false);
+            }
+        });
+        return;
+    }
+    if (!confirm('Deregister (delete) this AMI?\n\n' + label + '\n\nAssociated EBS snapshots will NOT be deleted automatically.')) return;
+    csAmiMsg('Deregistering ' + amiId + '\u2026', true);
+    csAmiPost('cs_deregister_ami', 'ami_id=' + encodeURIComponent(amiId), function (res) {
+        if (res.success) {
+            csAmiMsg('&#10003; ' + (res.data || 'AMI deregistered'), true);
+            var row = document.getElementById('cs-ami-row-' + amiId);
+            if (row) row.remove();
+        } else {
+            csAmiMsg('&#10007; ' + (res.data || 'Deregister failed'), false);
+        }
+    });
+};
+
+window.csAmiRemoveFailed = function (name) {
+    if (!confirm('Remove this failed record from the log?\n\n' + name)) return;
+    csAmiMsg('Removing\u2026', true);
+    csAmiPost('cs_ami_remove_failed', 'name=' + encodeURIComponent(name), function (res) {
+        if (res.success) {
+            csAmiMsg('&#10003; Record removed', true);
+            document.querySelectorAll('#cs-ami-tbody tr').forEach(function (row) {
+                var cells = row.querySelectorAll('td');
+                if (cells.length && cells[0].textContent.trim() === name) row.remove();
+            });
+        } else {
+            csAmiMsg('&#10007; ' + (res.data || 'Remove failed'), false);
+        }
+    });
 };
