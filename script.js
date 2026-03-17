@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.36 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.37 */
 jQuery(function ($) {
     'use strict';
 
@@ -542,6 +542,7 @@ window.csS3Diagnose = function () {
 };
 
 window.csCloudScheduleSave = function () {
+    var $ = window.jQuery;
     var days = [];
     $('.cs-ami-day-check:checked').each(function () { days.push($(this).val()); });
     var $msg = $('#cs-cloud-schedule-msg');
