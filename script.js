@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.15 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.21 */
 jQuery(function ($) {
     'use strict';
 
@@ -473,6 +473,63 @@ window.csS3Explain = function () {
         '<p><strong>Bucket</strong> — just the bucket name (e.g. <code>my-backups</code>). <strong>Path prefix</strong> — optional subfolder inside the bucket (e.g. <code>backups/prod/</code>). Leave prefix blank to put files in the bucket root.</p>' +
         '<p>If a sync fails, the plugin retries automatically after 5 minutes. Sync status for each file is shown in the Backup History table.</p>'
     );
+};
+
+window.csS3Diagnose = function () {
+    var d = window.CS_S3_DIAG || {};
+    var ok  = '<span style="color:#2e7d32;font-weight:700;">&#10003;</span>';
+    var err = '<span style="color:#c62828;font-weight:700;">&#10007;</span>';
+
+    function row(icon, label, value, desc) {
+        return '<tr>' +
+            '<td style="padding:6px 8px 2px 0;white-space:nowrap;vertical-align:top;">' + icon + ' <strong>' + label + '</strong></td>' +
+            '<td style="padding:6px 0 2px 8px;vertical-align:top;"><code style="word-break:break-all;">' + value + '</code></td>' +
+            '</tr>' +
+            '<tr><td colspan="2" style="padding:0 0 10px 20px;font-size:0.82rem;color:#666;">' + desc + '</td></tr>';
+    }
+
+    var rows = row(
+        d.aws_found ? ok : err,
+        'AWS CLI',
+        d.aws_version || 'Not found',
+        'AWS CLI binary found on the server. Required for S3 sync and EC2 AMI creation.'
+    );
+    rows += row(
+        d.bucket ? ok : err,
+        'S3 Bucket',
+        d.bucket || 'Not configured',
+        'The S3 bucket backups are synced to. Enter the bucket name above and click Save.'
+    );
+    rows += row(
+        ok,
+        'Key prefix',
+        d.prefix || '/',
+        'Folder path inside the bucket. Leave as <code>backups/</code> or set to <code>/</code> for bucket root.'
+    );
+    if (d.bucket) {
+        rows += row(
+            ok,
+            'Destination',
+            's3://' + d.bucket + '/' + d.prefix,
+            'Full S3 path where each backup zip is uploaded after creation.'
+        );
+        rows += row(
+            d.synced > 0 ? ok : err,
+            'Backups synced',
+            d.synced + ' of ' + d.total,
+            d.synced === d.total
+                ? 'All backups in history have been successfully synced to S3.'
+                : 'Some backups have not been synced. Use the S3 button in Backup History to sync them manually.'
+        );
+        rows += row(
+            d.last_fmt ? ok : err,
+            'Last sync',
+            d.last_fmt || 'Never',
+            'When the most recent successful upload to S3 completed.'
+        );
+    }
+
+    csShowExplain('S3 Diagnostics', '<table style="width:100%;border-collapse:collapse;">' + rows + '</table>');
 };
 
 window.csAmiExplain = function () {

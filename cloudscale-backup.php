@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.15
+ * Version:           3.2.21
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.15');
+define('CS_BACKUP_VERSION',    '3.2.21');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -816,6 +816,10 @@ function cs_admin_page(): void {
             </div>
 
             <!-- S3 REMOTE BACKUP CARD — self-contained, no script.js dependency -->
+            <?php
+            $aws_path = cs_find_aws();
+            $aws_ver  = $aws_path ? trim((string) shell_exec(escapeshellarg($aws_path) . ' --version 2>&1')) : '';
+            ?>
             <div class="cs-card cs-card--pink">
                 <div class="cs-card-stripe cs-stripe--pink" style="background:linear-gradient(135deg,#880e4f 0%,#e91e8c 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
                     <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#9729; <?php echo esc_html__( 'S3 Remote Backup', 'cloudscale-backup' ); ?></h2>
@@ -823,19 +827,6 @@ function cs_admin_page(): void {
                 </div>
 
                 <p class="cs-help">After each backup, the zip will be synced to your S3 bucket using the AWS CLI. The AWS CLI must be installed and configured on the server with appropriate credentials.</p>
-
-                <div class="cs-info-row">
-                    <span>AWS CLI</span>
-                    <strong><?php
-                        $aws_path = cs_find_aws();
-                        if ($aws_path) {
-                            $aws_ver = trim((string) shell_exec(escapeshellarg($aws_path) . ' --version 2>&1'));
-                            echo '<span style="color:#2e7d32">&#10003; ' . esc_html($aws_ver ?: $aws_path) . '</span>';
-                        } else {
-                            echo '<span style="color:#c62828">&#10007; Not found in PATH or common locations</span>';
-                        }
-                    ?></strong>
-                </div>
 
                 <div class="cs-field-row cs-mt">
                     <label for="cs-s3-bucket"><strong>S3 Bucket name</strong></label>
@@ -854,19 +845,20 @@ function cs_admin_page(): void {
                 <div style="margin-top:12px;">
                     <button type="button" onclick="csS3Save()" class="button button-primary"><?php esc_html_e( 'Save S3 Settings', 'cloudscale-backup' ); ?></button>
                     <button type="button" onclick="csS3Test()" class="button" style="margin-left:8px"><?php esc_html_e( 'Test Connection', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csS3Diagnose()" class="button" style="margin-left:8px"><?php esc_html_e( 'Diagnose', 'cloudscale-backup' ); ?></button>
                     <span id="cs-s3-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
                 </div>
 
+                <?php
+                $s3_log    = (array) get_option('cs_s3_log', []);
+                $s3_synced = array_filter($s3_log, fn($e) => !empty($e['ok']));
+                $s3_last   = empty($s3_synced) ? null : max(array_column($s3_synced, 'time'));
+                ?>
                 <?php if ($s3_bucket): ?>
                 <div class="cs-info-row cs-mt">
                     <span>Destination</span>
                     <strong><code>s3://<?php echo esc_html(rtrim($s3_bucket, '/') . '/' . ltrim($s3_prefix, '/')); ?></code></strong>
                 </div>
-                <?php
-                $s3_log     = (array) get_option('cs_s3_log', []);
-                $s3_synced  = array_filter($s3_log, fn($e) => !empty($e['ok']));
-                $s3_last    = empty($s3_synced) ? null : max(array_column($s3_synced, 'time'));
-                ?>
                 <div class="cs-info-row">
                     <span>Backups in S3</span>
                     <strong><?php echo (int) count($s3_synced); ?> of <?php echo (int) count($backups); ?></strong>
@@ -1116,6 +1108,16 @@ function cs_admin_page(): void {
                 'latest'    => $latest_size,  // actual compressed size of last backup
             ];
             wp_add_inline_script( 'cs-script', 'window.CS_BACKUP_SIZES = ' . wp_json_encode( $backup_sizes ) . ';', 'before' );
+            $s3_diag = [
+                'aws_found'   => (bool) $aws_path,
+                'aws_version' => $aws_ver,
+                'bucket'      => $s3_bucket,
+                'prefix'      => $s3_prefix,
+                'synced'      => count($s3_synced),
+                'total'       => count($backups),
+                'last_fmt'    => $s3_last ? cs_human_age($s3_last) . ' ago (' . wp_date('j M Y H:i', $s3_last) . ')' : null,
+            ];
+            wp_add_inline_script( 'cs-script', 'window.CS_S3_DIAG = ' . wp_json_encode( $s3_diag ) . ';', 'before' );
             ?>
             <div class="cs-run-grid">
                 <!-- Column 1: Core -->
