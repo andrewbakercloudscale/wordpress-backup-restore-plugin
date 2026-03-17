@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.28 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.29 */
 jQuery(function ($) {
     'use strict';
 
@@ -739,16 +739,28 @@ window.csGDriveTest = function () {
 
 window.csGDriveExplain = function () {
     csShowExplain('Google Drive Backup',
-        '<p>After every backup (scheduled or manual) the zip is copied to Google Drive via <strong>rclone</strong> — an off-site copy that survives server failure.</p>' +
-        '<p><strong>Setup steps:</strong></p>' +
-        '<ol style="margin:8px 0 8px 18px;padding:0;">' +
-        '<li>Install rclone on the server: <code>curl https://rclone.org/install.sh | sudo bash</code></li>' +
-        '<li>Run <code>rclone config</code> as the <code>apache</code> user (or whichever user runs PHP) to create a Google Drive remote. Give it a name like <code>gdrive</code>.</li>' +
-        '<li>Enter the remote name and destination folder above and click <em>Save Drive Settings</em>.</li>' +
-        '<li>Click <em>Test Connection</em> to verify rclone can reach your Drive.</li>' +
+        '<p>After every backup the zip is automatically copied to your Google Drive. Setup takes about 5 minutes and only needs to be done once.</p>' +
+        '<hr style="margin:12px 0;border:none;border-top:1px solid #e0e0e0;">' +
+        '<p style="margin:0 0 6px;"><strong>Step 1 — SSH into your server</strong></p>' +
+        '<p style="margin:0 0 12px;color:#555;">Open a terminal on your computer and connect to the server.</p>' +
+        '<p style="margin:0 0 6px;"><strong>Step 2 — Run the setup wizard</strong></p>' +
+        '<p style="margin:0 0 4px;color:#555;">Paste this command (it walks you through the rest):</p>' +
+        '<code style="display:block;background:#f5f5f5;padding:8px 10px;border-radius:4px;margin:0 0 12px;font-size:0.85rem;">sudo -u apache rclone config</code>' +
+        '<p style="margin:0 0 6px;"><strong>Step 3 — Answer the prompts</strong></p>' +
+        '<ol style="margin:4px 0 12px 18px;padding:0;color:#555;line-height:1.8;">' +
+        '<li>Press <code>n</code> for <em>New remote</em></li>' +
+        '<li>Type a name — use <code>gdrive</code></li>' +
+        '<li>Choose <code>drive</code> (Google Drive) from the list</li>' +
+        '<li>Press Enter to skip client_id and client_secret (leave blank)</li>' +
+        '<li>Choose scope <code>1</code> — full access</li>' +
+        '<li>Press Enter to skip root_folder_id and service_account_file</li>' +
+        '<li>Press <code>n</code> — no advanced config</li>' +
+        '<li>Press <code>n</code> — no auto config (server has no browser)</li>' +
         '</ol>' +
-        '<p><strong>Remote name</strong> — the name you chose in <code>rclone config</code> (e.g. <code>gdrive</code>). <strong>Destination folder</strong> — subfolder inside your Drive to store backups (e.g. <code>cloudscale-backups/</code>).</p>' +
-        '<p>rclone uses OAuth2 to authenticate with Google. No service account JSON is needed — authentication is done interactively during <code>rclone config</code>.</p>'
+        '<p style="margin:0 0 6px;"><strong>Step 4 — Authorise with Google</strong></p>' +
+        '<p style="margin:0 0 12px;color:#555;">rclone prints a long URL. Open it on <strong>your laptop</strong>, sign in to Google, click Allow, then paste the code it gives you back into the terminal.</p>' +
+        '<p style="margin:0 0 6px;"><strong>Step 5 — Save settings here</strong></p>' +
+        '<p style="margin:0;color:#555;">Enter <code>gdrive</code> as the remote name above, set a destination folder (e.g. <code>cloudscale-backups/</code>), click <em>Save Drive Settings</em>, then click <em>Test Connection</em> to confirm it works.</p>'
     );
 };
 
