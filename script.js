@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.33 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.34 */
 jQuery(function ($) {
     'use strict';
 
@@ -808,10 +808,12 @@ window.csGDriveExplain = function () {
         hr() +
         h('Step 5 — Authorise on your laptop') +
         note('The server will print: <em>Execute the following on the machine with the web browser:</em>') +
-        note('Open a <strong>new terminal on your laptop</strong> (leave the SSH session open) and run:') +
+        note('Open a <strong>new terminal on your laptop</strong> (leave the SSH session open). If rclone is not installed on your laptop, install it first:') +
+        cmd('brew install rclone') +
+        note('Then run:') +
         cmd('rclone authorize "drive"') +
-        note('If rclone is not on your laptop: <code>brew install rclone</code> first. Your browser opens — sign in to Google, click Allow. The laptop terminal prints:') +
-        '<code style="display:block;background:#1e1e1e;color:#d4d4d4;padding:8px 12px;border-radius:4px;margin:4px 0 6px;font-size:0.78rem;">Paste the following into your remote machine ---&gt;\n{"access_token":"ya29.a0ATkoCc6...","token_type":"Bearer","refresh_token":"1//03mUqzc...","expiry":"2026-03-18T01:01:25.108529+02:00","expires_in":3599}\n&lt;---End paste</code>' +
+        note('Your browser opens — sign in to Google, click Allow. The laptop terminal prints:') +
+        '<code style="display:block;background:#1e1e1e;color:#d4d4d4;padding:8px 12px;border-radius:4px;margin:4px 0 6px;font-size:0.78rem;">Paste the following into your remote machine ---&gt;\n{"access_token":"ya29.YOUR_ACCESS_TOKEN","token_type":"Bearer","refresh_token":"YOUR_REFRESH_TOKEN","expiry":"2026-03-18T01:01:25+02:00","expires_in":3599}\n&lt;---End paste</code>' +
         note('Copy <strong>the entire JSON block</strong> (from <code>{</code> to <code>}</code>) and paste it into the SSH session at the <code>config_token&gt;</code> prompt.') +
 
         hr() +
