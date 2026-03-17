@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.27 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.28 */
 jQuery(function ($) {
     'use strict';
 
@@ -694,6 +694,113 @@ window.csS3SyncFile = function (btn, filename) {
             else alert('S3 sync failed: ' + (res.data || 'Unknown error'));
         }
     });
+};
+
+// ================================================================
+// Google Drive card functions
+// ================================================================
+
+function csGDriveMsg(text, ok) {
+    var el = document.getElementById('cs-gdrive-msg');
+    el.innerHTML = text;
+    el.style.color = ok ? '#2e7d32' : '#c62828';
+}
+
+function csGDrivePost(action, extra, onDone) {
+    var params = 'action=' + action + '&nonce=' + encodeURIComponent(CS.nonce);
+    if (extra) params += '&' + extra;
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', CS.ajax_url, true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.onload = function () {
+        try { onDone(JSON.parse(xhr.responseText)); }
+        catch (e) { onDone({ success: false, data: 'Bad response: ' + xhr.responseText.substring(0, 100) }); }
+    };
+    xhr.onerror = function () { onDone({ success: false, data: 'Network error' }); };
+    xhr.send(params);
+}
+
+window.csGDriveSave = function () {
+    var remote = document.getElementById('cs-gdrive-remote').value.trim();
+    var path   = document.getElementById('cs-gdrive-path').value.trim() || 'cloudscale-backups/';
+    csGDriveMsg('Saving\u2026', true);
+    csGDrivePost('cs_save_gdrive',
+        'remote=' + encodeURIComponent(remote) + '&path=' + encodeURIComponent(path),
+        function (res) { csGDriveMsg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success); }
+    );
+};
+
+window.csGDriveTest = function () {
+    csGDriveMsg('Testing\u2026', true);
+    csGDrivePost('cs_test_gdrive', '', function (res) {
+        csGDriveMsg((res.success ? '&#10003; ' : '&#10007; ') + res.data, res.success);
+    });
+};
+
+window.csGDriveExplain = function () {
+    csShowExplain('Google Drive Backup',
+        '<p>After every backup (scheduled or manual) the zip is copied to Google Drive via <strong>rclone</strong> — an off-site copy that survives server failure.</p>' +
+        '<p><strong>Setup steps:</strong></p>' +
+        '<ol style="margin:8px 0 8px 18px;padding:0;">' +
+        '<li>Install rclone on the server: <code>curl https://rclone.org/install.sh | sudo bash</code></li>' +
+        '<li>Run <code>rclone config</code> as the <code>apache</code> user (or whichever user runs PHP) to create a Google Drive remote. Give it a name like <code>gdrive</code>.</li>' +
+        '<li>Enter the remote name and destination folder above and click <em>Save Drive Settings</em>.</li>' +
+        '<li>Click <em>Test Connection</em> to verify rclone can reach your Drive.</li>' +
+        '</ol>' +
+        '<p><strong>Remote name</strong> — the name you chose in <code>rclone config</code> (e.g. <code>gdrive</code>). <strong>Destination folder</strong> — subfolder inside your Drive to store backups (e.g. <code>cloudscale-backups/</code>).</p>' +
+        '<p>rclone uses OAuth2 to authenticate with Google. No service account JSON is needed — authentication is done interactively during <code>rclone config</code>.</p>'
+    );
+};
+
+window.csGDriveDiagnose = function () {
+    var d = window.CS_GDRIVE_DIAG || {};
+    var ok  = '<span style="color:#2e7d32;font-weight:700;">&#10003;</span>';
+    var err = '<span style="color:#c62828;font-weight:700;">&#10007;</span>';
+
+    function row(icon, label, value, desc) {
+        return '<tr>' +
+            '<td style="padding:6px 8px 2px 0;white-space:nowrap;vertical-align:top;">' + icon + ' <strong>' + label + '</strong></td>' +
+            '<td style="padding:6px 0 2px 8px;vertical-align:top;"><code style="word-break:break-all;">' + value + '</code></td>' +
+            '</tr>' +
+            '<tr><td colspan="2" style="padding:0 0 10px 20px;font-size:0.82rem;color:#666;">' + desc + '</td></tr>';
+    }
+
+    var rows = row(
+        d.rclone_found ? ok : err,
+        'rclone',
+        d.rclone_version || 'Not found',
+        'rclone binary on the server. Required for Google Drive sync. Install with: <code>curl https://rclone.org/install.sh | sudo bash</code>'
+    );
+    rows += row(
+        d.remote ? ok : err,
+        'Remote',
+        d.remote || 'Not configured',
+        'The rclone remote name. Configure with <code>rclone config</code> run as the web server user.'
+    );
+    if (d.remote) {
+        rows += row(
+            ok,
+            'Destination',
+            d.remote + ':' + d.path,
+            'Full rclone path where backup zips are copied after each backup.'
+        );
+        rows += row(
+            d.synced > 0 ? ok : err,
+            'Backups synced',
+            d.synced + ' of ' + d.total,
+            d.synced === d.total
+                ? 'All backups have been successfully synced to Google Drive.'
+                : 'Some backups have not been synced. Run a backup to trigger a sync.'
+        );
+        rows += row(
+            d.last_fmt ? ok : err,
+            'Last sync',
+            d.last_fmt || 'Never',
+            'When the most recent successful upload to Google Drive completed.'
+        );
+    }
+
+    csShowExplain('Google Drive Diagnostics', '<table style="width:100%;border-collapse:collapse;">' + rows + '</table>');
 };
 
 // ================================================================
