@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.27
+ * Version:           3.2.28
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.27');
+define('CS_BACKUP_VERSION',    '3.2.28');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -500,9 +500,11 @@ function cs_admin_page(): void {
     $md                = is_array($manual_defaults) ? $manual_defaults : null; // null = no saved defaults yet
     $retention      = intval(get_option('cs_retention', 8));
     $backup_prefix  = sanitize_key(get_option('cs_backup_prefix', 'bkup')) ?: 'bkup';
-    $s3_bucket    = get_option('cs_s3_bucket', '');
-    $s3_prefix    = get_option('cs_s3_prefix', 'backups/');
-    $s3_saved_msg = '';
+    $s3_bucket     = get_option('cs_s3_bucket', '');
+    $s3_prefix     = get_option('cs_s3_prefix', 'backups/');
+    $s3_saved_msg  = '';
+    $gdrive_remote = get_option('cs_gdrive_remote', '');
+    $gdrive_path   = get_option('cs_gdrive_path', 'cloudscale-backups/');
     $ami_prefix          = get_option('cs_ami_prefix', '');
     $ami_reboot          = (bool) get_option('cs_ami_reboot', false);
     $ami_region_override = get_option('cs_ami_region_override', '');
@@ -563,12 +565,17 @@ function cs_admin_page(): void {
         <?php endif; ?>
 
         <?php
-        // Pre-compute cloud vars (needed before CS_S3_DIAG inline script in Manual Backup section)
+        // Pre-compute cloud vars (needed before CS_S3_DIAG/CS_GDRIVE_DIAG inline scripts in Manual Backup section)
         $aws_path = cs_find_aws();
         $aws_ver  = $aws_path ? trim((string) shell_exec(escapeshellarg($aws_path) . ' --version 2>&1')) : '';
         $s3_log    = (array) get_option('cs_s3_log', []);
         $s3_synced = array_filter($s3_log, fn($e) => !empty($e['ok']));
         $s3_last   = empty($s3_synced) ? null : max(array_column($s3_synced, 'time'));
+        $rclone_path = cs_find_rclone();
+        $rclone_ver  = $rclone_path ? trim((string) shell_exec(escapeshellarg($rclone_path) . ' version --no-check-update 2>&1 | head -1')) : '';
+        $gdrive_log    = (array) get_option('cs_gdrive_log', []);
+        $gdrive_synced = array_filter($gdrive_log, fn($e) => !empty($e['ok']));
+        $gdrive_last   = empty($gdrive_synced) ? null : max(array_column($gdrive_synced, 'time'));
         try {
             $ami_instance_id = cs_get_instance_id();
             $ami_region      = cs_get_instance_region();
@@ -1019,6 +1026,16 @@ function cs_admin_page(): void {
                 'last_fmt'    => $s3_last ? cs_human_age($s3_last) . ' ago (' . wp_date('j M Y H:i', $s3_last) . ')' : null,
             ];
             wp_add_inline_script( 'cs-script', 'window.CS_S3_DIAG = ' . wp_json_encode( $s3_diag ) . ';', 'before' );
+            $gdrive_diag = [
+                'rclone_found'   => (bool) $rclone_path,
+                'rclone_version' => $rclone_ver,
+                'remote'         => $gdrive_remote,
+                'path'           => $gdrive_path,
+                'synced'         => count($gdrive_synced),
+                'total'          => count($backups),
+                'last_fmt'       => $gdrive_last ? cs_human_age($gdrive_last) . ' ago (' . wp_date('j M Y H:i', $gdrive_last) . ')' : null,
+            ];
+            wp_add_inline_script( 'cs-script', 'window.CS_GDRIVE_DIAG = ' . wp_json_encode( $gdrive_diag ) . ';', 'before' );
             ?>
             <div class="cs-run-grid">
                 <!-- Column 1: Core -->
@@ -1452,6 +1469,52 @@ function cs_admin_page(): void {
                 <?php endif; ?>
             </div>
 
+            <!-- GOOGLE DRIVE BACKUP CARD -->
+            <div class="cs-card cs-card--gdrive">
+                <div class="cs-card-stripe" style="background:linear-gradient(135deg,#0f9d58 0%,#34a853 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
+                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128196; <?php echo esc_html__( 'Google Drive Backup', 'cloudscale-backup' ); ?></h2>
+                    <button type="button" onclick="csGDriveExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button>
+                </div>
+
+                <p class="cs-help">After each backup, the zip is copied to Google Drive via <code>rclone</code>. Requires <code>rclone</code> installed on the server and a Google Drive remote configured with <code>rclone config</code>.</p>
+
+                <div class="cs-field-row cs-mt">
+                    <label for="cs-gdrive-remote"><strong>rclone remote name</strong></label>
+                    <input type="text" id="cs-gdrive-remote" class="regular-text" placeholder="gdrive"
+                           value="<?php echo esc_attr($gdrive_remote); ?>">
+                    <p class="cs-help">The remote name you gave when running <code>rclone config</code>, e.g. <code>gdrive</code>.</p>
+                </div>
+
+                <div class="cs-field-row">
+                    <label for="cs-gdrive-path"><strong>Destination folder</strong></label>
+                    <input type="text" id="cs-gdrive-path" class="regular-text" placeholder="cloudscale-backups/"
+                           value="<?php echo esc_attr($gdrive_path); ?>">
+                    <p class="cs-help">Folder path inside the Drive. Trailing slash required. Leave blank to copy to the root.</p>
+                </div>
+
+                <div style="margin-top:12px;">
+                    <button type="button" onclick="csGDriveSave()" class="button button-primary"><?php esc_html_e( 'Save Drive Settings', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csGDriveTest()" class="button" style="margin-left:8px"><?php esc_html_e( 'Test Connection', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csGDriveDiagnose()" class="button" style="margin-left:8px"><?php esc_html_e( 'Diagnose', 'cloudscale-backup' ); ?></button>
+                    <span id="cs-gdrive-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
+                </div>
+
+                <?php if ($gdrive_remote): ?>
+                <div class="cs-info-row cs-mt">
+                    <span>Destination</span>
+                    <strong><code><?php echo esc_html(rtrim($gdrive_remote, ':') . ':' . ltrim($gdrive_path, '/')); ?></code></strong>
+                </div>
+                <div class="cs-info-row">
+                    <span>Backups synced</span>
+                    <strong><?php echo (int) count($gdrive_synced); ?> of <?php echo (int) count($backups); ?></strong>
+                </div>
+                <div class="cs-info-row">
+                    <span>Last sync</span>
+                    <strong><?php echo $gdrive_last ? esc_html(cs_human_age($gdrive_last) . ' ago (' . wp_date('j M Y H:i', $gdrive_last) . ')') : 'Never'; ?></strong>
+                </div>
+                <?php endif; ?>
+            </div>
+
             </div><!-- /cs-grid-1 cloud -->
 
         </div><!-- /cs-tab-cloud -->
@@ -1496,18 +1559,27 @@ add_action('wp_ajax_cs_run_backup', function (): void {
             $include_mu, $include_languages, $include_dropins, $include_htaccess, $include_wpconfig
         );
         cs_enforce_retention();
-        $s3 = $GLOBALS['cs_last_s3_result'] ?? ['skipped' => true];
+        $s3     = $GLOBALS['cs_last_s3_result']     ?? ['skipped' => true];
+        $gdrive = $GLOBALS['cs_last_gdrive_result'] ?? ['skipped' => true];
         $s3_msg = '';
         if (!isset($s3['skipped'])) {
             $s3_msg = $s3['ok']
                 ? '✓ Synced to ' . $s3['dest']
                 : '⚠ S3 sync failed: ' . $s3['error'];
         }
+        $gdrive_msg = '';
+        if (!isset($gdrive['skipped'])) {
+            $gdrive_msg = $gdrive['ok']
+                ? '✓ Synced to Drive: ' . $gdrive['dest']
+                : '⚠ Drive sync failed: ' . $gdrive['error'];
+        }
         wp_send_json_success([
-            'message'  => 'Backup complete: ' . $filename,
-            'filename' => $filename,
-            's3_ok'    => $s3['ok'] ?? null,
-            's3_msg'   => $s3_msg,
+            'message'    => 'Backup complete: ' . $filename,
+            'filename'   => $filename,
+            's3_ok'      => $s3['ok'] ?? null,
+            's3_msg'     => $s3_msg,
+            'gdrive_ok'  => $gdrive['ok'] ?? null,
+            'gdrive_msg' => $gdrive_msg,
         ]);
     } catch (Exception $e) {
         wp_send_json_error($e->getMessage());
@@ -1742,6 +1814,34 @@ add_action('wp_ajax_cs_save_cloud_schedule', function (): void {
     $day_names    = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     $saved_labels = implode(', ', array_map(fn($d) => $day_names[$d] ?? $d, $clean_days));
     wp_send_json_success($saved_labels ?: 'No days selected — AMI scheduling disabled');
+});
+
+add_action('wp_ajax_cs_save_gdrive', function (): void {
+    if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
+    cs_verify_nonce();
+    $remote = sanitize_text_field($_POST['remote'] ?? '');
+    $path   = sanitize_text_field($_POST['path']   ?? 'cloudscale-backups/');
+    if ($remote && !preg_match('/^[a-zA-Z0-9_\-]+$/', $remote)) {
+        wp_send_json_error('Invalid remote name. Use only letters, numbers, hyphens and underscores.');
+    }
+    update_option('cs_gdrive_remote', $remote);
+    update_option('cs_gdrive_path',   $path);
+    wp_send_json_success(['remote' => $remote, 'path' => $path]);
+});
+
+add_action('wp_ajax_cs_test_gdrive', function (): void {
+    if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
+    cs_verify_nonce();
+    $remote = get_option('cs_gdrive_remote', '');
+    if (!$remote) { wp_send_json_error('No remote configured — save settings first.'); }
+    $rclone = cs_find_rclone();
+    if (!$rclone) { wp_send_json_error('rclone not found on server.'); }
+    $cmd = escapeshellarg($rclone) . ' lsd ' . escapeshellarg($remote . ':') . ' --max-depth 1 2>&1';
+    $out = trim((string) shell_exec($cmd));
+    if ($out && preg_match('/error|failed|denied|invalid/i', $out)) {
+        wp_send_json_error('Connection failed: ' . substr($out, 0, 200));
+    }
+    wp_send_json_success('Connected to ' . esc_html($remote));
 });
 
 add_action('wp_ajax_cs_create_ami', function (): void {
@@ -2571,7 +2671,8 @@ function cs_create_backup(
     $zip->close();
 
     // S3 sync — result stored in global for AJAX handler to include in response
-    $GLOBALS['cs_last_s3_result'] = cs_sync_to_s3(CS_BACKUP_DIR . $filename);
+    $GLOBALS['cs_last_s3_result']     = cs_sync_to_s3(CS_BACKUP_DIR . $filename);
+    $GLOBALS['cs_last_gdrive_result'] = cs_sync_to_gdrive(CS_BACKUP_DIR . $filename);
 
     return $filename;
 }
@@ -2706,6 +2807,69 @@ function cs_get_instance_region(): string {
  * @since 2.74.0
  * @return string Absolute path to 'aws', e.g. '/usr/local/bin/aws', or ''.
  */
+function cs_find_rclone(): string {
+    $candidates = [
+        trim((string) shell_exec('which rclone 2>/dev/null')),
+        '/usr/local/bin/rclone',
+        '/usr/bin/rclone',
+        '/snap/bin/rclone',
+        '/home/' . get_current_user() . '/.local/bin/rclone',
+    ];
+    foreach ($candidates as $path) {
+        if ($path && file_exists($path) && is_executable($path)) {
+            return $path;
+        }
+    }
+    return '';
+}
+
+/**
+ * Upload a local backup file to Google Drive using rclone.
+ *
+ * @since 3.2.28
+ * @param string $local_path Absolute filesystem path to the backup zip.
+ * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
+ */
+function cs_sync_to_gdrive(string $local_path): array {
+    $remote = get_option('cs_gdrive_remote', '');
+    if (!$remote) return ['skipped' => true];
+
+    $rclone = cs_find_rclone();
+    if (!$rclone) {
+        return ['ok' => false, 'error' => 'rclone not found. Install rclone and configure a Google Drive remote.'];
+    }
+
+    $dest_path = ltrim(get_option('cs_gdrive_path', 'cloudscale-backups/'), '/');
+    $dest      = rtrim($remote, ':') . ':' . $dest_path;
+    $escaped   = escapeshellarg($local_path);
+    $edest     = escapeshellarg($dest);
+
+    $cmd = escapeshellarg($rclone) . " copy {$escaped} {$edest} 2>&1";
+    $out = trim((string) shell_exec($cmd));
+
+    $filename = basename($local_path);
+    $log      = (array) get_option('cs_gdrive_log', []);
+
+    if ($out) {
+        cs_log('[CloudScale Backup] GDrive sync error: ' . $out);
+        $result       = ['ok' => false, 'dest' => $dest, 'error' => $out];
+        $log[$filename] = ['ok' => false, 'time' => time(), 'dest' => $dest, 'error' => $out];
+    } else {
+        cs_log('[CloudScale Backup] GDrive sync OK: ' . $dest);
+        $result       = ['ok' => true, 'dest' => $dest];
+        $log[$filename] = ['ok' => true, 'time' => time(), 'dest' => $dest];
+    }
+
+    // Prune log entries for files that no longer exist
+    $existing = array_map('basename', glob(CS_BACKUP_DIR . '*.zip') ?: []);
+    foreach (array_keys($log) as $k) {
+        if (!in_array($k, $existing, true)) unset($log[$k]);
+    }
+    update_option('cs_gdrive_log', $log, false);
+
+    return $result;
+}
+
 function cs_find_aws(): string {
     $candidates = [
         trim((string) shell_exec('which aws 2>/dev/null')),
