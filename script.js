@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.14 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.15 */
 jQuery(function ($) {
     'use strict';
 
@@ -507,7 +507,7 @@ window.csBackupExplain = function () {
         '<li><strong>Must-use plugins</strong> — <code>wp-content/mu-plugins/</code>. Usually small; include if you have custom mu-plugins.</li>' +
         '<li><strong>Languages</strong> — <code>wp-content/languages/</code> translation files.</li>' +
         '<li><strong>Dropins</strong> — special files like <code>object-cache.php</code> in <code>wp-content/</code>.</li>' +
-        '<li><strong>AMI Backups</strong> — includes the <code>cloudscale-backups/</code> folder itself. Useful for a full archive copy; skip it for routine backups to avoid recursive bloat.</li>' +
+        '<li><strong>AMI Backups</strong> — includes only the most recent backup zip from <code>cloudscale-backups/</code>. Useful for a full archive copy; skip it for routine backups to avoid recursive bloat.</li>' +
         '<li><strong>.htaccess</strong> — Apache rewrite rules and server config.</li>' +
         '<li><strong>wp-config.php</strong> — contains database credentials. Handle the resulting zip with care.</li>' +
         '</ul>' +
