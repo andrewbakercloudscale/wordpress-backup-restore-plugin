@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.23
+ * Version:           3.2.24
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.23');
+define('CS_BACKUP_VERSION',    '3.2.24');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -467,29 +467,21 @@ function cs_admin_page(): void {
         update_option('cs_run_days',         $clean_days);
         update_option('cs_run_days_saved',   '1');
         update_option('cs_schedule_enabled', !empty($_POST['schedule_enabled']));
-        update_option('cs_run_hour',         max(0,  min(23, intval($_POST['run_hour']         ?? 3))));
-        update_option('cs_run_minute',        max(0,  min(59, intval($_POST['run_minute']        ?? 0))));
-        update_option('cs_ami_run_hour',      max(0,  min(23, intval($_POST['ami_run_hour']      ?? 3))));
-        update_option('cs_ami_run_minute',    max(0,  min(59, intval($_POST['ami_run_minute']    ?? 30))));
+        update_option('cs_run_hour',   max(0, min(23, intval($_POST['run_hour']   ?? 3))));
+        update_option('cs_run_minute', max(0, min(59, intval($_POST['run_minute'] ?? 0))));
         $valid_components = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'htaccess', 'wpconfig'];
         $raw_components   = isset($_POST['schedule_components']) && is_array($_POST['schedule_components']) ? $_POST['schedule_components'] : [];
         $clean_components = array_values(array_intersect($raw_components, $valid_components));
         // Default to core four if nothing selected
         if (empty($clean_components)) { $clean_components = ['db', 'media', 'plugins', 'themes']; }
         update_option('cs_schedule_components', $clean_components);
-        $raw_ami_days   = isset($_POST['ami_schedule_days']) && is_array($_POST['ami_schedule_days']) ? $_POST['ami_schedule_days'] : [];
-        $clean_ami_days = array_values(array_filter(array_map('intval', $raw_ami_days), fn($d) => $d >= 1 && $d <= 7));
-        update_option('cs_ami_schedule_days', $clean_ami_days);
-        wp_cache_delete('cs_run_days',              'options');
-        wp_cache_delete('cs_run_days_saved',        'options');
-        wp_cache_delete('cs_schedule_enabled',      'options');
-        wp_cache_delete('cs_schedule_components',   'options');
-        wp_cache_delete('cs_ami_schedule_days',     'options');
-        wp_cache_delete('cs_run_hour',              'options');
-        wp_cache_delete('cs_run_minute',            'options');
-        wp_cache_delete('cs_ami_run_hour',          'options');
-        wp_cache_delete('cs_ami_run_minute',        'options');
-        wp_cache_delete('alloptions',               'options');
+        wp_cache_delete('cs_run_days',            'options');
+        wp_cache_delete('cs_run_days_saved',      'options');
+        wp_cache_delete('cs_schedule_enabled',    'options');
+        wp_cache_delete('cs_schedule_components', 'options');
+        wp_cache_delete('cs_run_hour',            'options');
+        wp_cache_delete('cs_run_minute',          'options');
+        wp_cache_delete('alloptions',             'options');
         cs_reschedule();
         $day_names = ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
         $saved_labels = implode(', ', array_map(fn($d) => $day_names[$d] ?? $d, $clean_days));
@@ -569,6 +561,36 @@ function cs_admin_page(): void {
             <?php endif; ?>
         </div>
         <?php endif; ?>
+
+        <?php
+        // Pre-compute cloud vars (needed before CS_S3_DIAG inline script in Manual Backup section)
+        $aws_path = cs_find_aws();
+        $aws_ver  = $aws_path ? trim((string) shell_exec(escapeshellarg($aws_path) . ' --version 2>&1')) : '';
+        $s3_log    = (array) get_option('cs_s3_log', []);
+        $s3_synced = array_filter($s3_log, fn($e) => !empty($e['ok']));
+        $s3_last   = empty($s3_synced) ? null : max(array_column($s3_synced, 'time'));
+        try {
+            $ami_instance_id = cs_get_instance_id();
+            $ami_region      = cs_get_instance_region();
+            $ami_log         = (array) get_option('cs_ami_log', []);
+            usort($ami_log, fn($a, $b) => ($b['time'] ?? 0) <=> ($a['time'] ?? 0));
+            $ami_log_recent  = $ami_log;
+        } catch (\Throwable $e) {
+            $ami_instance_id = '';
+            $ami_region      = '';
+            $ami_log         = [];
+            $ami_log_recent  = [];
+            cs_log('[CloudScale Backup] AMI panel init error: ' . $e->getMessage());
+        }
+        ?>
+
+        <!-- ===================== TABS ===================== -->
+        <div class="cs-tab-bar">
+            <button class="cs-tab cs-tab--active" data-tab="local">&#128230; Local Backups</button>
+            <button class="cs-tab" data-tab="cloud">&#9729; Cloud Backups</button>
+        </div>
+
+        <div id="cs-tab-local" class="cs-tab-panel">
 
         <!-- ===================== SETTINGS ===================== -->
         <div class="cs-section-ribbon"><span><?php esc_html_e( 'Schedule & Settings', 'cloudscale-backup' ); ?></span></div>
@@ -656,45 +678,6 @@ function cs_admin_page(): void {
                         </div>
                         <?php if ($next_run): ?>
                         <p class="cs-help">Next file backup: <strong><?php echo esc_html(get_date_from_gmt(date('Y-m-d H:i:s', $next_run), 'D j M \a\t H:i')); ?></strong></p>
-                        <?php endif; ?>
-                    </div>
-
-                    <!-- AMI days + time -->
-                    <div class="cs-field-group" style="border-top:1px solid #e0e0e0;padding-top:14px;margin-top:4px;">
-                        <span class="cs-field-label">AMI snapshot days <span class="cs-sensitive-badge" style="margin-left:4px;">&#9888; reboot</span></span>
-                        <div class="cs-day-checks">
-                            <?php foreach ($days_map as $num => $day_label): ?>
-                            <label class="cs-day-check-label">
-                                <input type="checkbox"
-                                       class="cs-ami-day-check"
-                                       name="ami_schedule_days[]"
-                                       value="<?php echo (int) $num; ?>"
-                                       <?php checked(in_array($num, $ami_schedule_days, false)); ?>>
-                                <?php echo esc_html($day_label); ?>
-                            </label>
-                            <?php endforeach; ?>
-                        </div>
-                        <p class="cs-help">Requires AWS CLI and a prefix set in the AMI settings below. Leave all unchecked to disable scheduled AMI backups.</p>
-                    </div>
-
-                    <div class="cs-field-group">
-                        <label class="cs-field-label" for="cs-ami-run-hour"><?php esc_html_e( 'AMI backup time', 'cloudscale-backup' ); ?></label>
-                        <div class="cs-inline">
-                            <select id="cs-ami-run-hour" name="ami_run_hour" class="cs-input-sm">
-                                <?php for ($h = 0; $h < 24; $h++): ?>
-                                    <option value="<?php echo (int) $h; ?>" <?php selected($ami_run_hour, $h); ?>><?php echo esc_html(str_pad($h, 2, '0', STR_PAD_LEFT)); ?></option>
-                                <?php endfor; ?>
-                            </select>
-                            <span class="cs-muted-text">:</span>
-                            <select id="cs-ami-run-minute" name="ami_run_minute" class="cs-input-sm">
-                                <?php foreach ([0, 15, 30, 45] as $m): ?>
-                                    <option value="<?php echo (int) $m; ?>" <?php selected($ami_run_minute, $m); ?>><?php echo esc_html(str_pad($m, 2, '0', STR_PAD_LEFT)); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                            <span class="cs-muted-text">server time</span>
-                        </div>
-                        <?php if ($ami_next_run): ?>
-                        <p class="cs-help">Next AMI backup: <strong><?php echo esc_html(get_date_from_gmt(date('Y-m-d H:i:s', $ami_next_run), 'D j M \a\t H:i')); ?></strong></p>
                         <?php endif; ?>
                     </div>
 
@@ -804,79 +787,9 @@ function cs_admin_page(): void {
                 <span id="cs-retention-saved" class="cs-saved-msg" style="display:none">✓ Saved</span>
             </div>
 
-            <!-- S3 REMOTE BACKUP CARD — self-contained, no script.js dependency -->
-            <?php
-            $aws_path = cs_find_aws();
-            $aws_ver  = $aws_path ? trim((string) shell_exec(escapeshellarg($aws_path) . ' --version 2>&1')) : '';
-            ?>
-            <div class="cs-card cs-card--pink">
-                <div class="cs-card-stripe cs-stripe--pink" style="background:linear-gradient(135deg,#880e4f 0%,#e91e8c 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
-                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#9729; <?php echo esc_html__( 'S3 Remote Backup', 'cloudscale-backup' ); ?></h2>
-                    <button type="button" onclick="csS3Explain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button>
-                </div>
-
-                <p class="cs-help">After each backup, the zip will be synced to your S3 bucket using the AWS CLI. The AWS CLI must be installed and configured on the server with appropriate credentials.</p>
-
-                <div class="cs-field-row cs-mt">
-                    <label for="cs-s3-bucket"><strong>S3 Bucket name</strong></label>
-                    <input type="text" id="cs-s3-bucket" class="regular-text" placeholder="my-bucket-name"
-                           value="<?php echo esc_attr($s3_bucket); ?>">
-                    <p class="cs-help">Bucket name only &mdash; no <code>s3://</code> prefix.</p>
-                </div>
-
-                <div class="cs-field-row">
-                    <label for="cs-s3-prefix"><strong>Key prefix (folder)</strong></label>
-                    <input type="text" id="cs-s3-prefix" class="regular-text" placeholder="backups/"
-                           value="<?php echo esc_attr($s3_prefix); ?>">
-                    <p class="cs-help">Trailing slash required. Leave as <code>backups/</code> or set to <code>/</code> for bucket root.</p>
-                </div>
-
-                <div style="margin-top:12px;">
-                    <button type="button" onclick="csS3Save()" class="button button-primary"><?php esc_html_e( 'Save S3 Settings', 'cloudscale-backup' ); ?></button>
-                    <button type="button" onclick="csS3Test()" class="button" style="margin-left:8px"><?php esc_html_e( 'Test Connection', 'cloudscale-backup' ); ?></button>
-                    <button type="button" onclick="csS3Diagnose()" class="button" style="margin-left:8px"><?php esc_html_e( 'Diagnose', 'cloudscale-backup' ); ?></button>
-                    <span id="cs-s3-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
-                </div>
-
-                <?php
-                $s3_log    = (array) get_option('cs_s3_log', []);
-                $s3_synced = array_filter($s3_log, fn($e) => !empty($e['ok']));
-                $s3_last   = empty($s3_synced) ? null : max(array_column($s3_synced, 'time'));
-                ?>
-                <?php if ($s3_bucket): ?>
-                <div class="cs-info-row cs-mt">
-                    <span>Destination</span>
-                    <strong><code>s3://<?php echo esc_html(rtrim($s3_bucket, '/') . '/' . ltrim($s3_prefix, '/')); ?></code></strong>
-                </div>
-                <div class="cs-info-row">
-                    <span>Backups in S3</span>
-                    <strong><?php echo (int) count($s3_synced); ?> of <?php echo (int) count($backups); ?></strong>
-                </div>
-                <div class="cs-info-row">
-                    <span>Last S3 sync</span>
-                    <strong><?php echo $s3_last ? esc_html(cs_human_age($s3_last) . ' ago (' . wp_date('j M Y H:i', $s3_last) . ')') : 'Never'; ?></strong>
-                </div>
-                <?php endif; ?>
-            </div>
 
 
-            <!-- AMI SNAPSHOT CARD — self-contained, no script.js dependency -->
-            <?php
-            try {
-            $ami_instance_id = cs_get_instance_id();
-            $ami_region      = cs_get_instance_region();
-            $ami_log         = (array) get_option('cs_ami_log', []);
-            // Show all entries with a valid AMI ID, newest first (plus failed creation entries)
-            usort($ami_log, fn($a, $b) => ($b['time'] ?? 0) <=> ($a['time'] ?? 0));
-            $ami_log_recent  = $ami_log;
-            } catch (\Throwable $e) {
-                $ami_instance_id = '';
-                $ami_region      = '';
-                $ami_log         = [];
-                $ami_log_recent  = [];
-                cs_log('[CloudScale Backup] AMI panel init error: ' . $e->getMessage());
-            }
-            ?>
+            <?php if ( false ): // AMI card rendered in Cloud tab ?>
             <div class="cs-card cs-card--indigo">
                 <div class="cs-card-stripe cs-stripe--indigo" style="background:linear-gradient(135deg,#1a237e 0%,#3949ab 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
                     <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128247; <?php echo esc_html__( 'EC2 AMI Snapshot', 'cloudscale-backup' ); ?></h2>
@@ -1006,7 +919,7 @@ function cs_admin_page(): void {
                 </div>
                 <?php endif; ?>
             </div>
-
+            <?php endif; // end: AMI card in Cloud tab ?>
 
             <!-- SYSTEM INFO CARD -->
             <div class="cs-card cs-card--purple">
@@ -1310,6 +1223,239 @@ function cs_admin_page(): void {
         </div>
         <div id="cs-modal-overlay" class="cs-modal-overlay" style="display:none"></div>
 
+        </div><!-- /cs-tab-local -->
+
+        <!-- ===================== CLOUD BACKUPS TAB ===================== -->
+        <div id="cs-tab-cloud" class="cs-tab-panel" style="display:none">
+
+            <div class="cs-section-ribbon"><span>Cloud Backup Schedule</span></div>
+            <div class="cs-grid cs-grid-1" style="display:flex!important;flex-direction:column!important;gap:16px!important;">
+
+            <!-- CLOUD SCHEDULE CARD -->
+            <div class="cs-card cs-card--blue">
+                <div class="cs-card-stripe cs-stripe--blue" style="background:linear-gradient(135deg,#1565c0 0%,#2196f3 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⏰ <?php echo esc_html__( 'Cloud Backup Schedule', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csScheduleExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+
+                <div class="cs-field-group">
+                    <span class="cs-field-label">AMI snapshot days <span class="cs-sensitive-badge" style="margin-left:4px;">&#9888; reboot</span></span>
+                    <div class="cs-day-checks">
+                        <?php foreach ($days_map as $num => $day_label): ?>
+                        <label class="cs-day-check-label">
+                            <input type="checkbox"
+                                   class="cs-ami-day-check"
+                                   value="<?php echo (int) $num; ?>"
+                                   <?php checked(in_array($num, $ami_schedule_days, false)); ?>>
+                            <?php echo esc_html($day_label); ?>
+                        </label>
+                        <?php endforeach; ?>
+                    </div>
+                    <p class="cs-help">Requires AWS CLI and a prefix configured in the EC2 AMI settings below. Leave all unchecked to disable scheduled AMI backups.</p>
+                </div>
+
+                <div class="cs-field-group">
+                    <label class="cs-field-label" for="cs-ami-run-hour"><?php esc_html_e( 'AMI backup time', 'cloudscale-backup' ); ?></label>
+                    <div class="cs-inline">
+                        <select id="cs-ami-run-hour" class="cs-input-sm">
+                            <?php for ($h = 0; $h < 24; $h++): ?>
+                                <option value="<?php echo (int) $h; ?>" <?php selected($ami_run_hour, $h); ?>><?php echo esc_html(str_pad($h, 2, '0', STR_PAD_LEFT)); ?></option>
+                            <?php endfor; ?>
+                        </select>
+                        <span class="cs-muted-text">:</span>
+                        <select id="cs-ami-run-minute" class="cs-input-sm">
+                            <?php foreach ([0, 15, 30, 45] as $m): ?>
+                                <option value="<?php echo (int) $m; ?>" <?php selected($ami_run_minute, $m); ?>><?php echo esc_html(str_pad($m, 2, '0', STR_PAD_LEFT)); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                        <span class="cs-muted-text">server time &nbsp;·&nbsp; now: <?php echo esc_html(current_time('H:i T')); ?> &nbsp;·&nbsp; TZ: <?php echo esc_html(wp_timezone_string()); ?></span>
+                    </div>
+                    <?php if ($ami_next_run): ?>
+                    <p class="cs-help">Next AMI backup: <strong><?php echo esc_html(get_date_from_gmt(date('Y-m-d H:i:s', $ami_next_run), 'D j M \a\t H:i')); ?></strong></p>
+                    <?php endif; ?>
+                </div>
+
+                <button type="button" onclick="csCloudScheduleSave()" class="button button-primary cs-mt"><?php esc_html_e( 'Save Schedule', 'cloudscale-backup' ); ?></button>
+                <span id="cs-cloud-schedule-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
+            </div>
+
+            <!-- S3 REMOTE BACKUP CARD -->
+            <div class="cs-card cs-card--pink">
+                <div class="cs-card-stripe cs-stripe--pink" style="background:linear-gradient(135deg,#880e4f 0%,#e91e8c 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
+                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#9729; <?php echo esc_html__( 'S3 Remote Backup', 'cloudscale-backup' ); ?></h2>
+                    <button type="button" onclick="csS3Explain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button>
+                </div>
+
+                <p class="cs-help">After each backup, the zip will be synced to your S3 bucket using the AWS CLI. The AWS CLI must be installed and configured on the server with appropriate credentials.</p>
+
+                <div class="cs-field-row cs-mt">
+                    <label for="cs-s3-bucket"><strong>S3 Bucket name</strong></label>
+                    <input type="text" id="cs-s3-bucket" class="regular-text" placeholder="my-bucket-name"
+                           value="<?php echo esc_attr($s3_bucket); ?>">
+                    <p class="cs-help">Bucket name only &mdash; no <code>s3://</code> prefix.</p>
+                </div>
+
+                <div class="cs-field-row">
+                    <label for="cs-s3-prefix"><strong>Key prefix (folder)</strong></label>
+                    <input type="text" id="cs-s3-prefix" class="regular-text" placeholder="backups/"
+                           value="<?php echo esc_attr($s3_prefix); ?>">
+                    <p class="cs-help">Trailing slash required. Leave as <code>backups/</code> or set to <code>/</code> for bucket root.</p>
+                </div>
+
+                <div style="margin-top:12px;">
+                    <button type="button" onclick="csS3Save()" class="button button-primary"><?php esc_html_e( 'Save S3 Settings', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csS3Test()" class="button" style="margin-left:8px"><?php esc_html_e( 'Test Connection', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csS3Diagnose()" class="button" style="margin-left:8px"><?php esc_html_e( 'Diagnose', 'cloudscale-backup' ); ?></button>
+                    <span id="cs-s3-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
+                </div>
+
+                <?php if ($s3_bucket): ?>
+                <div class="cs-info-row cs-mt">
+                    <span>Destination</span>
+                    <strong><code>s3://<?php echo esc_html(rtrim($s3_bucket, '/') . '/' . ltrim($s3_prefix, '/')); ?></code></strong>
+                </div>
+                <div class="cs-info-row">
+                    <span>Backups in S3</span>
+                    <strong><?php echo (int) count($s3_synced); ?> of <?php echo (int) count($backups); ?></strong>
+                </div>
+                <div class="cs-info-row">
+                    <span>Last S3 sync</span>
+                    <strong><?php echo $s3_last ? esc_html(cs_human_age($s3_last) . ' ago (' . wp_date('j M Y H:i', $s3_last) . ')') : 'Never'; ?></strong>
+                </div>
+                <?php endif; ?>
+            </div>
+
+            <!-- AMI SNAPSHOT CARD -->
+            <div class="cs-card cs-card--indigo">
+                <div class="cs-card-stripe cs-stripe--indigo" style="background:linear-gradient(135deg,#1a237e 0%,#3949ab 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
+                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128247; <?php echo esc_html__( 'EC2 AMI Snapshot', 'cloudscale-backup' ); ?></h2>
+                    <button type="button" onclick="csAmiExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button>
+                </div>
+
+                <p class="cs-help">Create a full machine image (AMI) of this EC2 instance. The AMI name will be <code>{prefix}_yyyyMMdd_HHmm</code>. Requires AWS CLI with <code>ec2:CreateImage</code>, <code>ec2:DescribeImages</code>, <code>ec2:DeregisterImage</code> and <code>ec2:RebootInstances</code> permissions.</p>
+
+                <div class="cs-info-row">
+                    <span>Instance ID</span>
+                    <strong><?php
+                        if ($ami_instance_id) {
+                            echo '<span style="color:#2e7d32">&#10003; ' . esc_html($ami_instance_id) . '</span>';
+                        } else {
+                            echo '<span style="color:#c62828">&#10007; Not detected (not running on EC2, or IMDS unavailable)</span>';
+                        }
+                    ?></strong>
+                </div>
+                <div class="cs-info-row">
+                    <span>Region</span>
+                    <strong><?php echo $ami_region ? esc_html($ami_region) : '<span style="color:#999">Unknown — set override below</span>'; ?></strong>
+                </div>
+
+                <div class="cs-field-row cs-mt">
+                    <label for="cs-ami-region-override"><strong>Region override</strong></label>
+                    <input type="text" id="cs-ami-region-override" class="cs-input-sm" placeholder="e.g. af-south-1"
+                           value="<?php echo esc_attr($ami_region_override); ?>" style="width:calc(20em - 50px);min-width:140px;">
+                    <p class="cs-help">Set this if the region shown above is wrong or Unknown. Bypasses IMDS detection entirely. Example: <code>af-south-1</code></p>
+                </div>
+
+                <div class="cs-field-row cs-mt">
+                    <div style="display:flex;align-items:flex-start;gap:24px;flex-wrap:wrap;">
+                        <div>
+                            <label for="cs-ami-prefix"><strong>AMI name prefix</strong></label>
+                            <input type="text" id="cs-ami-prefix" placeholder="mysite-backup"
+                                   value="<?php echo esc_attr($ami_prefix); ?>"
+                                   style="width:calc(20em - 50px);min-width:140px;">
+                        </div>
+                        <div>
+                            <label for="cs-ami-max"><strong>Max AMIs to keep</strong></label>
+                            <div class="cs-inline" style="margin-top:2px;">
+                                <input type="number" id="cs-ami-max" class="cs-input-sm" min="1" max="999"
+                                       value="<?php echo esc_attr($ami_max); ?>" style="width:80px;">
+                                <span class="cs-muted-text">AMIs</span>
+                            </div>
+                        </div>
+                    </div>
+                    <p class="cs-help" style="margin-top:6px;">Prefix example: <code>prod-web01</code> &rarr; <code>prod-web01_20260227_1430</code>. Max AMIs: when creating a new AMI would exceed this limit, the oldest AMI is automatically deregistered from AWS and removed from the log before the new one is created.</p>
+                </div>
+
+                <div class="cs-field-group">
+                    <label class="cs-enable-label">
+                        <input type="checkbox" id="cs-ami-reboot" <?php checked($ami_reboot); ?>>
+                        Reboot instance after AMI creation <span class="cs-sensitive-badge" style="margin-left:6px;">&#9888; downtime</span>
+                    </label>
+                    <p class="cs-help">Rebooting ensures filesystem consistency. Without reboot, the AMI is created from a live (crash consistent) snapshot.</p>
+                </div>
+
+                <div style="margin-top:12px;">
+                    <button type="button" onclick="csAmiSave()" class="button button-primary"><?php esc_html_e( 'Save AMI Settings', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csAmiCreate()" class="button" style="margin-left:8px;background:#1a237e!important;color:#fff!important;border-color:#1a237e!important;" <?php echo $ami_instance_id ? '' : 'disabled title="EC2 instance not detected"'; ?>>&#128247; Create AMI Now</button>
+                    <button type="button" onclick="csAmiStatus()" class="button" style="margin-left:4px;" <?php echo $ami_instance_id ? '' : 'disabled'; ?>>Check Status</button>
+                    <button type="button" onclick="csAmiResetAndRefresh()" class="button" id="cs-ami-refresh-all" style="margin-left:4px;background:#c2185b!important;color:#fff!important;border-color:#880e4f!important;">&#8635; Refresh All</button>
+                    <span id="cs-ami-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
+                </div>
+
+                <?php if (!empty($ami_log_recent)): ?>
+                <div class="cs-mt" style="margin-top:16px;">
+                    <p class="cs-field-label" style="margin-bottom:6px;"><?php esc_html_e( 'Recent AMI snapshots', 'cloudscale-backup' ); ?></p>
+                    <div class="cs-table-wrap">
+                    <table class="widefat cs-table" style="font-size:0.82rem;">
+                        <thead>
+                            <tr>
+                                <th>AMI Name</th>
+                                <th style="width:130px;">AMI ID</th>
+                                <th style="width:110px;">Created</th>
+                                <th style="width:80px;">Status</th>
+                                <th style="width:140px;">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="cs-ami-tbody">
+                        <?php foreach ($ami_log_recent as $entry): ?>
+                            <?php
+                            $row_ami_id  = esc_attr($entry['ami_id'] ?? '');
+                            $entry_state = $entry['state'] ?? '';
+                            $is_deleted  = ($entry_state === 'deleted in AWS');
+                            $is_ok       = !empty($entry['ok']);
+                            ?>
+                            <tr id="cs-ami-row-<?php echo $row_ami_id; ?>">
+                                <?php $faded = $is_deleted ? 'style="opacity:0.45;"' : ''; ?>
+                                <td <?php echo $faded; ?>><?php echo esc_html($entry['name'] ?? '—'); ?></td>
+                                <td <?php echo $faded; ?>><code style="font-size:0.78rem;"><?php echo esc_html($entry['ami_id'] ?? '—'); ?></code></td>
+                                <td <?php echo $faded; ?>><?php echo esc_html(isset($entry['time']) ? wp_date('j M Y H:i', $entry['time']) : '—'); ?></td>
+                                <td id="cs-ami-state-<?php echo $row_ami_id; ?>" <?php echo $faded; ?>>
+                                    <?php if ($is_deleted): ?>
+                                        <span style="color:#999;font-weight:600;">&#128465; deleted in AWS</span>
+                                    <?php elseif ($is_ok): ?>
+                                        <?php
+                                        $sc = $entry_state === 'available' ? '#2e7d32' : ($entry_state === 'pending' ? '#e65100' : '#757575');
+                                        $si = $entry_state === 'available' ? '&#10003;' : ($entry_state === 'pending' ? '&#9203;' : '&#10007;');
+                                        ?>
+                                        <span style="color:<?php echo $sc; ?>;font-weight:600;"><?php echo $si; ?> <?php echo esc_html($entry_state ?: 'Created'); ?></span>
+                                    <?php else: ?>
+                                        <?php $err_raw = substr($entry['error'] ?? '', 0, 120); ?>
+                                        <span style="color:#c62828;font-weight:600;" title="<?php echo esc_attr($err_raw ?: 'No error detail recorded'); ?>">&#10007; Failed</span>
+                                        <?php if ($err_raw): ?>
+                                        <br><span style="color:#c62828;font-size:0.72rem;word-break:break-word;display:block;max-width:180px;line-height:1.3;margin-top:2px;"><?php echo esc_html($err_raw); ?></span>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
+                                </td>
+                                <td id="cs-ami-actions-<?php echo $row_ami_id; ?>">
+                                    <?php if (!empty($entry['ami_id'])): ?>
+                                    <?php if (!$is_deleted): ?>
+                                    <button type="button" onclick="csAmiRefreshOne('<?php echo $row_ami_id; ?>')" class="button button-small" title="Refresh this AMI state from AWS" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+                                    <?php endif; ?>
+                                    <button type="button" onclick="csAmiDelete('<?php echo $row_ami_id; ?>', '<?php echo esc_js($entry['name'] ?? ''); ?>', <?php echo $is_deleted ? 'true' : 'false'; ?>)" class="button button-small" title="<?php echo $is_deleted ? 'Remove record' : 'Deregister AMI'; ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? 'Remove' : 'Delete'; ?></button>
+                                    <?php else: ?>
+                                    <button type="button" onclick="csAmiRemoveFailed('<?php echo esc_js($entry['name'] ?? ''); ?>')" class="button button-small" title="Remove failed record" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Remove</button>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                    </div>
+                </div>
+                <?php endif; ?>
+            </div>
+
+            </div><!-- /cs-grid-1 cloud -->
+
+        </div><!-- /cs-tab-cloud -->
+
     </div><!-- /cs-wrap -->
     <?php
 }
@@ -1578,6 +1724,24 @@ add_action('wp_ajax_cs_save_ami', function (): void {
     update_option('cs_ami_region_override', $region_override);
     update_option('cs_ami_max', $ami_max);
     wp_send_json_success(['prefix' => $prefix, 'reboot' => $reboot, 'region' => $region_override, 'ami_max' => $ami_max]);
+});
+
+add_action('wp_ajax_cs_save_cloud_schedule', function (): void {
+    if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
+    cs_verify_nonce();
+    $raw_days   = isset($_POST['ami_schedule_days']) && is_array($_POST['ami_schedule_days']) ? $_POST['ami_schedule_days'] : [];
+    $clean_days = array_values(array_filter(array_map('intval', $raw_days), fn($d) => $d >= 1 && $d <= 7));
+    update_option('cs_ami_schedule_days', $clean_days);
+    update_option('cs_ami_run_hour',   max(0, min(23, intval($_POST['ami_run_hour']   ?? 3))));
+    update_option('cs_ami_run_minute', max(0, min(59, intval($_POST['ami_run_minute'] ?? 30))));
+    wp_cache_delete('cs_ami_schedule_days', 'options');
+    wp_cache_delete('cs_ami_run_hour',      'options');
+    wp_cache_delete('cs_ami_run_minute',    'options');
+    wp_cache_delete('alloptions',           'options');
+    cs_reschedule();
+    $day_names    = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    $saved_labels = implode(', ', array_map(fn($d) => $day_names[$d] ?? $d, $clean_days));
+    wp_send_json_success($saved_labels ?: 'No days selected — AMI scheduling disabled');
 });
 
 add_action('wp_ajax_cs_create_ami', function (): void {

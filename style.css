@@ -7,6 +7,41 @@
 .cs-wrap { max-width: 1200px; padding-bottom: 60px; }
 
 /* ================================================================
+   TABS
+   ================================================================ */
+
+.cs-tab-bar {
+    display: flex;
+    gap: 4px;
+    margin: 18px 0 0;
+    border-bottom: 2px solid #ddd;
+}
+.cs-tab {
+    padding: 9px 24px;
+    font-size: 0.92rem;
+    font-weight: 600;
+    cursor: pointer;
+    background: #f0f0f1;
+    border: 1px solid #ddd;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    color: #555;
+    position: relative;
+    top: 2px;
+    transition: background 0.12s, color 0.12s;
+    line-height: 1.4;
+}
+.cs-tab:hover { background: #e6e6e6; color: #333; }
+.cs-tab--active {
+    background: #fff;
+    color: #1565c0;
+    border-color: #ddd;
+    border-bottom: 2px solid #fff;
+    z-index: 1;
+}
+.cs-tab-panel { padding-top: 16px; }
+
+/* ================================================================
    HEADER
    ================================================================ */
 
