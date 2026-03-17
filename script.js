@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.29 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.30 */
 jQuery(function ($) {
     'use strict';
 
@@ -738,29 +738,73 @@ window.csGDriveTest = function () {
 };
 
 window.csGDriveExplain = function () {
-    csShowExplain('Google Drive Backup',
-        '<p>After every backup the zip is automatically copied to your Google Drive. Setup takes about 5 minutes and only needs to be done once.</p>' +
-        '<hr style="margin:12px 0;border:none;border-top:1px solid #e0e0e0;">' +
-        '<p style="margin:0 0 6px;"><strong>Step 1 — SSH into your server</strong></p>' +
-        '<p style="margin:0 0 12px;color:#555;">Open a terminal on your computer and connect to the server.</p>' +
-        '<p style="margin:0 0 6px;"><strong>Step 2 — Run the setup wizard</strong></p>' +
-        '<p style="margin:0 0 4px;color:#555;">Paste this command (it walks you through the rest):</p>' +
-        '<code style="display:block;background:#f5f5f5;padding:8px 10px;border-radius:4px;margin:0 0 12px;font-size:0.85rem;">sudo -u apache rclone config</code>' +
-        '<p style="margin:0 0 6px;"><strong>Step 3 — Answer the prompts</strong></p>' +
-        '<ol style="margin:4px 0 12px 18px;padding:0;color:#555;line-height:1.8;">' +
-        '<li>Press <code>n</code> for <em>New remote</em></li>' +
-        '<li>Type a name — use <code>gdrive</code></li>' +
-        '<li>Choose <code>drive</code> (Google Drive) from the list</li>' +
-        '<li>Press Enter to skip client_id and client_secret (leave blank)</li>' +
-        '<li>Choose scope <code>1</code> — full access</li>' +
-        '<li>Press Enter to skip root_folder_id and service_account_file</li>' +
-        '<li>Press <code>n</code> — no advanced config</li>' +
-        '<li>Press <code>n</code> — no auto config (server has no browser)</li>' +
-        '</ol>' +
-        '<p style="margin:0 0 6px;"><strong>Step 4 — Authorise with Google</strong></p>' +
-        '<p style="margin:0 0 12px;color:#555;">rclone prints a long URL. Open it on <strong>your laptop</strong>, sign in to Google, click Allow, then paste the code it gives you back into the terminal.</p>' +
-        '<p style="margin:0 0 6px;"><strong>Step 5 — Save settings here</strong></p>' +
-        '<p style="margin:0;color:#555;">Enter <code>gdrive</code> as the remote name above, set a destination folder (e.g. <code>cloudscale-backups/</code>), click <em>Save Drive Settings</em>, then click <em>Test Connection</em> to confirm it works.</p>'
+    // Widen the modal for this long guide
+    var $ = window.jQuery;
+    setTimeout(function () {
+        $('#cs-explain-modal').css('max-width', '680px');
+        $('#cs-explain-body').css({'max-height': '65vh', 'overflow-y': 'auto', 'padding-right': '6px'});
+    }, 10);
+
+    function cmd(text) {
+        return '<code style="display:block;background:#1e1e1e;color:#d4d4d4;padding:8px 12px;border-radius:4px;margin:4px 0 10px;font-size:0.82rem;white-space:pre;">' + text + '</code>';
+    }
+    function note(text) {
+        return '<p style="margin:0 0 10px;color:#555;font-size:0.88rem;">' + text + '</p>';
+    }
+    function h(text) {
+        return '<p style="margin:14px 0 4px;font-weight:700;font-size:0.93rem;">' + text + '</p>';
+    }
+    function hr() { return '<hr style="margin:12px 0;border:none;border-top:1px solid #e0e0e0;">'; }
+
+    csShowExplain('Google Drive Backup — Setup Guide',
+        '<p style="margin:0 0 8px;">After every backup the zip is automatically copied to your Google Drive via <strong>rclone</strong>. Setup takes about 5 minutes and only needs to be done once.</p>' +
+        hr() +
+
+        h('Step 1 — Install rclone on the server') +
+        note('SSH into the server, then run:') +
+        cmd('curl -fsSL https://rclone.org/install.sh | sudo bash') +
+        note('You should see: <em>rclone vX.XX.X has successfully installed.</em>') +
+
+        hr() +
+        h('Step 2 — Run the setup wizard as the apache user') +
+        cmd('sudo -u apache rclone config') +
+        note('You\'ll see: <em>No remotes found, make a new one?</em>') +
+
+        hr() +
+        h('Step 3 — Answer every prompt') +
+        '<table style="width:100%;border-collapse:collapse;font-size:0.87rem;margin-bottom:10px;">' +
+        '<tr style="background:#f5f5f5;"><th style="padding:5px 8px;text-align:left;font-weight:600;">Prompt</th><th style="padding:5px 8px;text-align:left;font-weight:600;">What to type</th></tr>' +
+        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;"><em>n/s/q</em></td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>n</code> — New remote</td></tr>' +
+        '<tr style="background:#fafafa;"><td style="padding:5px 8px;border-top:1px solid #eee;">name&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>gdrive</code></td></tr>' +
+        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;">Storage&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>24</code> — Google Drive</td></tr>' +
+        '<tr style="background:#fafafa;"><td style="padding:5px 8px;border-top:1px solid #eee;">client_id&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;">Press Enter (leave blank)</td></tr>' +
+        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;">client_secret&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;">Press Enter (leave blank)</td></tr>' +
+        '<tr style="background:#fafafa;"><td style="padding:5px 8px;border-top:1px solid #eee;">scope&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>1</code> — Full access</td></tr>' +
+        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;">service_account_file&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;">Press Enter (leave blank)</td></tr>' +
+        '<tr style="background:#fafafa;"><td style="padding:5px 8px;border-top:1px solid #eee;">Edit advanced config? y/n&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>n</code></td></tr>' +
+        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;">Use web browser? y/n&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>n</code> — server has no browser</td></tr>' +
+        '</table>' +
+
+        hr() +
+        h('Step 4 — Authorise with Google (on your laptop)') +
+        note('rclone will print: <em>Execute the following on the machine with the web browser:</em>') +
+        cmd('rclone authorize "drive"') +
+        note('Run that command on <strong>your laptop</strong> (not the server). It opens your browser — sign in to Google and click Allow. Your laptop terminal will print a long JSON token like:') +
+        '<code style="display:block;background:#1e1e1e;color:#98c379;padding:8px 12px;border-radius:4px;margin:4px 0 10px;font-size:0.78rem;word-break:break-all;">{"access_token":"ya29.a0ATk...","token_type":"Bearer","refresh_token":"1//03mUqz...","expiry":"2026-03-18T01:01:25+02:00"}</code>' +
+        note('Copy the entire JSON (everything between <strong>---&gt;</strong> and <strong>&lt;---End paste</strong>) and paste it into the server SSH session at the <code>config_token&gt;</code> prompt.') +
+
+        hr() +
+        h('Step 5 — Finish the wizard') +
+        note('Answer <code>n</code> to "Configure as Shared Drive", then <code>y</code> to keep the remote, then <code>q</code> to quit.') +
+
+        hr() +
+        h('Step 6 — Verify it works') +
+        note('A successful test connection lists your Drive folders, like this:') +
+        '<code style="display:block;background:#1e1e1e;color:#d4d4d4;padding:8px 12px;border-radius:4px;margin:4px 0 10px;font-size:0.78rem;white-space:pre;">           0 2017-07-10 14:08:48        -1 AWS\n           0 2018-10-15 11:07:22        -1 House\n           0 2025-05-26 09:25:56        -1 Saved from Chrome</code>' +
+
+        hr() +
+        h('Step 7 — Save settings here') +
+        note('Enter <code>gdrive</code> as the remote name, set the destination folder to <code>cloudscale-backups/</code>, click <em>Save Drive Settings</em>, then click <em>Test Connection</em> to confirm.')
     );
 };
 
