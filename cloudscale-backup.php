@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.13
+ * Version:           3.2.14
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.13');
+define('CS_BACKUP_VERSION',    '3.2.14');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -428,6 +428,13 @@ function cs_admin_page(): void {
     $dropins_size     = 0;
     foreach (glob(WP_CONTENT_DIR . '/*.php') ?: [] as $_f) { $dropins_size += (int) filesize($_f); }
     $backups_dir_size = cs_dir_size(CS_BACKUP_DIR);
+    $ami_zips = glob(CS_BACKUP_DIR . '*.zip') ?: [];
+    if ($ami_zips) {
+        usort($ami_zips, fn($a, $b) => filemtime($b) <=> filemtime($a));
+        $ami_latest_size = (int) filesize($ami_zips[0]);
+    } else {
+        $ami_latest_size = 0;
+    }
 
     // Estimate database size from information_schema
     global $wpdb;
@@ -1104,7 +1111,7 @@ function cs_admin_page(): void {
                 'htaccess'  => $htaccess_size,
                 'wpconfig'  => $wpconfig_size,
                 'dropins'     => $dropins_size,
-                'backups_dir' => $backups_dir_size,
+                'backups_dir' => $ami_latest_size,
                 'free'        => $free_bytes !== false ? (int)$free_bytes : 0,
                 'latest'    => $latest_size,  // actual compressed size of last backup
             ];
@@ -1131,7 +1138,7 @@ function cs_admin_page(): void {
                     <label class="cs-option-label"><input type="checkbox" id="cs-include-mu" <?php echo $mc('mu', $mu_size > 0); ?> data-size="<?php echo (int) $mu_size; ?>"> Must-use plugins <code><?php echo $mu_size > 0 ? esc_html(cs_format_size($mu_size)) : '0 B'; ?></code></label>
                     <label class="cs-option-label"><input type="checkbox" id="cs-include-languages" <?php echo $mc('languages', $lang_size > 0); ?> data-size="<?php echo (int) $lang_size; ?>"> Languages <code><?php echo $lang_size > 0 ? esc_html(cs_format_size($lang_size)) : '0 B'; ?></code></label>
                     <label class="cs-option-label"><input type="checkbox" id="cs-include-dropins" <?php echo $mc('dropins', false); ?> data-size="<?php echo (int) $dropins_size; ?>"> Dropins <small>(object-cache.php…)</small> <code><?php echo $dropins_size > 0 ? esc_html(cs_format_size($dropins_size)) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-backups-dir" <?php echo $mc('backups_dir', false); ?> data-size="<?php echo (int) $backups_dir_size; ?>"> AMI Backups <small>(cloudscale-backups/)</small> <code><?php echo $backups_dir_size > 0 ? esc_html(cs_format_size($backups_dir_size)) : '0 B'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-backups-dir" <?php echo $mc('backups_dir', false); ?> data-size="<?php echo (int) $ami_latest_size; ?>"> AMI Backups <small>(cloudscale-backups/)</small> <code><?php echo $ami_latest_size > 0 ? esc_html(cs_format_size($ami_latest_size)) : '0 B'; ?></code></label>
                     <label class="cs-option-label"><input type="checkbox" id="cs-include-htaccess" <?php echo $mc('htaccess', $htaccess_size > 0); ?> data-size="<?php echo (int) $htaccess_size; ?>"> .htaccess <code><?php echo $htaccess_size > 0 ? esc_html(cs_format_size($htaccess_size)) : 'not found'; ?></code></label>
                     <label class="cs-option-label cs-option-sensitive">
                         <input type="checkbox" id="cs-include-wpconfig" <?php echo $mc('wpconfig', false); ?> data-size="<?php echo (int) $wpconfig_size; ?>">
@@ -2395,7 +2402,13 @@ function cs_create_backup(
     }
 
     if ($include_backups_dir) {
-        cs_add_dir_to_zip($zip, CS_BACKUP_DIR, 'cloudscale-backups');
+        $ami_files = glob(CS_BACKUP_DIR . '*.zip') ?: [];
+        // Exclude the zip currently being created
+        $ami_files = array_filter($ami_files, fn($f) => realpath($f) !== realpath($zip_path));
+        if ($ami_files) {
+            usort($ami_files, fn($a, $b) => filemtime($b) <=> filemtime($a));
+            $zip->addFile($ami_files[0], 'cloudscale-backups/' . basename($ami_files[0]));
+        }
     }
 
     $zip->addFromString('backup-meta.json', json_encode([
