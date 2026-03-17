@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.32 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.33 */
 jQuery(function ($) {
     'use strict';
 
@@ -774,50 +774,65 @@ window.csGDriveExplain = function () {
         hr() +
 
         h('Step 1 — Install rclone on the server') +
-        note('SSH into the server, then run:') +
+        note('SSH in, then run:') +
         cmd('curl -fsSL https://rclone.org/install.sh | sudo bash') +
-        note('You should see: <em>rclone vX.XX.X has successfully installed.</em>') +
+        note('You\'ll see a long install log ending with:') +
+        '<code style="display:block;background:#1e1e1e;color:#98c379;padding:8px 12px;border-radius:4px;margin:4px 0 10px;font-size:0.82rem;">rclone v1.73.2 has successfully installed.\nNow run "rclone config" for setup.</code>' +
 
         hr() +
-        h('Step 2 — Run the setup wizard as the apache user') +
+        h('Step 2 — Fix apache home directory permissions') +
+        note('rclone saves its config in apache\'s home folder. Run these two commands first or it will fail silently:') +
+        cmd('sudo mkdir -p /usr/share/httpd/.config/rclone\nsudo chown -R apache:apache /usr/share/httpd/.config\nsudo chmod 700 /usr/share/httpd/.config/rclone\nsudo chown apache:apache /usr/share/httpd\nsudo chmod 755 /usr/share/httpd') +
+
+        hr() +
+        h('Step 3 — Run the setup wizard as the apache user') +
         cmd('sudo -u apache rclone config') +
-        note('You\'ll see: <em>No remotes found, make a new one?</em>') +
+        note('You\'ll see:') +
+        '<code style="display:block;background:#1e1e1e;color:#d4d4d4;padding:8px 12px;border-radius:4px;margin:4px 0 10px;font-size:0.82rem;">2026/03/17 23:51:30 NOTICE: Config file "/usr/share/httpd/.rclone.conf" not found - using defaults\nNo remotes found, make a new one?\nn) New remote\ns) Set configuration password\nq) Quit config</code>' +
 
         hr() +
-        h('Step 3 — Answer every prompt') +
+        h('Step 4 — Answer every prompt') +
         '<table style="width:100%;border-collapse:collapse;font-size:0.87rem;margin-bottom:10px;">' +
-        '<tr style="background:#f5f5f5;"><th style="padding:5px 8px;text-align:left;font-weight:600;">Prompt</th><th style="padding:5px 8px;text-align:left;font-weight:600;">What to type</th></tr>' +
-        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;"><em>n/s/q</em></td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>n</code> — New remote</td></tr>' +
+        '<tr style="background:#f5f5f5;"><th style="padding:5px 8px;text-align:left;font-weight:600;">Prompt</th><th style="padding:5px 8px;text-align:left;font-weight:600;">Type</th></tr>' +
+        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;"><em>n/s/q</em></td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>n</code></td></tr>' +
         '<tr style="background:#fafafa;"><td style="padding:5px 8px;border-top:1px solid #eee;">name&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>gdrive</code></td></tr>' +
-        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;">Storage&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>24</code> — Google Drive</td></tr>' +
-        '<tr style="background:#fafafa;"><td style="padding:5px 8px;border-top:1px solid #eee;">client_id&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;">Press Enter (leave blank)</td></tr>' +
-        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;">client_secret&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;">Press Enter (leave blank)</td></tr>' +
-        '<tr style="background:#fafafa;"><td style="padding:5px 8px;border-top:1px solid #eee;">scope&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>1</code> — Full access</td></tr>' +
-        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;">service_account_file&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;">Press Enter (leave blank)</td></tr>' +
-        '<tr style="background:#fafafa;"><td style="padding:5px 8px;border-top:1px solid #eee;">Edit advanced config? y/n&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>n</code></td></tr>' +
-        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;">Use web browser? y/n&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>n</code> — server has no browser</td></tr>' +
+        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;">Storage&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>24</code> (Google Drive)</td></tr>' +
+        '<tr style="background:#fafafa;"><td style="padding:5px 8px;border-top:1px solid #eee;">client_id&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;">Enter (blank)</td></tr>' +
+        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;">client_secret&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;">Enter (blank)</td></tr>' +
+        '<tr style="background:#fafafa;"><td style="padding:5px 8px;border-top:1px solid #eee;">scope&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>1</code> (full access)</td></tr>' +
+        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;">service_account_file&gt;</td><td style="padding:5px 8px;border-top:1px solid #eee;">Enter (blank)</td></tr>' +
+        '<tr style="background:#fafafa;"><td style="padding:5px 8px;border-top:1px solid #eee;">Edit advanced config?</td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>n</code></td></tr>' +
+        '<tr><td style="padding:5px 8px;border-top:1px solid #eee;">Use web browser?</td><td style="padding:5px 8px;border-top:1px solid #eee;"><code>n</code> (no browser on server)</td></tr>' +
         '</table>' +
 
         hr() +
-        h('Step 4 — Authorise with Google (on your laptop)') +
-        note('rclone will print: <em>Execute the following on the machine with the web browser:</em>') +
+        h('Step 5 — Authorise on your laptop') +
+        note('The server will print: <em>Execute the following on the machine with the web browser:</em>') +
+        note('Open a <strong>new terminal on your laptop</strong> (leave the SSH session open) and run:') +
         cmd('rclone authorize "drive"') +
-        note('Run that command on <strong>your laptop</strong> (not the server). It opens your browser — sign in to Google and click Allow. Your laptop terminal will print a long JSON token like:') +
-        '<code style="display:block;background:#1e1e1e;color:#98c379;padding:8px 12px;border-radius:4px;margin:4px 0 10px;font-size:0.78rem;word-break:break-all;">{"access_token":"ya29.a0ATk...","token_type":"Bearer","refresh_token":"1//03mUqz...","expiry":"2026-03-18T01:01:25+02:00"}</code>' +
-        note('Copy the entire JSON (everything between <strong>---&gt;</strong> and <strong>&lt;---End paste</strong>) and paste it into the server SSH session at the <code>config_token&gt;</code> prompt.') +
+        note('If rclone is not on your laptop: <code>brew install rclone</code> first. Your browser opens — sign in to Google, click Allow. The laptop terminal prints:') +
+        '<code style="display:block;background:#1e1e1e;color:#d4d4d4;padding:8px 12px;border-radius:4px;margin:4px 0 6px;font-size:0.78rem;">Paste the following into your remote machine ---&gt;\n{"access_token":"ya29.a0ATkoCc6...","token_type":"Bearer","refresh_token":"1//03mUqzc...","expiry":"2026-03-18T01:01:25.108529+02:00","expires_in":3599}\n&lt;---End paste</code>' +
+        note('Copy <strong>the entire JSON block</strong> (from <code>{</code> to <code>}</code>) and paste it into the SSH session at the <code>config_token&gt;</code> prompt.') +
 
         hr() +
-        h('Step 5 — Finish the wizard') +
-        note('Answer <code>n</code> to "Configure as Shared Drive", then <code>y</code> to keep the remote, then <code>q</code> to quit.') +
+        h('Step 6 — Finish the wizard') +
+        note('Answer <code>n</code> to "Configure as Shared Drive", <code>y</code> to confirm, <code>q</code> to quit.') +
+        note('You should see: <em>Current remotes: gdrive / drive</em>') +
 
         hr() +
-        h('Step 6 — Verify it works') +
-        note('A successful test connection lists your Drive folders, like this:') +
-        '<code style="display:block;background:#1e1e1e;color:#d4d4d4;padding:8px 12px;border-radius:4px;margin:4px 0 10px;font-size:0.78rem;white-space:pre;">           0 2017-07-10 14:08:48        -1 AWS\n           0 2018-10-15 11:07:22        -1 House\n           0 2025-05-26 09:25:56        -1 Saved from Chrome</code>' +
+        h('⚠ Fixing a permission error (if you see it)') +
+        note('If the wizard prints <em>permission denied</em> when saving config, run these commands on the server then redo from Step 3:') +
+        cmd('sudo mkdir -p /usr/share/httpd/.config/rclone\nsudo bash -c \'cat > /usr/share/httpd/.config/rclone/rclone.conf << \\\'EOF\\\'\n[gdrive]\ntype = drive\nscope = drive\ntoken = PASTE_YOUR_JSON_TOKEN_HERE\nEOF\'\nsudo chown apache:apache /usr/share/httpd/.config/rclone/rclone.conf\nsudo chmod 600 /usr/share/httpd/.config/rclone/rclone.conf') +
+        note('Replace <code>PASTE_YOUR_JSON_TOKEN_HERE</code> with the full JSON token from Step 5.') +
 
         hr() +
-        h('Step 7 — Save settings here') +
-        note('Enter <code>gdrive</code> as the remote name, set the destination folder to <code>cloudscale-backups/</code>, click <em>Save Drive Settings</em>, then click <em>Test Connection</em> to confirm.')
+        h('Step 7 — Verify connection') +
+        note('A working connection lists your Drive folders:') +
+        '<code style="display:block;background:#1e1e1e;color:#d4d4d4;padding:8px 12px;border-radius:4px;margin:4px 0 10px;font-size:0.78rem;white-space:pre;">           0 2017-07-10 14:08:48        -1 AWS\n           0 2019-06-10 11:29:32        -1 Diskstation\n           0 2018-10-15 11:07:22        -1 House\n           0 2025-05-26 09:25:56        -1 Saved from Chrome\n           0 2016-07-09 12:03:19        -1 Tax</code>' +
+
+        hr() +
+        h('Step 8 — Save settings here') +
+        note('Enter <code>gdrive</code> as the remote name, <code>cloudscale-backups/</code> as the destination folder, click <em>Save Drive Settings</em>, then <em>Test Connection</em>.')
     );
 };
 
