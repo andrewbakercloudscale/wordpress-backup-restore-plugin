@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.35
+ * Version:           3.2.36
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.35');
+define('CS_BACKUP_VERSION',    '3.2.36');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -365,8 +365,8 @@ add_action('cs_scheduled_ami_backup', function () {
     $today      = intval((new DateTime('now', wp_timezone()))->format('N'));
     if (empty($cloud_days) || !in_array($today, $cloud_days, true)) return;
 
-    // 1. AMI snapshot (if prefix configured)
-    if (get_option('cs_ami_prefix', '')) {
+    // 1. AMI snapshot (if enabled and prefix configured)
+    if (get_option('cs_ami_sync_enabled', true) && get_option('cs_ami_prefix', '')) {
         $result = cs_do_create_ami();
         if ($result['ok']) {
             cs_log('[CloudScale Backup] Scheduled AMI created: ' . $result['ami_id'] . ' (' . $result['name'] . ')');
@@ -531,6 +531,7 @@ function cs_admin_page(): void {
     $gdrive_path         = get_option('cs_gdrive_path', 'cloudscale-backups/');
     $s3_sync_enabled        = (bool) get_option('cs_s3_sync_enabled', true);
     $gdrive_sync_enabled    = (bool) get_option('cs_gdrive_sync_enabled', true);
+    $ami_sync_enabled       = (bool) get_option('cs_ami_sync_enabled', true);
     $cloud_schedule_enabled = (bool) get_option('cs_cloud_schedule_enabled', false);
     $ami_prefix          = get_option('cs_ami_prefix', '');
     $ami_reboot          = (bool) get_option('cs_ami_reboot', false);
@@ -1336,6 +1337,10 @@ function cs_admin_page(): void {
                         <span class="cs-field-label">Include in cloud backup</span>
                         <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;">
                             <label class="cs-option-label" style="margin:0;">
+                                <input type="checkbox" id="cs-cloud-ami-enabled" <?php checked($ami_sync_enabled); ?>>
+                                &#128247; EC2 AMI Snapshot <span class="cs-sensitive-badge" style="margin-left:4px;">&#9888; reboot</span>
+                            </label>
+                            <label class="cs-option-label" style="margin:0;">
                                 <input type="checkbox" id="cs-cloud-s3-enabled" <?php checked($s3_sync_enabled); ?>>
                                 &#9729; S3 Remote Backup
                             </label>
@@ -1344,7 +1349,7 @@ function cs_admin_page(): void {
                                 &#128196; Google Drive Backup
                             </label>
                         </div>
-                        <p class="cs-help">Each destination must also be configured below with a bucket name / remote name.</p>
+                        <p class="cs-help">Each destination must also be configured. AMI requires AWS CLI and a prefix in the EC2 settings below.</p>
                     </div>
 
                 </fieldset>
@@ -1874,12 +1879,14 @@ add_action('wp_ajax_cs_save_cloud_schedule', function (): void {
     update_option('cs_ami_run_minute',   max(0, min(59, intval($_POST['ami_run_minute'] ?? 30))));
     update_option('cs_s3_sync_enabled',        !empty($_POST['s3_sync_enabled']));
     update_option('cs_gdrive_sync_enabled',    !empty($_POST['gdrive_sync_enabled']));
+    update_option('cs_ami_sync_enabled',       !empty($_POST['ami_sync_enabled']));
     update_option('cs_cloud_schedule_enabled', !empty($_POST['cloud_schedule_enabled']));
     wp_cache_delete('cs_ami_schedule_days',      'options');
     wp_cache_delete('cs_ami_run_hour',           'options');
     wp_cache_delete('cs_ami_run_minute',         'options');
     wp_cache_delete('cs_s3_sync_enabled',        'options');
     wp_cache_delete('cs_gdrive_sync_enabled',    'options');
+    wp_cache_delete('cs_ami_sync_enabled',       'options');
     wp_cache_delete('cs_cloud_schedule_enabled', 'options');
     wp_cache_delete('alloptions',                'options');
     cs_reschedule();
@@ -2918,7 +2925,7 @@ function cs_find_rclone(): string {
 /**
  * Upload a local backup file to Google Drive using rclone.
  *
- * @since 3.2.35
+ * @since 3.2.36
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */

@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.35 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.36 */
 jQuery(function ($) {
     'use strict';
 
@@ -546,19 +546,6 @@ window.csCloudScheduleSave = function () {
     $('.cs-ami-day-check:checked').each(function () { days.push($(this).val()); });
     var $msg = $('#cs-cloud-schedule-msg');
 
-    // Validate: cloud time must be >= local backup time + 30 min
-    var localH  = parseInt($('#cs-run-hour').val()    || '3',  10);
-    var localM  = parseInt($('#cs-run-minute').val()  || '0',  10);
-    var cloudH  = parseInt($('#cs-ami-run-hour').val()   || '3',  10);
-    var cloudM  = parseInt($('#cs-ami-run-minute').val() || '30', 10);
-    var localTot = localH * 60 + localM;
-    var cloudTot = cloudH * 60 + cloudM;
-    if (cloudTot < localTot + 30) {
-        var pad = function(n) { return String(n).padStart(2, '0'); };
-        $msg.text('\u26A0 Cloud Backup Time must be at least 30 minutes after the Local Backup Time (' + pad(localH) + ':' + pad(localM) + '). This ensures a fresh local backup exists before syncing to the cloud.').css('color', '#c62828').show();
-        return;
-    }
-
     $msg.text('Saving\u2026').css('color', '#888').show();
     $.ajax({
         url: CS.ajax_url,
@@ -571,6 +558,7 @@ window.csCloudScheduleSave = function () {
             ami_schedule_days:      days,
             ami_run_hour:           $('#cs-ami-run-hour').val(),
             ami_run_minute:         $('#cs-ami-run-minute').val(),
+            ami_sync_enabled:       $('#cs-cloud-ami-enabled').is(':checked')    ? '1' : '0',
             s3_sync_enabled:        $('#cs-cloud-s3-enabled').is(':checked')     ? '1' : '0',
             gdrive_sync_enabled:    $('#cs-cloud-gdrive-enabled').is(':checked') ? '1' : '0',
         },
