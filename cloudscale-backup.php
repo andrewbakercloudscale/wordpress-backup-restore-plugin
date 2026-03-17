@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.26
+ * Version:           3.2.27
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.26');
+define('CS_BACKUP_VERSION',    '3.2.27');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -1228,12 +1228,12 @@ function cs_admin_page(): void {
         <!-- ===================== CLOUD BACKUPS TAB ===================== -->
         <div id="cs-tab-cloud" class="cs-tab-panel" style="display:none">
 
-            <div class="cs-section-ribbon"><span>Cloud Backup Schedule</span></div>
+            <div class="cs-section-ribbon"><span>Cloud Backup Settings</span></div>
             <div class="cs-grid cs-grid-1" style="display:flex!important;flex-direction:column!important;gap:16px!important;">
 
             <!-- CLOUD SCHEDULE CARD -->
             <div class="cs-card cs-card--blue">
-                <div class="cs-card-stripe cs-stripe--blue" style="background:linear-gradient(135deg,#1565c0 0%,#2196f3 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⏰ <?php echo esc_html__( 'Cloud Backup Schedule', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csScheduleExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+                <div class="cs-card-stripe cs-stripe--blue" style="background:linear-gradient(135deg,#1565c0 0%,#2196f3 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⏰ <?php echo esc_html__( 'Cloud Backup Settings', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csScheduleExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
 
                 <div class="cs-field-group">
                     <span class="cs-field-label">AMI snapshot days <span class="cs-sensitive-badge" style="margin-left:4px;">&#9888; reboot</span></span>
