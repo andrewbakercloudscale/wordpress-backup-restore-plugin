@@ -14,29 +14,29 @@
     display: flex;
     gap: 4px;
     margin: 18px 0 0;
-    border-bottom: 2px solid #ddd;
+    border-bottom: 3px solid #1565c0;
 }
 .cs-tab {
-    padding: 9px 24px;
+    padding: 10px 28px;
     font-size: 0.92rem;
     font-weight: 600;
     cursor: pointer;
-    background: #f0f0f1;
-    border: 1px solid #ddd;
+    background: #c8d8f0;
+    border: 1px solid #90aad6;
     border-bottom: none;
     border-radius: 6px 6px 0 0;
-    color: #555;
+    color: #1a3a6b;
     position: relative;
     top: 2px;
     transition: background 0.12s, color 0.12s;
     line-height: 1.4;
 }
-.cs-tab:hover { background: #e6e6e6; color: #333; }
+.cs-tab:hover { background: #b3caea; color: #0d2a55; }
 .cs-tab--active {
-    background: #fff;
-    color: #1565c0;
-    border-color: #ddd;
-    border-bottom: 2px solid #fff;
+    background: #1565c0;
+    color: #fff;
+    border-color: #1565c0;
+    border-bottom: 3px solid #1565c0;
     z-index: 1;
 }
 .cs-tab-panel { padding-top: 16px; }
