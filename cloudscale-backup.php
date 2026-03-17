@@ -625,7 +625,7 @@ function cs_admin_page(): void {
                                 'mu'          => 'Must-use plugins',
                                 'languages'   => 'Languages',
                                 'dropins'     => 'Dropins',
-                                'backups_dir' => 'Existing backups',
+                                'backups_dir' => 'AMI Backups',
                                 'htaccess'    => '.htaccess',
                                 'wpconfig'    => 'wp-config.php',
                             ];
@@ -1131,7 +1131,7 @@ function cs_admin_page(): void {
                     <label class="cs-option-label"><input type="checkbox" id="cs-include-mu" <?php echo $mc('mu', $mu_size > 0); ?> data-size="<?php echo (int) $mu_size; ?>"> Must-use plugins <code><?php echo $mu_size > 0 ? esc_html(cs_format_size($mu_size)) : '0 B'; ?></code></label>
                     <label class="cs-option-label"><input type="checkbox" id="cs-include-languages" <?php echo $mc('languages', $lang_size > 0); ?> data-size="<?php echo (int) $lang_size; ?>"> Languages <code><?php echo $lang_size > 0 ? esc_html(cs_format_size($lang_size)) : '0 B'; ?></code></label>
                     <label class="cs-option-label"><input type="checkbox" id="cs-include-dropins" <?php echo $mc('dropins', false); ?> data-size="<?php echo (int) $dropins_size; ?>"> Dropins <small>(object-cache.php…)</small> <code><?php echo $dropins_size > 0 ? esc_html(cs_format_size($dropins_size)) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-backups-dir" <?php echo $mc('backups_dir', false); ?> data-size="<?php echo (int) $backups_dir_size; ?>"> Existing backups <small>(cloudscale-backups/)</small> <code><?php echo $backups_dir_size > 0 ? esc_html(cs_format_size($backups_dir_size)) : '0 B'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-backups-dir" <?php echo $mc('backups_dir', false); ?> data-size="<?php echo (int) $backups_dir_size; ?>"> AMI Backups <small>(cloudscale-backups/)</small> <code><?php echo $backups_dir_size > 0 ? esc_html(cs_format_size($backups_dir_size)) : '0 B'; ?></code></label>
                     <label class="cs-option-label"><input type="checkbox" id="cs-include-htaccess" <?php echo $mc('htaccess', $htaccess_size > 0); ?> data-size="<?php echo (int) $htaccess_size; ?>"> .htaccess <code><?php echo $htaccess_size > 0 ? esc_html(cs_format_size($htaccess_size)) : 'not found'; ?></code></label>
                     <label class="cs-option-label cs-option-sensitive">
                         <input type="checkbox" id="cs-include-wpconfig" <?php echo $mc('wpconfig', false); ?> data-size="<?php echo (int) $wpconfig_size; ?>">
