@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.30 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.31 */
 jQuery(function ($) {
     'use strict';
 
@@ -539,11 +539,13 @@ window.csCloudScheduleSave = function () {
         method: 'POST',
         traditional: true,
         data: {
-            action:             'cs_save_cloud_schedule',
-            nonce:              CS.nonce,
-            ami_schedule_days:  days,
-            ami_run_hour:       $('#cs-ami-run-hour').val(),
-            ami_run_minute:     $('#cs-ami-run-minute').val(),
+            action:              'cs_save_cloud_schedule',
+            nonce:               CS.nonce,
+            ami_schedule_days:   days,
+            ami_run_hour:        $('#cs-ami-run-hour').val(),
+            ami_run_minute:      $('#cs-ami-run-minute').val(),
+            s3_sync_enabled:     $('#cs-cloud-s3-enabled').is(':checked')     ? '1' : '0',
+            gdrive_sync_enabled: $('#cs-cloud-gdrive-enabled').is(':checked') ? '1' : '0',
         },
         success: function (res) {
             if (res.success) {
