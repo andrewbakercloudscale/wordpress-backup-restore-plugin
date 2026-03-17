@@ -28,6 +28,8 @@ $options = [
     'cs_gdrive_remote',
     'cs_gdrive_path',
     'cs_gdrive_log',
+    'cs_s3_sync_enabled',
+    'cs_gdrive_sync_enabled',
     'cs_ami_prefix',
     'cs_ami_reboot',
     'cs_ami_region_override',

@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.30
+ * Version:           3.2.31
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.30');
+define('CS_BACKUP_VERSION',    '3.2.31');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -503,8 +503,10 @@ function cs_admin_page(): void {
     $s3_bucket     = get_option('cs_s3_bucket', '');
     $s3_prefix     = get_option('cs_s3_prefix', 'backups/');
     $s3_saved_msg  = '';
-    $gdrive_remote = get_option('cs_gdrive_remote', '');
-    $gdrive_path   = get_option('cs_gdrive_path', 'cloudscale-backups/');
+    $gdrive_remote       = get_option('cs_gdrive_remote', '');
+    $gdrive_path         = get_option('cs_gdrive_path', 'cloudscale-backups/');
+    $s3_sync_enabled     = (bool) get_option('cs_s3_sync_enabled', true);
+    $gdrive_sync_enabled = (bool) get_option('cs_gdrive_sync_enabled', true);
     $ami_prefix          = get_option('cs_ami_prefix', '');
     $ami_reboot          = (bool) get_option('cs_ami_reboot', false);
     $ami_region_override = get_option('cs_ami_region_override', '');
@@ -1289,6 +1291,21 @@ function cs_admin_page(): void {
                     <?php endif; ?>
                 </div>
 
+                <div class="cs-field-group" style="border-top:1px solid #e0e0e0;padding-top:14px;margin-top:4px;">
+                    <span class="cs-field-label">Sync after every backup</span>
+                    <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;">
+                        <label class="cs-option-label" style="margin:0;">
+                            <input type="checkbox" id="cs-cloud-s3-enabled" <?php checked($s3_sync_enabled); ?>>
+                            &#9729; S3 Remote Backup
+                        </label>
+                        <label class="cs-option-label" style="margin:0;">
+                            <input type="checkbox" id="cs-cloud-gdrive-enabled" <?php checked($gdrive_sync_enabled); ?>>
+                            &#128196; Google Drive Backup
+                        </label>
+                    </div>
+                    <p class="cs-help">Each destination must also be configured below with a bucket name / remote name.</p>
+                </div>
+
                 <button type="button" onclick="csCloudScheduleSave()" class="button button-primary cs-mt"><?php esc_html_e( 'Save Schedule', 'cloudscale-backup' ); ?></button>
                 <span id="cs-cloud-schedule-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
             </div>
@@ -1335,6 +1352,52 @@ function cs_admin_page(): void {
                 <div class="cs-info-row">
                     <span>Last S3 sync</span>
                     <strong><?php echo $s3_last ? esc_html(cs_human_age($s3_last) . ' ago (' . wp_date('j M Y H:i', $s3_last) . ')') : 'Never'; ?></strong>
+                </div>
+                <?php endif; ?>
+            </div>
+
+            <!-- GOOGLE DRIVE BACKUP CARD -->
+            <div class="cs-card cs-card--gdrive">
+                <div class="cs-card-stripe" style="background:linear-gradient(135deg,#0f9d58 0%,#34a853 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
+                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128196; <?php echo esc_html__( 'Google Drive Backup', 'cloudscale-backup' ); ?></h2>
+                    <button type="button" onclick="csGDriveExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button>
+                </div>
+
+                <p class="cs-help">After each backup, the zip is copied to Google Drive via <code>rclone</code>. Requires <code>rclone</code> installed on the server and a Google Drive remote configured with <code>rclone config</code>.</p>
+
+                <div class="cs-field-row cs-mt">
+                    <label for="cs-gdrive-remote"><strong>rclone remote name</strong></label>
+                    <input type="text" id="cs-gdrive-remote" class="regular-text" placeholder="gdrive"
+                           value="<?php echo esc_attr($gdrive_remote); ?>">
+                    <p class="cs-help">The remote name you gave when running <code>rclone config</code>, e.g. <code>gdrive</code>.</p>
+                </div>
+
+                <div class="cs-field-row">
+                    <label for="cs-gdrive-path"><strong>Destination folder</strong></label>
+                    <input type="text" id="cs-gdrive-path" class="regular-text" placeholder="cloudscale-backups/"
+                           value="<?php echo esc_attr($gdrive_path); ?>">
+                    <p class="cs-help">Folder path inside the Drive. Trailing slash required. Leave blank to copy to the root.</p>
+                </div>
+
+                <div style="margin-top:12px;">
+                    <button type="button" onclick="csGDriveSave()" class="button button-primary"><?php esc_html_e( 'Save Drive Settings', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csGDriveTest()" class="button" style="margin-left:8px"><?php esc_html_e( 'Test Connection', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csGDriveDiagnose()" class="button" style="margin-left:8px"><?php esc_html_e( 'Diagnose', 'cloudscale-backup' ); ?></button>
+                    <span id="cs-gdrive-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
+                </div>
+
+                <?php if ($gdrive_remote): ?>
+                <div class="cs-info-row cs-mt">
+                    <span>Destination</span>
+                    <strong><code><?php echo esc_html(rtrim($gdrive_remote, ':') . ':' . ltrim($gdrive_path, '/')); ?></code></strong>
+                </div>
+                <div class="cs-info-row">
+                    <span>Backups synced</span>
+                    <strong><?php echo (int) count($gdrive_synced); ?> of <?php echo (int) count($backups); ?></strong>
+                </div>
+                <div class="cs-info-row">
+                    <span>Last sync</span>
+                    <strong><?php echo $gdrive_last ? esc_html(cs_human_age($gdrive_last) . ' ago (' . wp_date('j M Y H:i', $gdrive_last) . ')') : 'Never'; ?></strong>
                 </div>
                 <?php endif; ?>
             </div>
@@ -1465,52 +1528,6 @@ function cs_admin_page(): void {
                         </tbody>
                     </table>
                     </div>
-                </div>
-                <?php endif; ?>
-            </div>
-
-            <!-- GOOGLE DRIVE BACKUP CARD -->
-            <div class="cs-card cs-card--gdrive">
-                <div class="cs-card-stripe" style="background:linear-gradient(135deg,#0f9d58 0%,#34a853 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
-                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128196; <?php echo esc_html__( 'Google Drive Backup', 'cloudscale-backup' ); ?></h2>
-                    <button type="button" onclick="csGDriveExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button>
-                </div>
-
-                <p class="cs-help">After each backup, the zip is copied to Google Drive via <code>rclone</code>. Requires <code>rclone</code> installed on the server and a Google Drive remote configured with <code>rclone config</code>.</p>
-
-                <div class="cs-field-row cs-mt">
-                    <label for="cs-gdrive-remote"><strong>rclone remote name</strong></label>
-                    <input type="text" id="cs-gdrive-remote" class="regular-text" placeholder="gdrive"
-                           value="<?php echo esc_attr($gdrive_remote); ?>">
-                    <p class="cs-help">The remote name you gave when running <code>rclone config</code>, e.g. <code>gdrive</code>.</p>
-                </div>
-
-                <div class="cs-field-row">
-                    <label for="cs-gdrive-path"><strong>Destination folder</strong></label>
-                    <input type="text" id="cs-gdrive-path" class="regular-text" placeholder="cloudscale-backups/"
-                           value="<?php echo esc_attr($gdrive_path); ?>">
-                    <p class="cs-help">Folder path inside the Drive. Trailing slash required. Leave blank to copy to the root.</p>
-                </div>
-
-                <div style="margin-top:12px;">
-                    <button type="button" onclick="csGDriveSave()" class="button button-primary"><?php esc_html_e( 'Save Drive Settings', 'cloudscale-backup' ); ?></button>
-                    <button type="button" onclick="csGDriveTest()" class="button" style="margin-left:8px"><?php esc_html_e( 'Test Connection', 'cloudscale-backup' ); ?></button>
-                    <button type="button" onclick="csGDriveDiagnose()" class="button" style="margin-left:8px"><?php esc_html_e( 'Diagnose', 'cloudscale-backup' ); ?></button>
-                    <span id="cs-gdrive-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
-                </div>
-
-                <?php if ($gdrive_remote): ?>
-                <div class="cs-info-row cs-mt">
-                    <span>Destination</span>
-                    <strong><code><?php echo esc_html(rtrim($gdrive_remote, ':') . ':' . ltrim($gdrive_path, '/')); ?></code></strong>
-                </div>
-                <div class="cs-info-row">
-                    <span>Backups synced</span>
-                    <strong><?php echo (int) count($gdrive_synced); ?> of <?php echo (int) count($backups); ?></strong>
-                </div>
-                <div class="cs-info-row">
-                    <span>Last sync</span>
-                    <strong><?php echo $gdrive_last ? esc_html(cs_human_age($gdrive_last) . ' ago (' . wp_date('j M Y H:i', $gdrive_last) . ')') : 'Never'; ?></strong>
                 </div>
                 <?php endif; ?>
             </div>
@@ -1804,12 +1821,16 @@ add_action('wp_ajax_cs_save_cloud_schedule', function (): void {
     $raw_days   = isset($_POST['ami_schedule_days']) && is_array($_POST['ami_schedule_days']) ? $_POST['ami_schedule_days'] : [];
     $clean_days = array_values(array_filter(array_map('intval', $raw_days), fn($d) => $d >= 1 && $d <= 7));
     update_option('cs_ami_schedule_days', $clean_days);
-    update_option('cs_ami_run_hour',   max(0, min(23, intval($_POST['ami_run_hour']   ?? 3))));
-    update_option('cs_ami_run_minute', max(0, min(59, intval($_POST['ami_run_minute'] ?? 30))));
-    wp_cache_delete('cs_ami_schedule_days', 'options');
-    wp_cache_delete('cs_ami_run_hour',      'options');
-    wp_cache_delete('cs_ami_run_minute',    'options');
-    wp_cache_delete('alloptions',           'options');
+    update_option('cs_ami_run_hour',     max(0, min(23, intval($_POST['ami_run_hour']   ?? 3))));
+    update_option('cs_ami_run_minute',   max(0, min(59, intval($_POST['ami_run_minute'] ?? 30))));
+    update_option('cs_s3_sync_enabled',     !empty($_POST['s3_sync_enabled']));
+    update_option('cs_gdrive_sync_enabled', !empty($_POST['gdrive_sync_enabled']));
+    wp_cache_delete('cs_ami_schedule_days',   'options');
+    wp_cache_delete('cs_ami_run_hour',        'options');
+    wp_cache_delete('cs_ami_run_minute',      'options');
+    wp_cache_delete('cs_s3_sync_enabled',     'options');
+    wp_cache_delete('cs_gdrive_sync_enabled', 'options');
+    wp_cache_delete('alloptions',             'options');
     cs_reschedule();
     $day_names    = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     $saved_labels = implode(', ', array_map(fn($d) => $day_names[$d] ?? $d, $clean_days));
@@ -2826,11 +2847,12 @@ function cs_find_rclone(): string {
 /**
  * Upload a local backup file to Google Drive using rclone.
  *
- * @since 3.2.30
+ * @since 3.2.31
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
 function cs_sync_to_gdrive(string $local_path): array {
+    if (!get_option('cs_gdrive_sync_enabled', true)) return ['skipped' => true];
     $remote = get_option('cs_gdrive_remote', '');
     if (!$remote) return ['skipped' => true];
 
@@ -2895,6 +2917,7 @@ function cs_find_aws(): string {
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
 function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
+    if (!get_option('cs_s3_sync_enabled', true)) return ['skipped' => true];
     $bucket = get_option('cs_s3_bucket', '');
     if (!$bucket) return ['skipped' => true];
 
