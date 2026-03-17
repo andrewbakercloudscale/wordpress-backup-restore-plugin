@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.31
+ * Version:           3.2.32
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.31');
+define('CS_BACKUP_VERSION',    '3.2.32');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -292,42 +292,43 @@ function cs_reschedule(): void {
     wp_clear_scheduled_hook('cs_scheduled_backup');
     wp_clear_scheduled_hook('cs_scheduled_ami_backup');
 
-    $enabled = get_option('cs_schedule_enabled', false);
-    if (!$enabled) return;
-
     $timezone = wp_timezone();
     $now      = new DateTime('now', $timezone);
 
-    // File backup — schedule on its own days/time
-    $run_days = cs_get_run_days();
-    if (!empty($run_days)) {
-        $hour   = intval(get_option('cs_run_hour',   3));
-        $minute = intval(get_option('cs_run_minute', 0));
-        $candidate = clone $now;
-        $candidate->setTime($hour, $minute, 0);
-        for ($i = 0; $i <= 7; $i++) {
-            $dow = intval($candidate->format('N')); // 1=Mon...7=Sun
-            if (in_array($dow, $run_days, true) && $candidate > $now) break;
-            $candidate->modify('+1 day');
+    // Local file backup — only if local schedule is enabled
+    if (get_option('cs_schedule_enabled', false)) {
+        $run_days = cs_get_run_days();
+        if (!empty($run_days)) {
+            $hour   = intval(get_option('cs_run_hour',   3));
+            $minute = intval(get_option('cs_run_minute', 0));
+            $candidate = clone $now;
             $candidate->setTime($hour, $minute, 0);
+            for ($i = 0; $i <= 7; $i++) {
+                $dow = intval($candidate->format('N')); // 1=Mon...7=Sun
+                if (in_array($dow, $run_days, true) && $candidate > $now) break;
+                $candidate->modify('+1 day');
+                $candidate->setTime($hour, $minute, 0);
+            }
+            wp_schedule_event($candidate->getTimestamp(), 'daily', 'cs_scheduled_backup');
         }
-        wp_schedule_event($candidate->getTimestamp(), 'daily', 'cs_scheduled_backup');
     }
 
-    // AMI backup — separate cron event on its own days/time
-    $ami_days = array_map('intval', (array) get_option('cs_ami_schedule_days', []));
-    if (!empty($ami_days)) {
-        $ami_hour   = intval(get_option('cs_ami_run_hour',   3));
-        $ami_minute = intval(get_option('cs_ami_run_minute', 30));
-        $candidate = clone $now;
-        $candidate->setTime($ami_hour, $ami_minute, 0);
-        for ($i = 0; $i <= 7; $i++) {
-            $dow = intval($candidate->format('N'));
-            if (in_array($dow, $ami_days, true) && $candidate > $now) break;
-            $candidate->modify('+1 day');
-            $candidate->setTime($ami_hour, $ami_minute, 0);
+    // Cloud backup (AMI + S3 + GDrive) — independent of local schedule
+    if (get_option('cs_cloud_schedule_enabled', false)) {
+        $cloud_days = array_map('intval', (array) get_option('cs_ami_schedule_days', []));
+        if (!empty($cloud_days)) {
+            $cloud_hour   = intval(get_option('cs_ami_run_hour',   3));
+            $cloud_minute = intval(get_option('cs_ami_run_minute', 30));
+            $candidate = clone $now;
+            $candidate->setTime($cloud_hour, $cloud_minute, 0);
+            for ($i = 0; $i <= 7; $i++) {
+                $dow = intval($candidate->format('N'));
+                if (in_array($dow, $cloud_days, true) && $candidate > $now) break;
+                $candidate->modify('+1 day');
+                $candidate->setTime($cloud_hour, $cloud_minute, 0);
+            }
+            wp_schedule_event($candidate->getTimestamp(), 'daily', 'cs_scheduled_ami_backup');
         }
-        wp_schedule_event($candidate->getTimestamp(), 'daily', 'cs_scheduled_ami_backup');
     }
 }
 
@@ -357,16 +358,39 @@ add_action('cs_scheduled_backup', function () {
 });
 
 add_action('cs_scheduled_ami_backup', function () {
-    // Day-of-week guard
-    $ami_days = array_map('intval', (array) get_option('cs_ami_schedule_days', []));
-    $today    = intval((new DateTime('now', wp_timezone()))->format('N'));
-    if (empty($ami_days) || !in_array($today, $ami_days, true)) return;
+    if (!get_option('cs_cloud_schedule_enabled', false)) return;
 
-    $result = cs_do_create_ami();
-    if ($result['ok']) {
-        cs_log('[CloudScale Backup] Scheduled AMI created: ' . $result['ami_id'] . ' (' . $result['name'] . ')');
-    } else {
-        cs_log('[CloudScale Backup] Scheduled AMI failed: ' . ($result['error'] ?? 'unknown error'));
+    // Day-of-week guard
+    $cloud_days = array_map('intval', (array) get_option('cs_ami_schedule_days', []));
+    $today      = intval((new DateTime('now', wp_timezone()))->format('N'));
+    if (empty($cloud_days) || !in_array($today, $cloud_days, true)) return;
+
+    // 1. AMI snapshot (if prefix configured)
+    if (get_option('cs_ami_prefix', '')) {
+        $result = cs_do_create_ami();
+        if ($result['ok']) {
+            cs_log('[CloudScale Backup] Scheduled AMI created: ' . $result['ami_id'] . ' (' . $result['name'] . ')');
+        } else {
+            cs_log('[CloudScale Backup] Scheduled AMI failed: ' . ($result['error'] ?? 'unknown error'));
+        }
+    }
+
+    // 2. S3 sync of latest local backup zip
+    if (get_option('cs_s3_sync_enabled', true)) {
+        $latest = cs_get_latest_backup_path();
+        if ($latest) {
+            cs_sync_to_s3($latest);
+            cs_log('[CloudScale Backup] Scheduled S3 sync: ' . basename($latest));
+        }
+    }
+
+    // 3. Google Drive sync of latest local backup zip
+    if (get_option('cs_gdrive_sync_enabled', true)) {
+        $latest = $latest ?? cs_get_latest_backup_path();
+        if ($latest) {
+            cs_sync_to_gdrive($latest);
+            cs_log('[CloudScale Backup] Scheduled GDrive sync: ' . basename($latest));
+        }
     }
 });
 
@@ -505,8 +529,9 @@ function cs_admin_page(): void {
     $s3_saved_msg  = '';
     $gdrive_remote       = get_option('cs_gdrive_remote', '');
     $gdrive_path         = get_option('cs_gdrive_path', 'cloudscale-backups/');
-    $s3_sync_enabled     = (bool) get_option('cs_s3_sync_enabled', true);
-    $gdrive_sync_enabled = (bool) get_option('cs_gdrive_sync_enabled', true);
+    $s3_sync_enabled        = (bool) get_option('cs_s3_sync_enabled', true);
+    $gdrive_sync_enabled    = (bool) get_option('cs_gdrive_sync_enabled', true);
+    $cloud_schedule_enabled = (bool) get_option('cs_cloud_schedule_enabled', false);
     $ami_prefix          = get_option('cs_ami_prefix', '');
     $ami_reboot          = (bool) get_option('cs_ami_reboot', false);
     $ami_region_override = get_option('cs_ami_region_override', '');
@@ -1254,56 +1279,78 @@ function cs_admin_page(): void {
             <div class="cs-card cs-card--blue">
                 <div class="cs-card-stripe cs-stripe--blue" style="background:linear-gradient(135deg,#1565c0 0%,#2196f3 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⏰ <?php echo esc_html__( 'Cloud Backup Settings', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csScheduleExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
 
-                <div class="cs-field-group">
-                    <span class="cs-field-label">AMI snapshot days <span class="cs-sensitive-badge" style="margin-left:4px;">&#9888; reboot</span></span>
-                    <div class="cs-day-checks">
-                        <?php foreach ($days_map as $num => $day_label): ?>
-                        <label class="cs-day-check-label">
-                            <input type="checkbox"
-                                   class="cs-ami-day-check"
-                                   value="<?php echo (int) $num; ?>"
-                                   <?php checked(in_array($num, $ami_schedule_days, false)); ?>>
-                            <?php echo esc_html($day_label); ?>
-                        </label>
-                        <?php endforeach; ?>
-                    </div>
-                    <p class="cs-help">Requires AWS CLI and a prefix configured in the EC2 AMI settings below. Leave all unchecked to disable scheduled AMI backups.</p>
+                <?php if (!$enabled && ($s3_sync_enabled || $gdrive_sync_enabled)): ?>
+                <div style="background:#fff8e1;border:1px solid #f9a825;border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:0.88rem;color:#5d4037;">
+                    ⚠ <strong>Local backup schedule is disabled</strong> — S3 and Google Drive will sync the existing latest backup but no new backups will be created automatically. <a href="#cs-tab-local" onclick="jQuery('.cs-tab[data-tab=\'local\']').trigger(\'click\');return false;">Enable it on the Local Backups tab.</a>
                 </div>
+                <?php endif; ?>
 
                 <div class="cs-field-group">
-                    <label class="cs-field-label" for="cs-ami-run-hour"><?php esc_html_e( 'AMI backup time', 'cloudscale-backup' ); ?></label>
-                    <div class="cs-inline">
-                        <select id="cs-ami-run-hour" class="cs-input-sm">
-                            <?php for ($h = 0; $h < 24; $h++): ?>
-                                <option value="<?php echo (int) $h; ?>" <?php selected($ami_run_hour, $h); ?>><?php echo esc_html(str_pad($h, 2, '0', STR_PAD_LEFT)); ?></option>
-                            <?php endfor; ?>
-                        </select>
-                        <span class="cs-muted-text">:</span>
-                        <select id="cs-ami-run-minute" class="cs-input-sm">
-                            <?php foreach ([0, 15, 30, 45] as $m): ?>
-                                <option value="<?php echo (int) $m; ?>" <?php selected($ami_run_minute, $m); ?>><?php echo esc_html(str_pad($m, 2, '0', STR_PAD_LEFT)); ?></option>
+                    <label class="cs-enable-label">
+                        <input type="checkbox" id="cs-cloud-schedule-enabled" <?php checked($cloud_schedule_enabled); ?>>
+                        <?php esc_html_e( 'Enable automatic cloud backups', 'cloudscale-backup' ); ?>
+                    </label>
+                </div>
+
+                <fieldset id="cs-cloud-schedule-controls" <?php echo !$cloud_schedule_enabled ? 'disabled' : ''; ?> class="cs-schedule-fieldset">
+                    <legend class="screen-reader-text">Cloud schedule controls</legend>
+
+                    <div class="cs-field-group">
+                        <span class="cs-field-label">Cloud backup days</span>
+                        <div class="cs-day-checks">
+                            <?php foreach ($days_map as $num => $day_label): ?>
+                            <label class="cs-day-check-label">
+                                <input type="checkbox"
+                                       class="cs-ami-day-check"
+                                       value="<?php echo (int) $num; ?>"
+                                       <?php checked(in_array($num, $ami_schedule_days, false)); ?>>
+                                <?php echo esc_html($day_label); ?>
+                            </label>
                             <?php endforeach; ?>
-                        </select>
-                        <span class="cs-muted-text">server time &nbsp;·&nbsp; now: <?php echo esc_html(current_time('H:i T')); ?> &nbsp;·&nbsp; TZ: <?php echo esc_html(wp_timezone_string()); ?></span>
+                        </div>
+                        <p class="cs-help">On each selected day: AMI snapshot (if configured), then S3 sync, then Google Drive sync — in that order.</p>
                     </div>
-                    <?php if ($ami_next_run): ?>
-                    <p class="cs-help">Next AMI backup: <strong><?php echo esc_html(get_date_from_gmt(date('Y-m-d H:i:s', $ami_next_run), 'D j M \a\t H:i')); ?></strong></p>
-                    <?php endif; ?>
-                </div>
 
-                <div class="cs-field-group" style="border-top:1px solid #e0e0e0;padding-top:14px;margin-top:4px;">
-                    <span class="cs-field-label">Sync after every backup</span>
-                    <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;">
-                        <label class="cs-option-label" style="margin:0;">
-                            <input type="checkbox" id="cs-cloud-s3-enabled" <?php checked($s3_sync_enabled); ?>>
-                            &#9729; S3 Remote Backup
-                        </label>
-                        <label class="cs-option-label" style="margin:0;">
-                            <input type="checkbox" id="cs-cloud-gdrive-enabled" <?php checked($gdrive_sync_enabled); ?>>
-                            &#128196; Google Drive Backup
-                        </label>
+                    <div class="cs-field-group">
+                        <label class="cs-field-label" for="cs-ami-run-hour"><?php esc_html_e( 'Cloud Backup Time', 'cloudscale-backup' ); ?></label>
+                        <div class="cs-inline">
+                            <select id="cs-ami-run-hour" class="cs-input-sm">
+                                <?php for ($h = 0; $h < 24; $h++): ?>
+                                    <option value="<?php echo (int) $h; ?>" <?php selected($ami_run_hour, $h); ?>><?php echo esc_html(str_pad($h, 2, '0', STR_PAD_LEFT)); ?></option>
+                                <?php endfor; ?>
+                            </select>
+                            <span class="cs-muted-text">:</span>
+                            <select id="cs-ami-run-minute" class="cs-input-sm">
+                                <?php foreach ([0, 15, 30, 45] as $m): ?>
+                                    <option value="<?php echo (int) $m; ?>" <?php selected($ami_run_minute, $m); ?>><?php echo esc_html(str_pad($m, 2, '0', STR_PAD_LEFT)); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                            <span class="cs-muted-text">server time &nbsp;·&nbsp; now: <?php echo esc_html(current_time('H:i T')); ?> &nbsp;·&nbsp; TZ: <?php echo esc_html(wp_timezone_string()); ?></span>
+                        </div>
+                        <?php if ($ami_next_run): ?>
+                        <p class="cs-help">Next cloud backup: <strong><?php echo esc_html(get_date_from_gmt(date('Y-m-d H:i:s', $ami_next_run), 'D j M \a\t H:i')); ?></strong></p>
+                        <?php endif; ?>
                     </div>
-                    <p class="cs-help">Each destination must also be configured below with a bucket name / remote name.</p>
+
+                    <div class="cs-field-group" style="border-top:1px solid #e0e0e0;padding-top:14px;margin-top:4px;">
+                        <span class="cs-field-label">Include in cloud backup</span>
+                        <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;">
+                            <label class="cs-option-label" style="margin:0;">
+                                <input type="checkbox" id="cs-cloud-s3-enabled" <?php checked($s3_sync_enabled); ?>>
+                                &#9729; S3 Remote Backup
+                            </label>
+                            <label class="cs-option-label" style="margin:0;">
+                                <input type="checkbox" id="cs-cloud-gdrive-enabled" <?php checked($gdrive_sync_enabled); ?>>
+                                &#128196; Google Drive Backup
+                            </label>
+                        </div>
+                        <p class="cs-help">Each destination must also be configured below with a bucket name / remote name.</p>
+                    </div>
+
+                </fieldset>
+
+                <div id="cs-cloud-off-notice" class="cs-off-notice" <?php echo $cloud_schedule_enabled ? 'style="display:none"' : ''; ?>>
+                    Automatic cloud backups are <strong>off</strong>. Enable the checkbox above to configure a schedule.
                 </div>
 
                 <button type="button" onclick="csCloudScheduleSave()" class="button button-primary cs-mt"><?php esc_html_e( 'Save Schedule', 'cloudscale-backup' ); ?></button>
@@ -1823,14 +1870,16 @@ add_action('wp_ajax_cs_save_cloud_schedule', function (): void {
     update_option('cs_ami_schedule_days', $clean_days);
     update_option('cs_ami_run_hour',     max(0, min(23, intval($_POST['ami_run_hour']   ?? 3))));
     update_option('cs_ami_run_minute',   max(0, min(59, intval($_POST['ami_run_minute'] ?? 30))));
-    update_option('cs_s3_sync_enabled',     !empty($_POST['s3_sync_enabled']));
-    update_option('cs_gdrive_sync_enabled', !empty($_POST['gdrive_sync_enabled']));
-    wp_cache_delete('cs_ami_schedule_days',   'options');
-    wp_cache_delete('cs_ami_run_hour',        'options');
-    wp_cache_delete('cs_ami_run_minute',      'options');
-    wp_cache_delete('cs_s3_sync_enabled',     'options');
-    wp_cache_delete('cs_gdrive_sync_enabled', 'options');
-    wp_cache_delete('alloptions',             'options');
+    update_option('cs_s3_sync_enabled',        !empty($_POST['s3_sync_enabled']));
+    update_option('cs_gdrive_sync_enabled',    !empty($_POST['gdrive_sync_enabled']));
+    update_option('cs_cloud_schedule_enabled', !empty($_POST['cloud_schedule_enabled']));
+    wp_cache_delete('cs_ami_schedule_days',      'options');
+    wp_cache_delete('cs_ami_run_hour',           'options');
+    wp_cache_delete('cs_ami_run_minute',         'options');
+    wp_cache_delete('cs_s3_sync_enabled',        'options');
+    wp_cache_delete('cs_gdrive_sync_enabled',    'options');
+    wp_cache_delete('cs_cloud_schedule_enabled', 'options');
+    wp_cache_delete('alloptions',                'options');
     cs_reschedule();
     $day_names    = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     $saved_labels = implode(', ', array_map(fn($d) => $day_names[$d] ?? $d, $clean_days));
@@ -2847,7 +2896,7 @@ function cs_find_rclone(): string {
 /**
  * Upload a local backup file to Google Drive using rclone.
  *
- * @since 3.2.31
+ * @since 3.2.32
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
@@ -3323,6 +3372,13 @@ function cs_parse_db_host( string $host ): array {
  * @since 1.0.0
  * @return array<int, array{name: string, path: string, size: int, mtime: int, date: string, type: string}> Backup entries.
  */
+function cs_get_latest_backup_path(): string {
+    $files = glob(CS_BACKUP_DIR . '*.zip') ?: [];
+    if (!$files) return '';
+    usort($files, fn($a, $b) => filemtime($b) <=> filemtime($a));
+    return $files[0];
+}
+
 function cs_list_backups(): array {
     $backups = [];
     if (!is_dir(CS_BACKUP_DIR)) return $backups;

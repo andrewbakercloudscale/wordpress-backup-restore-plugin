@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.31 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.32 */
 jQuery(function ($) {
     'use strict';
 
@@ -28,6 +28,16 @@ jQuery(function ($) {
 
     $('#cs-schedule-enabled').on('change', function () {
         applyScheduleState($(this).is(':checked'));
+    });
+
+    // Cloud schedule enable/disable
+    function applyCloudScheduleState(on) {
+        $('#cs-cloud-schedule-controls').prop('disabled', !on);
+        $('#cs-cloud-off-notice').toggle(!on);
+    }
+    applyCloudScheduleState($('#cs-cloud-schedule-enabled').is(':checked'));
+    $('#cs-cloud-schedule-enabled').on('change', function () {
+        applyCloudScheduleState($(this).is(':checked'));
     });
 
     // ================================================================
@@ -539,13 +549,14 @@ window.csCloudScheduleSave = function () {
         method: 'POST',
         traditional: true,
         data: {
-            action:              'cs_save_cloud_schedule',
-            nonce:               CS.nonce,
-            ami_schedule_days:   days,
-            ami_run_hour:        $('#cs-ami-run-hour').val(),
-            ami_run_minute:      $('#cs-ami-run-minute').val(),
-            s3_sync_enabled:     $('#cs-cloud-s3-enabled').is(':checked')     ? '1' : '0',
-            gdrive_sync_enabled: $('#cs-cloud-gdrive-enabled').is(':checked') ? '1' : '0',
+            action:                 'cs_save_cloud_schedule',
+            nonce:                  CS.nonce,
+            cloud_schedule_enabled: $('#cs-cloud-schedule-enabled').is(':checked') ? '1' : '0',
+            ami_schedule_days:      days,
+            ami_run_hour:           $('#cs-ami-run-hour').val(),
+            ami_run_minute:         $('#cs-ami-run-minute').val(),
+            s3_sync_enabled:        $('#cs-cloud-s3-enabled').is(':checked')     ? '1' : '0',
+            gdrive_sync_enabled:    $('#cs-cloud-gdrive-enabled').is(':checked') ? '1' : '0',
         },
         success: function (res) {
             if (res.success) {
