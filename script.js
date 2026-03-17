@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.23 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.24 */
 jQuery(function ($) {
     'use strict';
 
@@ -29,6 +29,25 @@ jQuery(function ($) {
     $('#cs-schedule-enabled').on('change', function () {
         applyScheduleState($(this).is(':checked'));
     });
+
+    // ================================================================
+    // Tab switching
+    // ================================================================
+
+    (function () {
+        var STORAGE_KEY = 'cs_active_tab';
+        function switchTab(tab) {
+            $('.cs-tab').removeClass('cs-tab--active');
+            $('.cs-tab[data-tab="' + tab + '"]').addClass('cs-tab--active');
+            $('.cs-tab-panel').hide();
+            $('#cs-tab-' + tab).show();
+            try { localStorage.setItem(STORAGE_KEY, tab); } catch(e) {}
+        }
+        var saved = 'local';
+        try { saved = localStorage.getItem(STORAGE_KEY) || 'local'; } catch(e) {}
+        switchTab(saved);
+        $('.cs-tab').on('click', function () { switchTab($(this).data('tab')); });
+    })();
 
     // ================================================================
     // Backup size calculator — updates total as checkboxes change
@@ -508,6 +527,33 @@ window.csS3Diagnose = function () {
     }
 
     csShowExplain('S3 Diagnostics', '<table style="width:100%;border-collapse:collapse;">' + rows + '</table>');
+};
+
+window.csCloudScheduleSave = function () {
+    var days = [];
+    $('.cs-ami-day-check:checked').each(function () { days.push($(this).val()); });
+    var $msg = $('#cs-cloud-schedule-msg');
+    $msg.text('Saving\u2026').css('color', '#888').show();
+    $.ajax({
+        url: CS.ajax_url,
+        method: 'POST',
+        traditional: true,
+        data: {
+            action:             'cs_save_cloud_schedule',
+            nonce:              CS.nonce,
+            ami_schedule_days:  days,
+            ami_run_hour:       $('#cs-ami-run-hour').val(),
+            ami_run_minute:     $('#cs-ami-run-minute').val(),
+        },
+        success: function (res) {
+            if (res.success) {
+                $msg.text('\u2713 Saved: ' + res.data).css('color', '#2e7d32');
+            } else {
+                $msg.text('\u2717 ' + res.data).css('color', '#c62828');
+            }
+        },
+        error: function () { $msg.text('\u2717 Request failed').css('color', '#c62828'); }
+    });
 };
 
 window.csAmiExplain = function () {
