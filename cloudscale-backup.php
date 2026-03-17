@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.22
+ * Version:           3.2.23
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.22');
+define('CS_BACKUP_VERSION',    '3.2.23');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -351,8 +351,7 @@ add_action('cs_scheduled_backup', function () {
         in_array('languages', $c, true),
         in_array('dropins',   $c, true),
         in_array('htaccess',    $c, true),
-        in_array('wpconfig',    $c, true),
-        in_array('backups_dir', $c, true)
+        in_array('wpconfig',    $c, true)
     );
     cs_enforce_retention();
 });
@@ -427,15 +426,6 @@ function cs_admin_page(): void {
     $wpconfig_size = file_exists($wpconfig_path) ? (int) filesize($wpconfig_path) : 0;
     $dropins_size     = 0;
     foreach (glob(WP_CONTENT_DIR . '/*.php') ?: [] as $_f) { $dropins_size += (int) filesize($_f); }
-    $backups_dir_size = cs_dir_size(CS_BACKUP_DIR);
-    $ami_zips = glob(CS_BACKUP_DIR . '*.zip') ?: [];
-    if ($ami_zips) {
-        usort($ami_zips, fn($a, $b) => filemtime($b) <=> filemtime($a));
-        $ami_latest_size = (int) filesize($ami_zips[0]);
-    } else {
-        $ami_latest_size = 0;
-    }
-
     // Estimate database size from information_schema
     global $wpdb;
     $db_size = (int) $wpdb->get_var($wpdb->prepare(
@@ -481,7 +471,7 @@ function cs_admin_page(): void {
         update_option('cs_run_minute',        max(0,  min(59, intval($_POST['run_minute']        ?? 0))));
         update_option('cs_ami_run_hour',      max(0,  min(23, intval($_POST['ami_run_hour']      ?? 3))));
         update_option('cs_ami_run_minute',    max(0,  min(59, intval($_POST['ami_run_minute']    ?? 30))));
-        $valid_components = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'backups_dir', 'htaccess', 'wpconfig'];
+        $valid_components = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'htaccess', 'wpconfig'];
         $raw_components   = isset($_POST['schedule_components']) && is_array($_POST['schedule_components']) ? $_POST['schedule_components'] : [];
         $clean_components = array_values(array_intersect($raw_components, $valid_components));
         // Default to core four if nothing selected
@@ -632,7 +622,6 @@ function cs_admin_page(): void {
                                 'mu'          => 'Must-use plugins',
                                 'languages'   => 'Languages',
                                 'dropins'     => 'Dropins',
-                                'backups_dir' => 'AMI Backups',
                                 'htaccess'    => '.htaccess',
                                 'wpconfig'    => 'wp-config.php',
                             ];
@@ -1103,7 +1092,6 @@ function cs_admin_page(): void {
                 'htaccess'  => $htaccess_size,
                 'wpconfig'  => $wpconfig_size,
                 'dropins'     => $dropins_size,
-                'backups_dir' => $ami_latest_size,
                 'free'        => $free_bytes !== false ? (int)$free_bytes : 0,
                 'latest'    => $latest_size,  // actual compressed size of last backup
             ];
@@ -1140,8 +1128,7 @@ function cs_admin_page(): void {
                     <label class="cs-option-label"><input type="checkbox" id="cs-include-mu" <?php echo $mc('mu', $mu_size > 0); ?> data-size="<?php echo (int) $mu_size; ?>"> Must-use plugins <code><?php echo $mu_size > 0 ? esc_html(cs_format_size($mu_size)) : '0 B'; ?></code></label>
                     <label class="cs-option-label"><input type="checkbox" id="cs-include-languages" <?php echo $mc('languages', $lang_size > 0); ?> data-size="<?php echo (int) $lang_size; ?>"> Languages <code><?php echo $lang_size > 0 ? esc_html(cs_format_size($lang_size)) : '0 B'; ?></code></label>
                     <label class="cs-option-label"><input type="checkbox" id="cs-include-dropins" <?php echo $mc('dropins', false); ?> data-size="<?php echo (int) $dropins_size; ?>"> Dropins <small>(object-cache.php…)</small> <code><?php echo $dropins_size > 0 ? esc_html(cs_format_size($dropins_size)) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-backups-dir" <?php echo $mc('backups_dir', false); ?> data-size="<?php echo (int) $ami_latest_size; ?>"> AMI Backups <small>(cloudscale-backups/)</small> <code><?php echo $ami_latest_size > 0 ? esc_html(cs_format_size($ami_latest_size)) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-htaccess" <?php echo $mc('htaccess', $htaccess_size > 0); ?> data-size="<?php echo (int) $htaccess_size; ?>"> .htaccess <code><?php echo $htaccess_size > 0 ? esc_html(cs_format_size($htaccess_size)) : 'not found'; ?></code></label>
+<label class="cs-option-label"><input type="checkbox" id="cs-include-htaccess" <?php echo $mc('htaccess', $htaccess_size > 0); ?> data-size="<?php echo (int) $htaccess_size; ?>"> .htaccess <code><?php echo $htaccess_size > 0 ? esc_html(cs_format_size($htaccess_size)) : 'not found'; ?></code></label>
                     <label class="cs-option-label cs-option-sensitive">
                         <input type="checkbox" id="cs-include-wpconfig" <?php echo $mc('wpconfig', false); ?> data-size="<?php echo (int) $wpconfig_size; ?>">
                         wp-config.php <code><?php echo $wpconfig_size > 0 ? esc_html(cs_format_size($wpconfig_size)) : 'not found'; ?></code>
@@ -1347,11 +1334,10 @@ add_action('wp_ajax_cs_run_backup', function (): void {
     $include_dropins   = !empty($_POST['include_dropins']);
     $include_htaccess    = !empty($_POST['include_htaccess']);
     $include_wpconfig    = !empty($_POST['include_wpconfig']);
-    $include_backups_dir = !empty($_POST['include_backups_dir']);
 
     if (!$include_db && !$include_media && !$include_plugins && !$include_themes
         && !$include_mu && !$include_languages && !$include_dropins
-        && !$include_htaccess && !$include_wpconfig && !$include_backups_dir) {
+        && !$include_htaccess && !$include_wpconfig) {
         wp_send_json_error('Select at least one option.');
     }
 
@@ -1361,8 +1347,7 @@ add_action('wp_ajax_cs_run_backup', function (): void {
     try {
         $filename = cs_create_backup(
             $include_db, $include_media, $include_plugins, $include_themes,
-            $include_mu, $include_languages, $include_dropins, $include_htaccess, $include_wpconfig,
-            $include_backups_dir
+            $include_mu, $include_languages, $include_dropins, $include_htaccess, $include_wpconfig
         );
         cs_enforce_retention();
         $s3 = $GLOBALS['cs_last_s3_result'] ?? ['skipped' => true];
@@ -1480,7 +1465,7 @@ add_action('wp_ajax_cs_save_manual_defaults', function (): void {
         wp_send_json_error( 'Forbidden', 403 );
     }
     cs_verify_nonce();
-    $valid = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'backups_dir', 'htaccess', 'wpconfig'];
+    $valid = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'htaccess', 'wpconfig'];
     $raw   = isset($_POST['components']) && is_array($_POST['components']) ? $_POST['components'] : [];
     $clean = array_values(array_intersect($raw, $valid));
     update_option('cs_manual_defaults', $clean);
@@ -2322,12 +2307,12 @@ function cs_create_backup(
     bool $include_plugins    = false, bool $include_themes    = false,
     bool $include_mu         = false, bool $include_languages = false,
     bool $include_dropins    = false, bool $include_htaccess  = false,
-    bool $include_wpconfig   = false, bool $include_backups_dir = false
+    bool $include_wpconfig   = false
 ): string {
     // Build single-char type code: f=full, F=full+other, d=db, m=media, p=plugins, t=themes
     // For custom combos, concatenate initials: e.g. "dm"=db+media, "dmp"=db+media+plugins
     $core_all = $include_db && $include_media && $include_plugins && $include_themes;
-    $has_other = $include_mu || $include_languages || $include_dropins || $include_htaccess || $include_wpconfig || $include_backups_dir;
+    $has_other = $include_mu || $include_languages || $include_dropins || $include_htaccess || $include_wpconfig;
     if ($core_all && !$has_other) {
         $tcode = 'f';
     } elseif ($core_all && $has_other) {
@@ -2343,7 +2328,6 @@ function cs_create_backup(
         if ($include_dropins)   $tcode .= 'o';
         if ($include_htaccess)    $tcode .= 'h';
         if ($include_wpconfig)    $tcode .= 'c';
-        if ($include_backups_dir) $tcode .= 'b';
     }
 
     // Increment global sequence number, skip any that already exist on disk
@@ -2403,16 +2387,6 @@ function cs_create_backup(
         if (file_exists($wpc)) $zip->addFile($wpc, 'wp-config.php');
     }
 
-    if ($include_backups_dir) {
-        $ami_files = glob(CS_BACKUP_DIR . '*.zip') ?: [];
-        // Exclude the zip currently being created
-        $ami_files = array_filter($ami_files, fn($f) => realpath($f) !== realpath($zip_path));
-        if ($ami_files) {
-            usort($ami_files, fn($a, $b) => filemtime($b) <=> filemtime($a));
-            $zip->addFile($ami_files[0], 'cloudscale-backups/' . basename($ami_files[0]));
-        }
-    }
-
     $zip->addFromString('backup-meta.json', json_encode([
         'plugin_version'    => CS_BACKUP_VERSION,
         'created'           => date('c'),
@@ -2428,7 +2402,6 @@ function cs_create_backup(
         'include_dropins'   => $include_dropins,
         'include_htaccess'    => $include_htaccess,
         'include_wpconfig'    => $include_wpconfig,
-        'include_backups_dir' => $include_backups_dir,
     ], JSON_PRETTY_PRINT));
 
     $zip->close();
