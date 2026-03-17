@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.21 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.22 */
 jQuery(function ($) {
     'use strict';
 
@@ -488,45 +488,26 @@ window.csS3Diagnose = function () {
             '<tr><td colspan="2" style="padding:0 0 10px 20px;font-size:0.82rem;color:#666;">' + desc + '</td></tr>';
     }
 
-    var rows = row(
-        d.aws_found ? ok : err,
-        'AWS CLI',
-        d.aws_version || 'Not found',
-        'AWS CLI binary found on the server. Required for S3 sync and EC2 AMI creation.'
-    );
-    rows += row(
-        d.bucket ? ok : err,
-        'S3 Bucket',
-        d.bucket || 'Not configured',
-        'The S3 bucket backups are synced to. Enter the bucket name above and click Save.'
-    );
-    rows += row(
-        ok,
-        'Key prefix',
-        d.prefix || '/',
-        'Folder path inside the bucket. Leave as <code>backups/</code> or set to <code>/</code> for bucket root.'
-    );
-    if (d.bucket) {
-        rows += row(
-            ok,
-            'Destination',
-            's3://' + d.bucket + '/' + d.prefix,
-            'Full S3 path where each backup zip is uploaded after creation.'
-        );
-        rows += row(
-            d.synced > 0 ? ok : err,
-            'Backups synced',
-            d.synced + ' of ' + d.total,
-            d.synced === d.total
-                ? 'All backups in history have been successfully synced to S3.'
-                : 'Some backups have not been synced. Use the S3 button in Backup History to sync them manually.'
-        );
-        rows += row(
-            d.last_fmt ? ok : err,
-            'Last sync',
-            d.last_fmt || 'Never',
-            'When the most recent successful upload to S3 completed.'
-        );
+    var rows = '';
+    if (d.aws_found) {
+        // Parse "aws-cli/2.33.29 Python/3.13.11 Linux/6.1.x exe/aarch64.amzn.2023" into parts
+        var parts = (d.aws_version || '').split(' ');
+        var labels = {
+            'aws-cli':  ['AWS CLI version',  'The version of the AWS CLI installed on the server.'],
+            'Python':   ['Python version',   'The Python runtime the AWS CLI is built on.'],
+            'Linux':    ['Kernel',           'The Linux kernel version and distribution running on this server.'],
+            'exe':      ['Architecture',     'The CPU architecture and platform the AWS CLI executable is compiled for.']
+        };
+        parts.forEach(function (part) {
+            var slash = part.indexOf('/');
+            if (slash === -1) return;
+            var key   = part.slice(0, slash);
+            var val   = part.slice(slash + 1);
+            var meta  = labels[key] || [key, ''];
+            rows += row(ok, meta[0], val, meta[1]);
+        });
+    } else {
+        rows += row(err, 'AWS CLI', 'Not found', 'AWS CLI is not installed or not in a standard path on the server. Required for S3 sync and EC2 AMI creation.');
     }
 
     csShowExplain('S3 Diagnostics', '<table style="width:100%;border-collapse:collapse;">' + rows + '</table>');
