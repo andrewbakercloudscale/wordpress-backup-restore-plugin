@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.22 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.23 */
 jQuery(function ($) {
     'use strict';
 
@@ -58,7 +58,6 @@ jQuery(function ($) {
         if ($('#cs-include-mu').is(':checked'))        total += sizes.mu        || 0;
         if ($('#cs-include-languages').is(':checked')) total += sizes.languages || 0;
         if ($('#cs-include-dropins').is(':checked'))      total += sizes.dropins      || 0;
-        if ($('#cs-include-backups-dir').is(':checked')) total += sizes.backups_dir  || 0;
         if ($('#cs-include-htaccess').is(':checked'))    total += sizes.htaccess     || 0;
         if ($('#cs-include-wpconfig').is(':checked'))    total += sizes.wpconfig     || 0;
 
@@ -107,7 +106,7 @@ jQuery(function ($) {
     // Run on load and whenever a backup option checkbox changes
     updateBackupTotal();
     $('#cs-include-db, #cs-include-media, #cs-include-plugins, #cs-include-themes, ' +
-       '#cs-include-mu, #cs-include-languages, #cs-include-dropins, #cs-include-backups-dir, ' +
+       '#cs-include-mu, #cs-include-languages, #cs-include-dropins, ' +
        '#cs-include-htaccess, #cs-include-wpconfig')
         .on('change', updateBackupTotal);
 
@@ -117,7 +116,7 @@ jQuery(function ($) {
 
     $('#cs-run-backup').on('click', function () {
         var anyChecked = $('#cs-include-db, #cs-include-media, #cs-include-plugins, #cs-include-themes, ' +
-            '#cs-include-mu, #cs-include-languages, #cs-include-dropins, #cs-include-backups-dir, ' +
+            '#cs-include-mu, #cs-include-languages, #cs-include-dropins, ' +
             '#cs-include-htaccess, #cs-include-wpconfig')
             .is(':checked');
         if (!anyChecked) {
@@ -146,7 +145,6 @@ jQuery(function ($) {
                 include_mu:        $('#cs-include-mu').is(':checked')        ? 1 : 0,
                 include_languages: $('#cs-include-languages').is(':checked') ? 1 : 0,
                 include_dropins:     $('#cs-include-dropins').is(':checked')     ? 1 : 0,
-                include_backups_dir: $('#cs-include-backups-dir').is(':checked') ? 1 : 0,
                 include_htaccess:    $('#cs-include-htaccess').is(':checked')    ? 1 : 0,
                 include_wpconfig:  $('#cs-include-wpconfig').is(':checked')  ? 1 : 0,
             },
@@ -188,7 +186,6 @@ jQuery(function ($) {
         if ($('#cs-include-mu').is(':checked'))          components.push('mu');
         if ($('#cs-include-languages').is(':checked'))   components.push('languages');
         if ($('#cs-include-dropins').is(':checked'))     components.push('dropins');
-        if ($('#cs-include-backups-dir').is(':checked')) components.push('backups_dir');
         if ($('#cs-include-htaccess').is(':checked'))    components.push('htaccess');
         if ($('#cs-include-wpconfig').is(':checked'))    components.push('wpconfig');
 
@@ -545,7 +542,6 @@ window.csBackupExplain = function () {
         '<li><strong>Must-use plugins</strong> — <code>wp-content/mu-plugins/</code>. Usually small; include if you have custom mu-plugins.</li>' +
         '<li><strong>Languages</strong> — <code>wp-content/languages/</code> translation files.</li>' +
         '<li><strong>Dropins</strong> — special files like <code>object-cache.php</code> in <code>wp-content/</code>.</li>' +
-        '<li><strong>AMI Backups</strong> — includes only the most recent backup zip from <code>cloudscale-backups/</code>. Useful for a full archive copy; skip it for routine backups to avoid recursive bloat.</li>' +
         '<li><strong>.htaccess</strong> — Apache rewrite rules and server config.</li>' +
         '<li><strong>wp-config.php</strong> — contains database credentials. Handle the resulting zip with care.</li>' +
         '</ul>' +
