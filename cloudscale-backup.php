@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.34
+ * Version:           3.2.35
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.34');
+define('CS_BACKUP_VERSION',    '3.2.35');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -1364,7 +1364,7 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csS3Explain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button>
                 </div>
 
-                <p class="cs-help">After each backup, the zip will be synced to your S3 bucket using the AWS CLI. The AWS CLI must be installed and configured on the server with appropriate credentials.</p>
+                <p class="cs-help">After each local backup, the latest zip is automatically synced to your S3 bucket using the AWS CLI. You can also push the latest local backup to S3 manually at any time.</p>
 
                 <div class="cs-field-row cs-mt">
                     <label for="cs-s3-bucket"><strong>S3 Bucket name</strong></label>
@@ -1384,6 +1384,7 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csS3Save()" class="button button-primary"><?php esc_html_e( 'Save S3 Settings', 'cloudscale-backup' ); ?></button>
                     <button type="button" onclick="csS3Test()" class="button" style="margin-left:8px"><?php esc_html_e( 'Test Connection', 'cloudscale-backup' ); ?></button>
                     <button type="button" onclick="csS3Diagnose()" class="button" style="margin-left:8px"><?php esc_html_e( 'Diagnose', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csS3SyncLatest()" class="button" style="margin-left:8px"><?php esc_html_e( 'Sync Local Backup Now', 'cloudscale-backup' ); ?></button>
                     <span id="cs-s3-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
                 </div>
 
@@ -1410,7 +1411,7 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csGDriveExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button>
                 </div>
 
-                <p class="cs-help">After each backup, the zip is copied to Google Drive via <code>rclone</code>. Requires <code>rclone</code> installed on the server and a Google Drive remote configured with <code>rclone config</code>.</p>
+                <p class="cs-help">After each local backup, the latest zip is automatically copied to Google Drive via <code>rclone</code>. You can also push the latest local backup manually at any time.</p>
 
                 <div class="cs-field-row cs-mt">
                     <label for="cs-gdrive-remote"><strong>rclone remote name</strong></label>
@@ -1430,6 +1431,7 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csGDriveSave()" class="button button-primary"><?php esc_html_e( 'Save Drive Settings', 'cloudscale-backup' ); ?></button>
                     <button type="button" onclick="csGDriveTest()" class="button" style="margin-left:8px"><?php esc_html_e( 'Test Connection', 'cloudscale-backup' ); ?></button>
                     <button type="button" onclick="csGDriveDiagnose()" class="button" style="margin-left:8px"><?php esc_html_e( 'Diagnose', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csGDriveSyncLatest()" class="button" style="margin-left:8px"><?php esc_html_e( 'Sync Local Backup Now', 'cloudscale-backup' ); ?></button>
                     <span id="cs-gdrive-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
                 </div>
 
@@ -1912,6 +1914,26 @@ add_action('wp_ajax_cs_test_gdrive', function (): void {
         wp_send_json_error('Connection failed: ' . substr($out, 0, 200));
     }
     wp_send_json_success('Connected to ' . esc_html($remote));
+});
+
+add_action('wp_ajax_cs_sync_latest_s3', function (): void {
+    if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
+    cs_verify_nonce();
+    $latest = cs_get_latest_backup_path();
+    if (!$latest) { wp_send_json_error('No local backups found.'); }
+    $result = cs_sync_to_s3($latest);
+    if (isset($result['skipped'])) { wp_send_json_error('S3 not configured — save bucket settings first.'); }
+    $result['ok'] ? wp_send_json_success('Synced: ' . basename($latest)) : wp_send_json_error($result['error'] ?? 'Sync failed.');
+});
+
+add_action('wp_ajax_cs_sync_latest_gdrive', function (): void {
+    if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
+    cs_verify_nonce();
+    $latest = cs_get_latest_backup_path();
+    if (!$latest) { wp_send_json_error('No local backups found.'); }
+    $result = cs_sync_to_gdrive($latest);
+    if (isset($result['skipped'])) { wp_send_json_error('Google Drive not configured — save remote settings first.'); }
+    $result['ok'] ? wp_send_json_success('Synced: ' . basename($latest)) : wp_send_json_error($result['error'] ?? 'Sync failed.');
 });
 
 add_action('wp_ajax_cs_create_ami', function (): void {
@@ -2896,7 +2918,7 @@ function cs_find_rclone(): string {
 /**
  * Upload a local backup file to Google Drive using rclone.
  *
- * @since 3.2.34
+ * @since 3.2.35
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */

@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.34 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.35 */
 jQuery(function ($) {
     'use strict';
 
@@ -480,7 +480,8 @@ window.csScheduleExplain = function () {
         '</ul>' +
         '<p>For each type, tick the days of the week it should run and set the time. You can pick multiple days — for example Monday, Wednesday, Friday for file backups and Sunday for AMI snapshots.</p>' +
         '<p>Backups fire via WP-Cron, which triggers on the next page load at or after the scheduled time. On low-traffic sites add a real server cron (<code>*/5 * * * * wget -q -O- yoursite.com/wp-cron.php</code>) for accurate timing.</p>' +
-        '<p>Leave all days unchecked (or disable the toggle) to turn off automatic backups and run manually only.</p>'
+        '<p>Leave all days unchecked (or disable the toggle) to turn off automatic backups and run manually only.</p>' +
+        '<p><strong>Cloud Backup Time</strong> must be set at least 30 minutes after the Local Backup Time. This ensures the local backup has finished before the cloud sync runs. For example: local backup at 02:00, cloud backup at 03:00.</p>'
     );
 };
 
@@ -494,7 +495,8 @@ window.csRetentionExplain = function () {
 
 window.csS3Explain = function () {
     csShowExplain('S3 Remote Backup',
-        '<p>After every backup (scheduled or manual) the zip is copied to your AWS S3 bucket — an off-site copy that survives server failure or data loss.</p>' +
+        '<p>After every local backup (scheduled or manual), the most recent backup zip is automatically synced to your AWS S3 bucket — an off-site copy that survives server failure or data loss.</p>' +
+        '<p>Use <strong>Sync Local Backup Now</strong> to manually push the latest local backup to S3 at any time, without creating a new backup.</p>' +
         '<p><strong>Requirements:</strong> AWS CLI installed on the server with credentials granting <code>s3:PutObject</code> and <code>s3:ListBucket</code> on the target bucket. Use the <em>Test connection</em> button to verify before relying on it.</p>' +
         '<p><strong>Bucket</strong> — just the bucket name (e.g. <code>my-backups</code>). <strong>Path prefix</strong> — optional subfolder inside the bucket (e.g. <code>backups/prod/</code>). Leave prefix blank to put files in the bucket root.</p>' +
         '<p>If a sync fails, the plugin retries automatically after 5 minutes. Sync status for each file is shown in the Backup History table.</p>'
@@ -543,6 +545,20 @@ window.csCloudScheduleSave = function () {
     var days = [];
     $('.cs-ami-day-check:checked').each(function () { days.push($(this).val()); });
     var $msg = $('#cs-cloud-schedule-msg');
+
+    // Validate: cloud time must be >= local backup time + 30 min
+    var localH  = parseInt($('#cs-run-hour').val()    || '3',  10);
+    var localM  = parseInt($('#cs-run-minute').val()  || '0',  10);
+    var cloudH  = parseInt($('#cs-ami-run-hour').val()   || '3',  10);
+    var cloudM  = parseInt($('#cs-ami-run-minute').val() || '30', 10);
+    var localTot = localH * 60 + localM;
+    var cloudTot = cloudH * 60 + cloudM;
+    if (cloudTot < localTot + 30) {
+        var pad = function(n) { return String(n).padStart(2, '0'); };
+        $msg.text('\u26A0 Cloud Backup Time must be at least 30 minutes after the Local Backup Time (' + pad(localH) + ':' + pad(localM) + '). This ensures a fresh local backup exists before syncing to the cloud.').css('color', '#c62828').show();
+        return;
+    }
+
     $msg.text('Saving\u2026').css('color', '#888').show();
     $.ajax({
         url: CS.ajax_url,
@@ -686,8 +702,15 @@ window.csS3Save = function () {
 };
 
 window.csS3Test = function () {
-    csS3Msg('Testing...', true);
+    csS3Msg('Testing\u2026', true);
     csS3Post('cs_test_s3', '', function (res) {
+        csS3Msg((res.success ? '&#10003; ' : '&#10007; ') + res.data, res.success);
+    });
+};
+
+window.csS3SyncLatest = function () {
+    csS3Msg('Syncing latest local backup\u2026', true);
+    csS3Post('cs_sync_latest_s3', '', function (res) {
         csS3Msg((res.success ? '&#10003; ' : '&#10007; ') + res.data, res.success);
     });
 };
@@ -750,6 +773,13 @@ window.csGDriveTest = function () {
     });
 };
 
+window.csGDriveSyncLatest = function () {
+    csGDriveMsg('Syncing latest local backup\u2026', true);
+    csGDrivePost('cs_sync_latest_gdrive', '', function (res) {
+        csGDriveMsg((res.success ? '&#10003; ' : '&#10007; ') + res.data, res.success);
+    });
+};
+
 window.csGDriveExplain = function () {
     // Widen the modal for this long guide
     var $ = window.jQuery;
@@ -770,7 +800,7 @@ window.csGDriveExplain = function () {
     function hr() { return '<hr style="margin:12px 0;border:none;border-top:1px solid #e0e0e0;">'; }
 
     csShowExplain('Google Drive Backup — Setup Guide',
-        '<p style="margin:0 0 8px;">After every backup the zip is automatically copied to your Google Drive via <strong>rclone</strong>. Setup takes about 5 minutes and only needs to be done once.</p>' +
+        '<p style="margin:0 0 8px;">After every local backup, the most recent backup zip is automatically copied to your Google Drive via <strong>rclone</strong>. Use <strong>Sync Local Backup Now</strong> to push the latest backup manually at any time. Setup takes about 5 minutes and only needs to be done once.</p>' +
         hr() +
 
         h('Step 1 — Install rclone on the server') +
