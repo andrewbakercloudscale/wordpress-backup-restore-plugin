@@ -1,14 +1,14 @@
 === CloudScale Free Backup and Restore ===
 Contributors: andrewjbaker
-Tags: backup, restore, database, media, plugins, themes, mysqldump, maintenance mode, scheduled backup
+Tags: backup, restore, database, scheduled backup, maintenance mode
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 3.2.37
+Stable tag: 3.2.51
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-Professional WordPress backup and restore. Backs up your database, media uploads, plugins and themes into a single zip — no timeouts, no external services, no limits.
+WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. No timeouts, no external services, no limits.
 
 == Description ==
 
