@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.51
+ * Version:           3.2.59
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.51');
+define('CS_BACKUP_VERSION',    '3.2.59');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -68,6 +68,7 @@ function cs_deactivate(): void {
     wp_clear_scheduled_hook('cs_scheduled_ami_backup');
     wp_clear_scheduled_hook('cs_ami_poll');
     wp_clear_scheduled_hook('cs_s3_retry');
+    wp_clear_scheduled_hook('cs_ami_delete_check');
     cs_maintenance_off();
 
     // Delete only versioned asset copies — never the canonical script.js / style.css source files.
@@ -870,16 +871,8 @@ function cs_admin_page(): void {
                                    value="<?php echo esc_attr($ami_prefix); ?>"
                                    style="width:calc(20em - 50px);min-width:140px;">
                         </div>
-                        <div>
-                            <label for="cs-ami-max"><strong>Max AMIs to keep</strong></label>
-                            <div class="cs-inline" style="margin-top:2px;">
-                                <input type="number" id="cs-ami-max" class="cs-input-sm" min="1" max="999"
-                                       value="<?php echo esc_attr($ami_max); ?>" style="width:80px;">
-                                <span class="cs-muted-text">AMIs</span>
-                            </div>
-                        </div>
                     </div>
-                    <p class="cs-help" style="margin-top:6px;">Prefix example: <code>prod-web01</code> &rarr; <code>prod-web01_20260227_1430</code>. Max AMIs: when creating a new AMI would exceed this limit, the oldest AMI is automatically deregistered from AWS and removed from the log before the new one is created.</p>
+                    <p class="cs-help" style="margin-top:6px;">Prefix example: <code>prod-web01</code> &rarr; <code>prod-web01_20260227_1430</code>. The oldest AMI is automatically deregistered when the <em>Max Cloud Backups to Keep</em> limit (set in Cloud Backup Settings above) is exceeded.</p>
                 </div>
 
                 <div class="cs-field-group">
@@ -893,7 +886,6 @@ function cs_admin_page(): void {
                 <div style="margin-top:12px;">
                     <button type="button" onclick="csAmiSave()" class="button button-primary"><?php esc_html_e( 'Save AMI Settings', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csAmiCreate()" class="button" style="margin-left:8px;background:#1a237e!important;color:#fff!important;border-color:#1a237e!important;" <?php echo $ami_instance_id ? '' : 'disabled title="EC2 instance not detected"'; ?>>&#128247; Create AMI Now</button>
-                    <button type="button" onclick="csAmiStatus()" class="button" style="margin-left:4px;" <?php echo $ami_instance_id ? '' : 'disabled'; ?>>Check Status</button>
                     <button type="button" onclick="csAmiResetAndRefresh()" class="button" id="cs-ami-refresh-all" style="margin-left:4px;background:#c2185b!important;color:#fff!important;border-color:#880e4f!important;">&#8635; Refresh All</button>
                     <span id="cs-ami-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
                 </div>
@@ -1228,18 +1220,18 @@ function cs_admin_page(): void {
             <div class="cs-restore-upload-grid">
                 <div>
                     <p>Upload a <code>.zip</code> (from this plugin) or a raw <code>.sql</code> file to restore the database.</p>
-                    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;">
-                        <label for="cs-restore-file" id="cs-restore-file-label" class="button" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
+                    <input type="file" id="cs-restore-file" accept=".zip,.sql" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;">
+                    <div style="display:flex;align-items:center;gap:10px;margin-top:8px;">
+                        <label for="cs-restore-file" id="cs-restore-file-label" class="button" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;flex-shrink:0;">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                             <?php esc_html_e( 'Choose File', 'cloudscale-free-backup-and-restore' ); ?>
                         </label>
-                        <span id="cs-restore-file-name" style="font-size:0.85rem;color:#666;"><?php esc_html_e( 'No file chosen', 'cloudscale-free-backup-and-restore' ); ?></span>
+                        <span id="cs-restore-file-name" style="font-size:0.85rem;color:#666;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><?php esc_html_e( 'No file chosen', 'cloudscale-free-backup-and-restore' ); ?></span>
+                        <button type="button" id="cs-restore-upload-btn" class="button button-secondary" style="display:inline-flex;align-items:center;gap:6px;flex-shrink:0;margin-left:auto;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0"/><polyline points="9 12 12 9 15 12"/><line x1="12" y1="21" x2="12" y2="9"/></svg>
+                            <?php esc_html_e( 'Restore from Upload', 'cloudscale-free-backup-and-restore' ); ?>
+                        </button>
                     </div>
-                    <input type="file" id="cs-restore-file" accept=".zip,.sql" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;">
-                    <button type="button" id="cs-restore-upload-btn" class="button button-secondary cs-mt" style="display:inline-flex;align-items:center;gap:6px;">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0"/><polyline points="9 12 12 9 15 12"/><line x1="12" y1="21" x2="12" y2="9"/></svg>
-                        <?php esc_html_e( 'Restore from Upload', 'cloudscale-free-backup-and-restore' ); ?>
-                    </button>
                 </div>
                 <div id="cs-restore-upload-progress" style="display:none" class="cs-progress-panel">
                     <p id="cs-restore-upload-msg" class="cs-progress-msg">Uploading...</p>
@@ -1361,6 +1353,16 @@ function cs_admin_page(): void {
                             </label>
                         </div>
                         <p class="cs-help">Each destination must also be configured. AMI requires AWS CLI and a prefix in the EC2 settings below.</p>
+                    </div>
+
+                    <div class="cs-field-group" style="border-top:1px solid #e0e0e0;padding-top:14px;margin-top:4px;">
+                        <label class="cs-field-label" for="cs-ami-max"><strong><?php esc_html_e( 'Max Cloud Backups to Keep', 'cloudscale-free-backup-and-restore' ); ?></strong></label>
+                        <div class="cs-inline" style="margin-top:4px;">
+                            <input type="number" id="cs-ami-max" class="cs-input-sm" min="1" max="999"
+                                   value="<?php echo esc_attr($ami_max); ?>" style="width:80px;">
+                            <span class="cs-muted-text">backups per destination</span>
+                        </div>
+                        <p class="cs-help">Applies to S3, Google Drive, and AMI snapshots. Oldest are deleted automatically when this limit is exceeded.</p>
                     </div>
 
                 </fieldset>
@@ -1506,16 +1508,8 @@ function cs_admin_page(): void {
                                    value="<?php echo esc_attr($ami_prefix); ?>"
                                    style="width:calc(20em - 50px);min-width:140px;">
                         </div>
-                        <div>
-                            <label for="cs-ami-max"><strong>Max AMIs to keep</strong></label>
-                            <div class="cs-inline" style="margin-top:2px;">
-                                <input type="number" id="cs-ami-max" class="cs-input-sm" min="1" max="999"
-                                       value="<?php echo esc_attr($ami_max); ?>" style="width:80px;">
-                                <span class="cs-muted-text">AMIs</span>
-                            </div>
-                        </div>
                     </div>
-                    <p class="cs-help" style="margin-top:6px;">Prefix example: <code>prod-web01</code> &rarr; <code>prod-web01_20260227_1430</code>. Max AMIs: when creating a new AMI would exceed this limit, the oldest AMI is automatically deregistered from AWS and removed from the log before the new one is created.</p>
+                    <p class="cs-help" style="margin-top:6px;">Prefix example: <code>prod-web01</code> &rarr; <code>prod-web01_20260227_1430</code>. The oldest AMI is automatically deregistered when the <em>Max Cloud Backups to Keep</em> limit (set in Cloud Backup Settings above) is exceeded.</p>
                 </div>
 
                 <div class="cs-field-group">
@@ -1529,7 +1523,6 @@ function cs_admin_page(): void {
                 <div style="margin-top:12px;">
                     <button type="button" onclick="csAmiSave()" class="button button-primary"><?php esc_html_e( 'Save AMI Settings', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csAmiCreate()" class="button" style="margin-left:8px;background:#1a237e!important;color:#fff!important;border-color:#1a237e!important;" <?php echo $ami_instance_id ? '' : 'disabled title="EC2 instance not detected"'; ?>>&#128247; Create AMI Now</button>
-                    <button type="button" onclick="csAmiStatus()" class="button" style="margin-left:4px;" <?php echo $ami_instance_id ? '' : 'disabled'; ?>>Check Status</button>
                     <button type="button" onclick="csAmiResetAndRefresh()" class="button" id="cs-ami-refresh-all" style="margin-left:4px;background:#c2185b!important;color:#fff!important;border-color:#880e4f!important;">&#8635; Refresh All</button>
                     <span id="cs-ami-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
                 </div>
@@ -1900,12 +1893,14 @@ add_action('wp_ajax_cs_save_cloud_schedule', function (): void {
     $clean_days = array_values(array_filter(array_map('intval', $raw_days), fn($d) => $d >= 1 && $d <= 7));
     update_option('cs_ami_schedule_days',   $clean_days);
     update_option('cs_cloud_backup_delay',  max(15, intval( $_POST['cloud_backup_delay'] ?? 30 )));
+    update_option('cs_ami_max',             max(1, min(999, intval( $_POST['cloud_max'] ?? 10 ))));
     update_option('cs_s3_sync_enabled',        !empty($_POST['s3_sync_enabled']));
     update_option('cs_gdrive_sync_enabled',    !empty($_POST['gdrive_sync_enabled']));
     update_option('cs_ami_sync_enabled',       !empty($_POST['ami_sync_enabled']));
     update_option('cs_cloud_schedule_enabled', !empty($_POST['cloud_schedule_enabled']));
     wp_cache_delete('cs_ami_schedule_days',      'options');
     wp_cache_delete('cs_cloud_backup_delay',     'options');
+    wp_cache_delete('cs_ami_max',                'options');
     wp_cache_delete('cs_s3_sync_enabled',        'options');
     wp_cache_delete('cs_gdrive_sync_enabled',    'options');
     wp_cache_delete('cs_ami_sync_enabled',       'options');
@@ -2100,12 +2095,12 @@ function cs_ami_enforce_max(array $log, string $aws, string $region): array {
             // Also treat "InvalidAMIID.NotFound" as success — already gone from AWS.
             $already_gone = str_contains($out, 'InvalidAMIID') || str_contains($out, 'does not exist');
             if ($out === '' || $already_gone) {
-                // Deregistered (or already gone) — safe to drop local record
+                // Deregistered (or already gone) — drop local record
                 cs_log('[CloudScale Backup] AMI auto-deregistered: ' . $ami_id . ' (' . ($old['name'] ?? '') . ')');
             } else {
-                // Deregistration failed — keep the record so the user can see and retry
-                cs_log('[CloudScale Backup] AMI auto-deregister FAILED for ' . $ami_id . ': ' . $out . ' — keeping local record');
-                $keep[] = $old;
+                // Deregistration failed — still drop from local log to enforce the count limit,
+                // but mark it so the user knows manual cleanup in AWS may be needed.
+                cs_log('[CloudScale Backup] AMI auto-deregister FAILED for ' . $ami_id . ': ' . $out . ' — removed from local log; may need manual removal in AWS console');
             }
         }
 
@@ -2304,16 +2299,79 @@ add_action('wp_ajax_cs_deregister_ami', function (): void {
 
     // deregister-image returns empty output on success
     if ($out === '' || str_contains($out, '"return": true') || str_contains($out, 'Return')) {
-        // Remove the record from the log entirely
-        $log     = (array) get_option('cs_ami_log', []);
-        $updated = array_values(array_filter($log, fn($e) => ($e['ami_id'] ?? '') !== $ami_id));
-        update_option('cs_ami_log', $updated, false);
+        // Mark as pending_delete in log and schedule a check in 15 minutes
+        $log = (array) get_option('cs_ami_log', []);
+        foreach ($log as &$entry) {
+            if (($entry['ami_id'] ?? '') === $ami_id) {
+                $entry['state'] = 'pending_delete';
+                break;
+            }
+        }
+        unset($entry);
+        update_option('cs_ami_log', $log, false);
 
-        wp_send_json_success('AMI ' . $ami_id . ' deregistered successfully.');
+        // Schedule a cron check in 15 minutes to confirm deletion and clean up
+        if (!wp_next_scheduled('cs_ami_delete_check', [$ami_id])) {
+            wp_schedule_single_event(time() + 900, 'cs_ami_delete_check', [$ami_id]);
+        }
+
+        wp_send_json_success('AMI ' . $ami_id . ' deregistered. Status will update automatically in 15 minutes.');
     } else {
         cs_log('[CloudScale Backup] AMI deregister failed: ' . $out);
         wp_send_json_error('Deregister failed: ' . $out);
     }
+});
+
+// ============================================================
+// Cron — Confirm AMI deletion 15 minutes after deregister
+// ============================================================
+
+/**
+ * WP-Cron callback: verify an AMI has been deleted in AWS 15 minutes after deregistration.
+ *
+ * Removes the log entry if AWS confirms the image is gone; updates the state if it still exists.
+ * Scheduled by the cs_deregister_ami AJAX handler immediately after a successful deregister call.
+ *
+ * @since 3.2.54
+ * @param string $ami_id The AWS AMI ID to check (e.g. 'ami-0abc1234').
+ * @return void
+ */
+add_action('cs_ami_delete_check', function (string $ami_id): void {
+    $log = (array) get_option('cs_ami_log', []);
+
+    // Find the entry
+    $entry_idx = null;
+    foreach ($log as $i => $e) {
+        if (($e['ami_id'] ?? '') === $ami_id) {
+            $entry_idx = $i;
+            break;
+        }
+    }
+    if ($entry_idx === null) return; // already removed from log
+
+    $aws = cs_find_aws();
+    if (!$aws) {
+        cs_log('[CloudScale Backup] AMI delete check: AWS CLI not found for ' . $ami_id);
+        return;
+    }
+
+    $region      = cs_get_instance_region();
+    $region_flag = $region ? ' --region ' . escapeshellarg($region) : '';
+    $cmd = escapeshellarg($aws) . ' ec2 describe-images --image-ids ' . escapeshellarg($ami_id) . $region_flag . ' --output json 2>&1';
+    $out  = trim((string) shell_exec($cmd));
+    $data = json_decode($out, true);
+
+    if (empty($data['Images'])) {
+        // Gone from AWS — remove from local log
+        $log = array_values(array_filter($log, fn($e) => ($e['ami_id'] ?? '') !== $ami_id));
+        cs_log('[CloudScale Backup] AMI delete confirmed, removed from log: ' . $ami_id);
+    } else {
+        // Still exists — update state from AWS
+        $log[$entry_idx]['state'] = $data['Images'][0]['State'] ?? 'unknown';
+        cs_log('[CloudScale Backup] AMI delete check: ' . $ami_id . ' state = ' . $log[$entry_idx]['state']);
+    }
+
+    update_option('cs_ami_log', $log, false);
 });
 
 // ============================================================
@@ -2941,6 +2999,92 @@ function cs_get_instance_region(): string {
  * @since 2.74.0
  * @return string Absolute path to 'aws', e.g. '/usr/local/bin/aws', or ''.
  */
+/**
+ * Delete old backup zips from the configured S3 bucket, keeping only the most recent N.
+ *
+ * Uses the same retention count as local backups (cs_retention option).
+ *
+ * @since 3.2.59
+ * @return void
+ */
+function cs_enforce_s3_retention(): void {
+    if (!get_option('cs_s3_sync_enabled', true)) return;
+    $bucket = get_option('cs_s3_bucket', '');
+    if (!$bucket) return;
+
+    $aws = cs_find_aws();
+    if (!$aws) return;
+
+    $retention  = max(1, intval(get_option('cs_ami_max', 10)));
+    $prefix     = '/' . ltrim(get_option('cs_s3_prefix', 'backups/'), '/');
+    $s3_base    = 's3://' . rtrim($bucket, '/') . rtrim($prefix, '/') . '/';
+    $cmd = escapeshellarg($aws) . ' s3 ls ' . escapeshellarg($s3_base) . ' 2>&1';
+    $out = trim((string) shell_exec($cmd));
+    if (!$out) return;
+
+    $files = [];
+    foreach (explode("\n", $out) as $line) {
+        $line = trim($line);
+        if (!$line) continue;
+        // Format: "2026-03-18 03:30:00     12345 bkup_f44.zip"
+        if (preg_match('/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+\d+\s+(.+\.zip)$/', $line, $m)) {
+            $files[] = ['date' => $m[1], 'name' => $m[2]];
+        }
+    }
+
+    if (count($files) <= $retention) return;
+
+    usort($files, fn($a, $b) => strcmp($a['date'], $b['date'])); // oldest first
+    $to_delete = array_slice($files, 0, count($files) - $retention);
+
+    foreach ($to_delete as $file) {
+        $cmd     = escapeshellarg($aws) . ' s3 rm ' . escapeshellarg($s3_base . $file['name']) . ' 2>&1';
+        $del_out = trim((string) shell_exec($cmd));
+        cs_log('[CloudScale Backup] S3 retention: deleted ' . $file['name'] . ($del_out ? ' — ' . $del_out : ' — OK'));
+    }
+}
+
+/**
+ * Delete old backup zips from the configured Google Drive remote, keeping only the most recent N.
+ *
+ * Uses the same retention count as local backups (cs_retention option).
+ *
+ * @since 3.2.59
+ * @return void
+ */
+function cs_enforce_gdrive_retention(): void {
+    if (!get_option('cs_gdrive_sync_enabled', true)) return;
+    $remote = get_option('cs_gdrive_remote', '');
+    if (!$remote) return;
+
+    $rclone = cs_find_rclone();
+    if (!$rclone) return;
+
+    $retention   = max(1, intval(get_option('cs_ami_max', 10)));
+    $dest_path   = ltrim(get_option('cs_gdrive_path', 'cloudscale-backups/'), '/');
+    $remote_path = rtrim($remote, ':') . ':' . $dest_path;
+
+    $cmd  = escapeshellarg($rclone) . ' lsjson ' . escapeshellarg($remote_path) . ' --files-only 2>&1';
+    $out  = trim((string) shell_exec($cmd));
+    if (!$out) return;
+
+    $data  = json_decode($out, true);
+    if (!is_array($data)) return;
+
+    $files = array_values(array_filter($data, fn($f) => str_ends_with($f['Name'] ?? '', '.zip')));
+    if (count($files) <= $retention) return;
+
+    usort($files, fn($a, $b) => strcmp($a['ModTime'] ?? '', $b['ModTime'] ?? '')); // oldest first
+    $to_delete = array_slice($files, 0, count($files) - $retention);
+
+    foreach ($to_delete as $file) {
+        $file_path = $remote_path . ($file['Name'] ?? '');
+        $cmd       = escapeshellarg($rclone) . ' delete ' . escapeshellarg($file_path) . ' 2>&1';
+        $del_out   = trim((string) shell_exec($cmd));
+        cs_log('[CloudScale Backup] GDrive retention: deleted ' . ($file['Name'] ?? '') . ($del_out ? ' — ' . $del_out : ' — OK'));
+    }
+}
+
 function cs_find_rclone(): string {
     $candidates = [
         trim((string) shell_exec('which rclone 2>/dev/null')),
@@ -2960,7 +3104,7 @@ function cs_find_rclone(): string {
 /**
  * Upload a local backup file to Google Drive using rclone.
  *
- * @since 3.2.51
+ * @since 3.2.59
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
@@ -2993,6 +3137,7 @@ function cs_sync_to_gdrive(string $local_path): array {
         cs_log('[CloudScale Backup] GDrive sync OK: ' . $dest);
         $result       = ['ok' => true, 'dest' => $dest];
         $log[$filename] = ['ok' => true, 'time' => time(), 'dest' => $dest];
+        cs_enforce_gdrive_retention();
     }
 
     // Prune log entries for files that no longer exist
@@ -3071,6 +3216,7 @@ function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
         cs_log('[CloudScale Backup] S3 sync OK: ' . $dest);
         $result = ['ok' => true, 'dest' => $dest];
         $log[$filename] = ['ok' => true, 'time' => time(), 'dest' => $dest];
+        cs_enforce_s3_retention();
     }
 
     // Prune log entries for files that no longer exist
@@ -3435,10 +3581,10 @@ function cs_parse_db_host( string $host ): array {
 }
 
 /**
- * Return an array of all backup files stored in the backup directory, newest first.
+ * Return the absolute path to the most recently modified backup zip in the backup directory.
  *
- * @since 1.0.0
- * @return array<int, array{name: string, path: string, size: int, mtime: int, date: string, type: string}> Backup entries.
+ * @since 3.2.28
+ * @return string Absolute path to the newest zip file, or empty string if none exist.
  */
 function cs_get_latest_backup_path(): string {
     $files = glob(CS_BACKUP_DIR . '*.zip') ?: [];

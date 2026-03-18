@@ -51,3 +51,4 @@ wp_clear_scheduled_hook( 'cs_scheduled_backup' );
 wp_clear_scheduled_hook( 'cs_scheduled_ami_backup' );
 wp_clear_scheduled_hook( 'cs_ami_poll' );
 wp_clear_scheduled_hook( 'cs_s3_retry' );
+wp_clear_scheduled_hook( 'cs_ami_delete_check' );

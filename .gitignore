@@ -11,11 +11,16 @@ wp-config.php
 wp-content/uploads/
 
 # Local deploy tooling — not part of the distributed plugin
-repo/
 build.sh
 deploy-wordpress.sh
 backup-s3.sh
 purge-cloudflare.sh
 rollback-wordpress.sh
+
+# SVN working copy (checked out by MANUAL-deploy-svn.sh — not committed to git)
+.svn-working-copy/
+
+# SVN credentials (never commit passwords)
+.svn-credentials.sh
 .claude/
 .claude-flow/
