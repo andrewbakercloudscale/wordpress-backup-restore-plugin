@@ -32,6 +32,7 @@ $options = [
     'cs_gdrive_sync_enabled',
     'cs_ami_sync_enabled',
     'cs_cloud_schedule_enabled',
+    'cs_cloud_backup_delay',
     'cs_ami_prefix',
     'cs_ami_reboot',
     'cs_ami_region_override',

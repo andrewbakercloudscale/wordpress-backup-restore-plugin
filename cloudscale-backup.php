@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.37
+ * Version:           3.2.51
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -11,12 +11,12 @@
  * Requires at least: 6.0
  * Tested up to:      6.9
  * Requires PHP:      8.1
- * Text Domain:       cloudscale-backup
+ * Text Domain:       cloudscale-free-backup-and-restore
  */
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.37');
+define('CS_BACKUP_VERSION',    '3.2.51');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -80,7 +80,7 @@ function cs_deactivate(): void {
     $assets = $dir . 'assets/';
     if (is_dir($assets)) {
         foreach (glob($assets . '*') as $f) { if (is_file($f)) { wp_delete_file($f); } }
-        rmdir($assets);
+        rmdir($assets); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- WP_Filesystem unavailable in activation/version hooks; empty dir after file deletion
     }
 }
 
@@ -129,7 +129,7 @@ add_action('admin_init', function () {
         $assets = $dir . 'assets/';
         if (is_dir($assets)) {
             foreach (glob($assets . '*') as $f) { if (is_file($f)) { wp_delete_file($f); } }
-            rmdir($assets);
+            rmdir($assets); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- WP_Filesystem unavailable in activation/version hooks; empty dir after file deletion
         }
         update_option('cs_loaded_version', CS_BACKUP_VERSION);
     }
@@ -268,6 +268,7 @@ function cs_ami_poll_handler(): void {
 function cs_get_run_days(): array {
     global $wpdb;
     // Read directly from DB — bypasses object cache entirely
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- intentional direct read to bypass object cache and get authoritative cron-safe value
     $raw = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'cs_run_days' ) );
     if ($raw === null) {
         return [1, 3, 5]; // option row doesn't exist yet — install default
@@ -313,12 +314,16 @@ function cs_reschedule(): void {
         }
     }
 
-    // Cloud backup (AMI + S3 + GDrive) — independent of local schedule
+    // Cloud backup (AMI + S3 + GDrive) — runs at local backup time + delay
     if (get_option('cs_cloud_schedule_enabled', false)) {
         $cloud_days = array_map('intval', (array) get_option('cs_ami_schedule_days', []));
         if (!empty($cloud_days)) {
-            $cloud_hour   = intval(get_option('cs_ami_run_hour',   3));
-            $cloud_minute = intval(get_option('cs_ami_run_minute', 30));
+            $delay_mins   = max(15, intval(get_option('cs_cloud_backup_delay', 30)));
+            $base_hour    = intval(get_option('cs_run_hour',   3));
+            $base_minute  = intval(get_option('cs_run_minute', 0));
+            $cloud_total  = ($base_hour * 60 + $base_minute + $delay_mins) % 1440;
+            $cloud_hour   = intval($cloud_total / 60);
+            $cloud_minute = $cloud_total % 60;
             $candidate = clone $now;
             $candidate->setTime($cloud_hour, $cloud_minute, 0);
             for ($i = 0; $i <= 7; $i++) {
@@ -338,7 +343,7 @@ add_action('cs_scheduled_backup', function () {
     $today    = intval((new DateTime('now', wp_timezone()))->format('N'));
     if (!in_array($today, $run_days, true)) return;
 
-    set_time_limit(0);
+    set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
     ignore_user_abort(true);
     cs_ensure_backup_dir();
 
@@ -400,8 +405,8 @@ add_action('cs_scheduled_ami_backup', function () {
 
 add_action('admin_menu', function () {
     add_management_page(
-        __( 'CloudScale Free Backup and Restore', 'cloudscale-backup' ),
-        __( 'CloudScale Backup & Restore', 'cloudscale-backup' ),
+        __( 'CloudScale Free Backup and Restore', 'cloudscale-free-backup-and-restore' ),
+        __( 'CloudScale Backup & Restore', 'cloudscale-free-backup-and-restore' ),
         'manage_options',
         'cloudscale-backup',
         'cs_admin_page'
@@ -452,6 +457,7 @@ function cs_admin_page(): void {
     foreach (glob(WP_CONTENT_DIR . '/*.php') ?: [] as $_f) { $dropins_size += (int) filesize($_f); }
     // Estimate database size from information_schema
     global $wpdb;
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- schema size query; caching not applicable for live size estimates
     $db_size = (int) $wpdb->get_var($wpdb->prepare(
         "SELECT SUM(data_length + index_length)
          FROM information_schema.TABLES
@@ -486,7 +492,7 @@ function cs_admin_page(): void {
     $cs_schedule_saved_msg = '';
     if (isset($_POST['cs_action']) && $_POST['cs_action'] === 'save_schedule') {
         check_admin_referer('cs_nonce', 'nonce');
-        $raw_days   = isset($_POST['run_days']) && is_array($_POST['run_days']) ? $_POST['run_days'] : [];
+        $raw_days   = isset($_POST['run_days']) && is_array($_POST['run_days']) ? wp_unslash( $_POST['run_days'] ) : []; // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_admin_referer(); sanitised via array_map('intval') on next line
         $clean_days = array_values(array_filter(array_map('intval', $raw_days), fn($d) => $d >= 1 && $d <= 7));
         update_option('cs_run_days',         $clean_days);
         update_option('cs_run_days_saved',   '1');
@@ -494,7 +500,7 @@ function cs_admin_page(): void {
         update_option('cs_run_hour',   max(0, min(23, intval($_POST['run_hour']   ?? 3))));
         update_option('cs_run_minute', max(0, min(59, intval($_POST['run_minute'] ?? 0))));
         $valid_components = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'htaccess', 'wpconfig'];
-        $raw_components   = isset($_POST['schedule_components']) && is_array($_POST['schedule_components']) ? $_POST['schedule_components'] : [];
+        $raw_components   = isset($_POST['schedule_components']) && is_array($_POST['schedule_components']) ? wp_unslash( $_POST['schedule_components'] ) : []; // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_admin_referer(); values validated via array_intersect() against a whitelist
         $clean_components = array_values(array_intersect($raw_components, $valid_components));
         // Default to core four if nothing selected
         if (empty($clean_components)) { $clean_components = ['db', 'media', 'plugins', 'themes']; }
@@ -533,6 +539,7 @@ function cs_admin_page(): void {
     $gdrive_sync_enabled    = (bool) get_option('cs_gdrive_sync_enabled', true);
     $ami_sync_enabled       = (bool) get_option('cs_ami_sync_enabled', true);
     $cloud_schedule_enabled = (bool) get_option('cs_cloud_schedule_enabled', false);
+    $cloud_backup_delay     = max(15, intval(get_option('cs_cloud_backup_delay', 30)));
     $ami_prefix          = get_option('cs_ami_prefix', '');
     $ami_reboot          = (bool) get_option('cs_ami_reboot', false);
     $ami_region_override = get_option('cs_ami_region_override', '');
@@ -542,7 +549,7 @@ function cs_admin_page(): void {
     $restore_method = cs_mysql_cli_available() ? 'mysql CLI (native — fast)' : 'PHP streamed (compatible)';
 
     // MySQL version
-    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoPrepare -- static query, no user input
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare -- static query; no user input; caching not applicable for live server version
     $mysql_version = $wpdb->get_var( 'SELECT VERSION()' ) ?: 'Unknown';
     $db_label      = 'MySQL ' . $mysql_version . ' — ' . DB_NAME;
 
@@ -559,17 +566,17 @@ function cs_admin_page(): void {
         <div class="cs-header">
             <div class="cs-header-title">
                 <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-                    <h1 style="margin:0;">☁ <?php echo esc_html__( 'CloudScale Free Backup & Restore', 'cloudscale-backup' ); ?></h1>
+                    <h1 style="margin:0;">☁ <?php echo esc_html__( 'CloudScale Free Backup & Restore', 'cloudscale-free-backup-and-restore' ); ?></h1>
                     <span style="display:inline-block;background:#fff;color:#1565c0;font-size:0.95rem;font-weight:800;letter-spacing:0.04em;padding:3px 14px;border-radius:20px;font-family:monospace;line-height:1.6;flex-shrink:0;">v<?php echo esc_html( CS_BACKUP_VERSION ); ?></span>
                 </div>
-                <p class="cs-header-sub"><?php esc_html_e( 'Database · media · plugins · themes. No timeouts, no external services.', 'cloudscale-backup' ); ?></p>
-                <p class="cs-header-free">✅ <?php esc_html_e( '100% free forever — no licence, no premium tier, no feature restrictions. Everything is included.', 'cloudscale-backup' ); ?></p>
+                <p class="cs-header-sub"><?php esc_html_e( 'Database · media · plugins · themes. No timeouts, no external services.', 'cloudscale-free-backup-and-restore' ); ?></p>
+                <p class="cs-header-free">✅ <?php esc_html_e( '100% free forever — no licence, no premium tier, no feature restrictions. Everything is included.', 'cloudscale-free-backup-and-restore' ); ?></p>
             </div>
             <div class="cs-header-status">
                 <?php if ($maint_active): ?>
-                    <span class="cs-badge cs-badge-warn">⚠ <?php esc_html_e( 'Maintenance Mode Active', 'cloudscale-backup' ); ?></span>
+                    <span class="cs-badge cs-badge-warn">⚠ <?php esc_html_e( 'Maintenance Mode Active', 'cloudscale-free-backup-and-restore' ); ?></span>
                 <?php else: ?>
-                    <span class="cs-badge cs-badge-ok"><?php esc_html_e( 'Site Online', 'cloudscale-backup' ); ?></span>
+                    <span class="cs-badge cs-badge-ok"><?php esc_html_e( 'Site Online', 'cloudscale-free-backup-and-restore' ); ?></span>
                 <?php endif; ?>
                 <a href="https://andrewbaker.ninja/2026/02/24/cloudscale-free-backup-and-restore-a-wordpress-backup-plugin-that-does-exactly-what-it-says/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;padding:6px 16px;background:#f57c00!important;color:#fff!important;font-size:0.8rem;font-weight:700;border-radius:20px;text-decoration:none!important;border:1px solid #e65100!important;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ffcc80;box-shadow:0 0 5px #ffcc80;flex-shrink:0;"></span>andrewbaker.ninja</a>
             </div>
@@ -628,7 +635,7 @@ function cs_admin_page(): void {
         <div id="cs-tab-local" class="cs-tab-panel">
 
         <!-- ===================== SETTINGS ===================== -->
-        <div class="cs-section-ribbon"><span><?php esc_html_e( 'Schedule & Settings', 'cloudscale-backup' ); ?></span></div>
+        <div class="cs-section-ribbon"><span><?php esc_html_e( 'Schedule & Settings', 'cloudscale-free-backup-and-restore' ); ?></span></div>
         <div class="cs-grid cs-grid-1" style="display:flex!important;flex-direction:column!important;gap:16px!important;">
 
             <!-- SCHEDULE CARD -->
@@ -636,13 +643,13 @@ function cs_admin_page(): void {
                 <form method="post" action="" id="cs-schedule-form">
                 <?php wp_nonce_field('cs_nonce', 'nonce'); ?>
                 <input type="hidden" name="cs_action" value="save_schedule">
-                <div class="cs-card-stripe cs-stripe--blue" style="background:linear-gradient(135deg,#1565c0 0%,#2196f3 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⏰ <?php echo esc_html__( 'Backup Schedule', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csScheduleExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+                <div class="cs-card-stripe cs-stripe--blue" style="background:linear-gradient(135deg,#1565c0 0%,#2196f3 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⏰ <?php echo esc_html__( 'Backup Schedule', 'cloudscale-free-backup-and-restore' ); ?></h2><button type="button" onclick="csScheduleExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
 
                 <!-- Enable/disable checkbox — inline with label -->
                 <div class="cs-field-group">
                     <label class="cs-enable-label">
                         <input type="checkbox" id="cs-schedule-enabled" name="schedule_enabled" value="1" <?php checked($enabled); ?>>
-                        <?php esc_html_e( 'Enable automatic backups', 'cloudscale-backup' ); ?>
+                        <?php esc_html_e( 'Enable automatic backups', 'cloudscale-free-backup-and-restore' ); ?>
                     </label>
                 </div>
 
@@ -652,7 +659,7 @@ function cs_admin_page(): void {
 
                     <!-- File backup days + components + time -->
                     <div class="cs-field-group">
-                        <span class="cs-field-label"><?php esc_html_e( 'File backup days', 'cloudscale-backup' ); ?></span>
+                        <span class="cs-field-label"><?php esc_html_e( 'File backup days', 'cloudscale-free-backup-and-restore' ); ?></span>
                         <div class="cs-day-checks">
                             <?php foreach ($days_map as $num => $day_label): ?>
                             <label class="cs-day-check-label">
@@ -668,7 +675,7 @@ function cs_admin_page(): void {
                     </div>
 
                     <div class="cs-field-group">
-                        <span class="cs-field-label"><?php esc_html_e( 'Include in scheduled backup', 'cloudscale-backup' ); ?></span>
+                        <span class="cs-field-label"><?php esc_html_e( 'Include in scheduled backup', 'cloudscale-free-backup-and-restore' ); ?></span>
                         <div style="display:flex;flex-wrap:wrap;gap:6px 20px;margin-top:6px;">
                             <?php
                             $sched_comp_map = [
@@ -696,7 +703,7 @@ function cs_admin_page(): void {
                     </div>
 
                     <div class="cs-field-group">
-                        <label class="cs-field-label" for="cs-run-hour"><?php esc_html_e( 'File backup time', 'cloudscale-backup' ); ?></label>
+                        <label class="cs-field-label" for="cs-run-hour"><?php esc_html_e( 'File backup time', 'cloudscale-free-backup-and-restore' ); ?></label>
                         <div class="cs-inline">
                             <select id="cs-run-hour" name="run_hour" class="cs-input-sm">
                                 <?php for ($h = 0; $h < 24; $h++): ?>
@@ -712,7 +719,7 @@ function cs_admin_page(): void {
                             <span class="cs-muted-text">server time &nbsp;·&nbsp; now: <?php echo esc_html(current_time('H:i T')); ?> &nbsp;·&nbsp; TZ: <?php echo esc_html(wp_timezone_string()); ?></span>
                         </div>
                         <?php if ($next_run): ?>
-                        <p class="cs-help">Next file backup: <strong><?php echo esc_html(get_date_from_gmt(date('Y-m-d H:i:s', $next_run), 'D j M \a\t H:i')); ?></strong></p>
+                        <p class="cs-help">Next file backup: <strong><?php echo esc_html(get_date_from_gmt(gmdate('Y-m-d H:i:s', $next_run), 'D j M \a\t H:i')); ?></strong></p>
                         <?php endif; ?>
                     </div>
 
@@ -722,7 +729,7 @@ function cs_admin_page(): void {
                     Automatic backups are <strong>off</strong>. Enable the checkbox above to configure a schedule, or run backups manually below.
                 </div>
 
-                <button type="submit" name="cs_save_schedule" class="button button-primary cs-mt"><?php esc_html_e( 'Save Schedule', 'cloudscale-backup' ); ?></button>
+                <button type="submit" name="cs_save_schedule" class="button button-primary cs-mt"><?php esc_html_e( 'Save Schedule', 'cloudscale-free-backup-and-restore' ); ?></button>
                 <?php if ($cs_schedule_saved_msg): ?>
                 <span class="cs-saved-msg" style="display:inline;margin-left:10px">✓ <?php echo esc_html($cs_schedule_saved_msg); ?></span>
                 <?php endif; ?>
@@ -738,10 +745,10 @@ function cs_admin_page(): void {
             $ret_has_baseline = $latest_size > 0;
             ?>
             <div class="cs-card cs-card--green">
-                <div class="cs-card-stripe cs-stripe--green" style="background:linear-gradient(135deg,#2e7d32 0%,#43a047 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🗂 <?php echo esc_html__( 'Retention & Storage', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csRetentionExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+                <div class="cs-card-stripe cs-stripe--green" style="background:linear-gradient(135deg,#2e7d32 0%,#43a047 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🗂 <?php echo esc_html__( 'Retention & Storage', 'cloudscale-free-backup-and-restore' ); ?></h2><button type="button" onclick="csRetentionExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
 
                 <div class="cs-field-group">
-                    <label class="cs-field-label" for="cs-backup-prefix"><?php esc_html_e( 'Backup filename prefix', 'cloudscale-backup' ); ?></label>
+                    <label class="cs-field-label" for="cs-backup-prefix"><?php esc_html_e( 'Backup filename prefix', 'cloudscale-free-backup-and-restore' ); ?></label>
                     <div class="cs-inline">
                         <input type="text" id="cs-backup-prefix" class="cs-input-sm"
                                value="<?php echo esc_attr($backup_prefix); ?>"
@@ -752,7 +759,7 @@ function cs_admin_page(): void {
                 </div>
 
                 <div class="cs-field-group">
-                    <label class="cs-field-label"><?php esc_html_e( 'Keep last', 'cloudscale-backup' ); ?></label>
+                    <label class="cs-field-label"><?php esc_html_e( 'Keep last', 'cloudscale-free-backup-and-restore' ); ?></label>
                     <div class="cs-inline">
                         <input type="number" id="cs-retention"
                                value="<?php echo (int) $retention; ?>" min="1" max="9999"
@@ -818,7 +825,7 @@ function cs_admin_page(): void {
                     </div>
                 </div>
 
-                <button type="button" id="cs-save-retention" class="button button-primary cs-mt"><?php esc_html_e( 'Save Retention Settings', 'cloudscale-backup' ); ?></button>
+                <button type="button" id="cs-save-retention" class="button button-primary cs-mt"><?php esc_html_e( 'Save Retention Settings', 'cloudscale-free-backup-and-restore' ); ?></button>
                 <span id="cs-retention-saved" class="cs-saved-msg" style="display:none">✓ Saved</span>
             </div>
 
@@ -827,7 +834,7 @@ function cs_admin_page(): void {
             <?php if ( false ): // AMI card rendered in Cloud tab ?>
             <div class="cs-card cs-card--indigo">
                 <div class="cs-card-stripe cs-stripe--indigo" style="background:linear-gradient(135deg,#1a237e 0%,#3949ab 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
-                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128247; <?php echo esc_html__( 'EC2 AMI Snapshot', 'cloudscale-backup' ); ?></h2>
+                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128247; <?php echo esc_html__( 'EC2 AMI Snapshot', 'cloudscale-free-backup-and-restore' ); ?></h2>
                     <button type="button" onclick="csAmiExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button>
                 </div>
 
@@ -884,7 +891,7 @@ function cs_admin_page(): void {
                 </div>
 
                 <div style="margin-top:12px;">
-                    <button type="button" onclick="csAmiSave()" class="button button-primary"><?php esc_html_e( 'Save AMI Settings', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csAmiSave()" class="button button-primary"><?php esc_html_e( 'Save AMI Settings', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csAmiCreate()" class="button" style="margin-left:8px;background:#1a237e!important;color:#fff!important;border-color:#1a237e!important;" <?php echo $ami_instance_id ? '' : 'disabled title="EC2 instance not detected"'; ?>>&#128247; Create AMI Now</button>
                     <button type="button" onclick="csAmiStatus()" class="button" style="margin-left:4px;" <?php echo $ami_instance_id ? '' : 'disabled'; ?>>Check Status</button>
                     <button type="button" onclick="csAmiResetAndRefresh()" class="button" id="cs-ami-refresh-all" style="margin-left:4px;background:#c2185b!important;color:#fff!important;border-color:#880e4f!important;">&#8635; Refresh All</button>
@@ -894,7 +901,7 @@ function cs_admin_page(): void {
 
                 <?php if (!empty($ami_log_recent)): ?>
                 <div class="cs-mt" style="margin-top:16px;">
-                    <p class="cs-field-label" style="margin-bottom:6px;"><?php esc_html_e( 'Recent AMI snapshots', 'cloudscale-backup' ); ?></p>
+                    <p class="cs-field-label" style="margin-bottom:6px;"><?php esc_html_e( 'Recent AMI snapshots', 'cloudscale-free-backup-and-restore' ); ?></p>
                     <div class="cs-table-wrap">
                     <table class="widefat cs-table" style="font-size:0.82rem;">
                         <thead>
@@ -914,12 +921,12 @@ function cs_admin_page(): void {
                             $is_deleted  = ($entry_state === 'deleted in AWS');
                             $is_ok       = !empty($entry['ok']);
                             ?>
-                            <tr id="cs-ami-row-<?php echo $row_ami_id; ?>">
+                            <tr id="cs-ami-row-<?php echo esc_attr( $row_ami_id ); ?>">
                                 <?php $faded = $is_deleted ? 'style="opacity:0.45;"' : ''; ?>
-                                <td <?php echo $faded; ?>><?php echo esc_html($entry['name'] ?? '—'); ?></td>
-                                <td <?php echo $faded; ?>><code style="font-size:0.78rem;"><?php echo esc_html($entry['ami_id'] ?? '—'); ?></code></td>
-                                <td <?php echo $faded; ?>><?php echo esc_html(isset($entry['time']) ? wp_date('j M Y H:i', $entry['time']) : '—'); ?></td>
-                                <td id="cs-ami-state-<?php echo $row_ami_id; ?>" <?php echo $faded; ?>>
+                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><?php echo esc_html($entry['name'] ?? '—'); ?></td>
+                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><code style="font-size:0.78rem;"><?php echo esc_html($entry['ami_id'] ?? '—'); ?></code></td>
+                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><?php echo esc_html(isset($entry['time']) ? wp_date('j M Y H:i', $entry['time']) : '—'); ?></td>
+                                <td id="cs-ami-state-<?php echo esc_attr( $row_ami_id ); ?>" <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>>
                                     <?php if ($is_deleted): ?>
                                         <span style="color:#999;font-weight:600;">&#128465; deleted in AWS</span>
                                     <?php elseif ($is_ok): ?>
@@ -927,7 +934,7 @@ function cs_admin_page(): void {
                                         $sc = $entry_state === 'available' ? '#2e7d32' : ($entry_state === 'pending' ? '#e65100' : '#757575');
                                         $si = $entry_state === 'available' ? '&#10003;' : ($entry_state === 'pending' ? '&#9203;' : '&#10007;');
                                         ?>
-                                        <span style="color:<?php echo $sc; ?>;font-weight:600;"><?php echo $si; ?> <?php echo esc_html($entry_state ?: 'Created'); ?></span>
+                                        <span style="color:<?php echo esc_attr( $sc ); ?>;font-weight:600;"><?php echo $si; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded HTML entity ?> <?php echo esc_html($entry_state ?: 'Created'); ?></span>
                                     <?php else: ?>
                                         <?php $err_raw = substr($entry['error'] ?? '', 0, 120); ?>
                                         <span style="color:#c62828;font-weight:600;" title="<?php echo esc_attr($err_raw ?: 'No error detail recorded'); ?>">&#10007; Failed</span>
@@ -936,12 +943,12 @@ function cs_admin_page(): void {
                                         <?php endif; ?>
                                     <?php endif; ?>
                                 </td>
-                                <td id="cs-ami-actions-<?php echo $row_ami_id; ?>">
+                                <td id="cs-ami-actions-<?php echo esc_attr( $row_ami_id ); ?>">
                                     <?php if (!empty($entry['ami_id'])): ?>
                                     <?php if (!$is_deleted): ?>
-                                    <button type="button" onclick="csAmiRefreshOne('<?php echo $row_ami_id; ?>')" class="button button-small" title="Refresh this AMI state from AWS" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+                                    <button type="button" onclick="csAmiRefreshOne('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" title="Refresh this AMI state from AWS" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
                                     <?php endif; ?>
-                                    <button type="button" onclick="csAmiDelete('<?php echo $row_ami_id; ?>', '<?php echo esc_js($entry['name'] ?? ''); ?>', <?php echo $is_deleted ? 'true' : 'false'; ?>)" class="button button-small" title="<?php echo $is_deleted ? 'Remove record' : 'Deregister AMI'; ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? 'Remove' : 'Delete'; ?></button>
+                                    <button type="button" onclick="csAmiDelete('<?php echo esc_js( $row_ami_id ); ?>', '<?php echo esc_js($entry['name'] ?? ''); ?>', <?php echo $is_deleted ? 'true' : 'false'; ?>)" class="button button-small" title="<?php echo $is_deleted ? 'Remove record' : 'Deregister AMI'; ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? 'Remove' : 'Delete'; ?></button>
                                     <?php else: ?>
                                     <button type="button" onclick="csAmiRemoveFailed('<?php echo esc_js($entry['name'] ?? ''); ?>')" class="button button-small" title="Remove failed record" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Remove</button>
                                     <?php endif; ?>
@@ -958,40 +965,40 @@ function cs_admin_page(): void {
 
             <!-- SYSTEM INFO CARD -->
             <div class="cs-card cs-card--purple">
-                <div class="cs-card-stripe cs-stripe--purple" style="background:linear-gradient(135deg,#6a1b9a 0%,#8e24aa 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⚙ <?php echo esc_html__( 'System Info', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csSystemExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+                <div class="cs-card-stripe cs-stripe--purple" style="background:linear-gradient(135deg,#6a1b9a 0%,#8e24aa 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⚙ <?php echo esc_html__( 'System Info', 'cloudscale-free-backup-and-restore' ); ?></h2><button type="button" onclick="csSystemExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
 
                 <div class="cs-info-row">
-                    <span><?php esc_html_e( 'Backup method', 'cloudscale-backup' ); ?></span>
+                    <span><?php esc_html_e( 'Backup method', 'cloudscale-free-backup-and-restore' ); ?></span>
                     <strong><?php echo esc_html($dump_method); ?></strong>
                 </div>
                 <div class="cs-info-row">
-                    <span><?php esc_html_e( 'Restore method', 'cloudscale-backup' ); ?></span>
+                    <span><?php esc_html_e( 'Restore method', 'cloudscale-free-backup-and-restore' ); ?></span>
                     <strong><?php echo esc_html($restore_method); ?></strong>
                 </div>
                 <div class="cs-info-row">
-                    <span><?php esc_html_e( 'PHP memory limit', 'cloudscale-backup' ); ?></span>
+                    <span><?php esc_html_e( 'PHP memory limit', 'cloudscale-free-backup-and-restore' ); ?></span>
                     <strong><?php echo esc_html(ini_get('memory_limit')); ?></strong>
                 </div>
                 <div class="cs-info-row">
-                    <span><?php esc_html_e( 'Max execution time', 'cloudscale-backup' ); ?></span>
-                    <strong><?php echo ini_get('max_execution_time') === '0' ? esc_html__( 'Unlimited', 'cloudscale-backup' ) : esc_html(ini_get('max_execution_time')) . 's'; ?></strong>
+                    <span><?php esc_html_e( 'Max execution time', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    <strong><?php echo ini_get('max_execution_time') === '0' ? esc_html__( 'Unlimited', 'cloudscale-free-backup-and-restore' ) : esc_html(ini_get('max_execution_time')) . 's'; ?></strong>
                 </div>
                 <div class="cs-info-row">
-                    <span><?php esc_html_e( 'Database', 'cloudscale-backup' ); ?></span>
+                    <span><?php esc_html_e( 'Database', 'cloudscale-free-backup-and-restore' ); ?></span>
                     <strong><?php echo esc_html($db_label); ?></strong>
                 </div>
                 <div class="cs-info-row">
-                    <span><?php esc_html_e( 'Total backups stored', 'cloudscale-backup' ); ?></span>
+                    <span><?php esc_html_e( 'Total backups stored', 'cloudscale-free-backup-and-restore' ); ?></span>
                     <strong><?php echo (int) count($backups); ?></strong>
                 </div>
                 <div class="cs-info-row">
-                    <span><?php esc_html_e( 'Backup directory', 'cloudscale-backup' ); ?></span>
+                    <span><?php esc_html_e( 'Backup directory', 'cloudscale-free-backup-and-restore' ); ?></span>
                     <strong class="cs-path"><?php echo esc_html(CS_BACKUP_DIR); ?></strong>
                 </div>
 
                 <!-- Traffic-light disk row -->
                 <div class="cs-info-row cs-disk-row">
-                    <span><?php esc_html_e( 'Disk free space', 'cloudscale-backup' ); ?></span>
+                    <span><?php esc_html_e( 'Disk free space', 'cloudscale-free-backup-and-restore' ); ?></span>
                     <strong class="cs-tl cs-tl--<?php echo esc_attr($disk_status); ?>">
                         <span class="cs-tl-dot"></span>
                         <?php echo $free_bytes !== false ? esc_html(cs_format_size((int)$free_bytes)) : 'Unavailable'; ?>
@@ -1001,13 +1008,13 @@ function cs_admin_page(): void {
                     </strong>
                 </div>
                 <div class="cs-info-row">
-                    <span><?php esc_html_e( 'Latest backup size', 'cloudscale-backup' ); ?></span>
+                    <span><?php esc_html_e( 'Latest backup size', 'cloudscale-free-backup-and-restore' ); ?></span>
                     <strong><?php echo $latest_size > 0 ? esc_html(cs_format_size($latest_size)) : '—'; ?></strong>
                 </div>
 
                 <?php if ($free_pct !== null): ?>
                 <div class="cs-info-row">
-                    <span><?php esc_html_e( 'Percentage free space', 'cloudscale-backup' ); ?></span>
+                    <span><?php esc_html_e( 'Percentage free space', 'cloudscale-free-backup-and-restore' ); ?></span>
                     <strong class="cs-tl cs-tl--<?php echo esc_attr($disk_status); ?>">
                         <span class="cs-tl-dot"></span>
                         <?php echo (int) $free_pct; ?>%
@@ -1025,9 +1032,9 @@ function cs_admin_page(): void {
         </div><!-- /cs-grid-1 -->
 
         <!-- ===================== MANUAL BACKUP ===================== -->
-        <div class="cs-section-ribbon"><span><?php esc_html_e( 'Manual Backup', 'cloudscale-backup' ); ?></span></div>
+        <div class="cs-section-ribbon"><span><?php esc_html_e( 'Manual Backup', 'cloudscale-free-backup-and-restore' ); ?></span></div>
         <div class="cs-card cs-card--orange cs-full">
-            <div class="cs-card-stripe cs-stripe--orange" style="background:linear-gradient(135deg,#e65100 0%,#f57c00 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">▶ <?php echo esc_html__( 'Run Backup Now', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csBackupExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+            <div class="cs-card-stripe cs-stripe--orange" style="background:linear-gradient(135deg,#e65100 0%,#f57c00 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">▶ <?php echo esc_html__( 'Run Backup Now', 'cloudscale-free-backup-and-restore' ); ?></h2><button type="button" onclick="csBackupExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
             <?php
             // Pass sizes to JS for live total calculation
             $backup_sizes = [
@@ -1075,20 +1082,20 @@ function cs_admin_page(): void {
                         return ($md !== null ? in_array($key, $md, true) : $fallback) ? 'checked' : '';
                     };
                     ?>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-db" <?php echo $mc('db', true); ?> data-size="<?php echo (int) $db_size; ?>"> Database <code><?php echo $db_size > 0 ? esc_html(cs_format_size($db_size)) : '~unknown'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-media" <?php echo $mc('media', true); ?> data-size="<?php echo (int) $upload_size; ?>"> Media uploads <code><?php echo esc_html(cs_format_size($upload_size)); ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-plugins" <?php echo $mc('plugins', true); ?> data-size="<?php echo (int) $plugins_size; ?>"> Plugins <code><?php echo esc_html(cs_format_size($plugins_size)); ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-themes" <?php echo $mc('themes', true); ?> data-size="<?php echo (int) $themes_size; ?>"> Themes <code><?php echo esc_html(cs_format_size($themes_size)); ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-db" <?php echo esc_attr( $mc('db', true) ); ?> data-size="<?php echo (int) $db_size; ?>"> Database <code><?php echo $db_size > 0 ? esc_html(cs_format_size($db_size)) : '~unknown'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-media" <?php echo esc_attr( $mc('media', true) ); ?> data-size="<?php echo (int) $upload_size; ?>"> Media uploads <code><?php echo esc_html(cs_format_size($upload_size)); ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-plugins" <?php echo esc_attr( $mc('plugins', true) ); ?> data-size="<?php echo (int) $plugins_size; ?>"> Plugins <code><?php echo esc_html(cs_format_size($plugins_size)); ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-themes" <?php echo esc_attr( $mc('themes', true) ); ?> data-size="<?php echo (int) $themes_size; ?>"> Themes <code><?php echo esc_html(cs_format_size($themes_size)); ?></code></label>
                 </div>
                 <!-- Column 2: Other -->
                 <div class="cs-options-col cs-options-col--other">
                     <p class="cs-options-col-heading">Other</p>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-mu" <?php echo $mc('mu', $mu_size > 0); ?> data-size="<?php echo (int) $mu_size; ?>"> Must-use plugins <code><?php echo $mu_size > 0 ? esc_html(cs_format_size($mu_size)) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-languages" <?php echo $mc('languages', $lang_size > 0); ?> data-size="<?php echo (int) $lang_size; ?>"> Languages <code><?php echo $lang_size > 0 ? esc_html(cs_format_size($lang_size)) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-dropins" <?php echo $mc('dropins', false); ?> data-size="<?php echo (int) $dropins_size; ?>"> Dropins <small>(object-cache.php…)</small> <code><?php echo $dropins_size > 0 ? esc_html(cs_format_size($dropins_size)) : '0 B'; ?></code></label>
-<label class="cs-option-label"><input type="checkbox" id="cs-include-htaccess" <?php echo $mc('htaccess', $htaccess_size > 0); ?> data-size="<?php echo (int) $htaccess_size; ?>"> .htaccess <code><?php echo $htaccess_size > 0 ? esc_html(cs_format_size($htaccess_size)) : 'not found'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-mu" <?php echo esc_attr( $mc('mu', $mu_size > 0) ); ?> data-size="<?php echo absint( $mu_size ); ?>"> Must-use plugins <code><?php echo $mu_size > 0 ? esc_html(cs_format_size($mu_size)) : '0 B'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-languages" <?php echo esc_attr( $mc('languages', $lang_size > 0) ); ?> data-size="<?php echo absint( $lang_size ); ?>"> Languages <code><?php echo $lang_size > 0 ? esc_html(cs_format_size($lang_size)) : '0 B'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-dropins" <?php echo esc_attr( $mc('dropins', false) ); ?> data-size="<?php echo (int) $dropins_size; ?>"> Dropins <small>(object-cache.php…)</small> <code><?php echo $dropins_size > 0 ? esc_html(cs_format_size($dropins_size)) : '0 B'; ?></code></label>
+<label class="cs-option-label"><input type="checkbox" id="cs-include-htaccess" <?php echo esc_attr( $mc('htaccess', $htaccess_size > 0) ); ?> data-size="<?php echo absint( $htaccess_size ); ?>"> .htaccess <code><?php echo $htaccess_size > 0 ? esc_html(cs_format_size($htaccess_size)) : 'not found'; ?></code></label>
                     <label class="cs-option-label cs-option-sensitive">
-                        <input type="checkbox" id="cs-include-wpconfig" <?php echo $mc('wpconfig', false); ?> data-size="<?php echo (int) $wpconfig_size; ?>">
+                        <input type="checkbox" id="cs-include-wpconfig" <?php echo esc_attr( $mc('wpconfig', false) ); ?> data-size="<?php echo (int) $wpconfig_size; ?>">
                         wp-config.php <code><?php echo $wpconfig_size > 0 ? esc_html(cs_format_size($wpconfig_size)) : 'not found'; ?></code>
                         <span class="cs-sensitive-badge">⚠ credentials</span>
                     </label>
@@ -1102,7 +1109,7 @@ function cs_admin_page(): void {
                         </div>
                         <div class="cs-backup-summary-row">
                             <span class="cs-summary-label">Disk free space</span>
-                            <span class="cs-summary-value <?php echo 'cs-free-' . $disk_status; ?>" id="cs-free-space">
+                            <span class="cs-summary-value cs-free-<?php echo esc_attr( $disk_status ); ?>" id="cs-free-space">
                                 <?php echo $free_bytes !== false ? esc_html( cs_format_size( (int) $free_bytes ) ) : 'Unknown'; ?>
                             </span>
                         </div>
@@ -1110,9 +1117,9 @@ function cs_admin_page(): void {
                             <span class="cs-summary-warn" id="cs-space-warn"></span>
                         </div>
                     </div>
-                    <button type="button" id="cs-run-backup" class="button button-primary cs-btn-lg">▶ <?php esc_html_e( 'Run Backup Now', 'cloudscale-backup' ); ?></button>
+                    <button type="button" id="cs-run-backup" class="button button-primary cs-btn-lg">▶ <?php esc_html_e( 'Run Backup Now', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <div style="margin-top:8px;">
-                        <button type="button" id="cs-save-manual-defaults" class="button"><?php esc_html_e( 'Save as defaults', 'cloudscale-backup' ); ?></button>
+                        <button type="button" id="cs-save-manual-defaults" class="button"><?php esc_html_e( 'Save as defaults', 'cloudscale-free-backup-and-restore' ); ?></button>
                         <span id="cs-manual-defaults-msg" style="margin-left:8px;font-size:0.82rem;font-weight:600;display:none;"></span>
                     </div>
                     <div id="cs-backup-progress" style="display:none" class="cs-progress-panel">
@@ -1125,24 +1132,24 @@ function cs_admin_page(): void {
         </div>
 
         <!-- ===================== BACKUP HISTORY ===================== -->
-        <div class="cs-section-ribbon"><span><?php esc_html_e( 'Backup History', 'cloudscale-backup' ); ?></span></div>
+        <div class="cs-section-ribbon"><span><?php esc_html_e( 'Backup History', 'cloudscale-free-backup-and-restore' ); ?></span></div>
         <div class="cs-card cs-card--teal cs-full">
-            <div class="cs-card-stripe cs-stripe--teal" style="background:linear-gradient(135deg,#004d40 0%,#00897b 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🕓 <?php echo esc_html__( 'Backup History', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csHistoryExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+            <div class="cs-card-stripe cs-stripe--teal" style="background:linear-gradient(135deg,#004d40 0%,#00897b 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🕓 <?php echo esc_html__( 'Backup History', 'cloudscale-free-backup-and-restore' ); ?></h2><button type="button" onclick="csHistoryExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
             <?php if (empty($backups)): ?>
-                <p class="cs-empty"><?php esc_html_e( 'No backups yet. Run your first backup above.', 'cloudscale-backup' ); ?></p>
+                <p class="cs-empty"><?php esc_html_e( 'No backups yet. Run your first backup above.', 'cloudscale-free-backup-and-restore' ); ?></p>
             <?php else: ?>
             <div class="cs-table-wrap">
             <table class="widefat cs-table">
                 <thead>
                     <tr>
-                        <th class="cs-col-actions" style="width:72px!important;min-width:72px!important;max-width:72px!important;"><?php esc_html_e( 'Actions', 'cloudscale-backup' ); ?></th>
+                        <th class="cs-col-actions" style="width:72px!important;min-width:72px!important;max-width:72px!important;"><?php esc_html_e( 'Actions', 'cloudscale-free-backup-and-restore' ); ?></th>
                         <th class="cs-col-num" style="width:18px!important;min-width:18px!important;max-width:18px!important;padding-left:4px!important;padding-right:4px!important;">#</th>
-                        <th><?php esc_html_e( 'Filename', 'cloudscale-backup' ); ?></th>
-                        <th class="cs-col-size"><?php esc_html_e( 'Size', 'cloudscale-backup' ); ?></th>
-                        <th class="cs-col-meta"><?php esc_html_e( 'Created', 'cloudscale-backup' ); ?></th>
-                        <th class="cs-col-age"><?php esc_html_e( 'Age', 'cloudscale-backup' ); ?></th>
-                        <th class="cs-col-type"><?php esc_html_e( 'Type', 'cloudscale-backup' ); ?></th>
-                        <?php if ($s3_bucket): ?><th class="cs-col-s3" style="width:36px!important;text-align:center;" title="<?php esc_attr_e( 'S3 sync status', 'cloudscale-backup' ); ?>">S3</th><?php endif; ?>
+                        <th><?php esc_html_e( 'Filename', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th class="cs-col-size"><?php esc_html_e( 'Size', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th class="cs-col-meta"><?php esc_html_e( 'Created', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th class="cs-col-age"><?php esc_html_e( 'Age', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th class="cs-col-type"><?php esc_html_e( 'Type', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <?php if ($s3_bucket): ?><th class="cs-col-s3" style="width:36px!important;text-align:center;" title="<?php esc_attr_e( 'S3 sync status', 'cloudscale-free-backup-and-restore' ); ?>">S3</th><?php endif; ?>
                     </tr>
                 </thead>
                 <tbody>
@@ -1211,18 +1218,28 @@ function cs_admin_page(): void {
             </div><!-- .cs-table-wrap -->
             <p class="cs-help cs-mt">Showing <?php echo (int) count($backups); ?> backup(s). Retention limit: <?php echo (int) $retention; ?>. Oldest backups are removed automatically after each run.</p>
             <?php endif; ?>
-            <p class="cs-help" style="margin-top:6px;word-break:break-all;">&#128193; <?php esc_html_e( 'Stored at:', 'cloudscale-backup' ); ?> <code id="cs-backup-path"><?php echo esc_html( CS_BACKUP_DIR ); ?></code> <button type="button" id="cs-copy-path" onclick="csCopyBackupPath()" style="margin-left:6px;padding:2px 8px;font-size:0.75rem;cursor:pointer;vertical-align:middle;" class="button button-small">Copy</button></p>
+            <p class="cs-help" style="margin-top:6px;word-break:break-all;">&#128193; <?php esc_html_e( 'Stored at:', 'cloudscale-free-backup-and-restore' ); ?> <code id="cs-backup-path"><?php echo esc_html( CS_BACKUP_DIR ); ?></code> <button type="button" id="cs-copy-path" onclick="csCopyBackupPath()" style="margin-left:6px;padding:2px 8px;font-size:0.75rem;cursor:pointer;vertical-align:middle;" class="button button-small">Copy</button></p>
         </div>
 
         <!-- ===================== RESTORE FROM UPLOAD ===================== -->
-        <div class="cs-section-ribbon"><span><?php esc_html_e( 'Restore from File', 'cloudscale-backup' ); ?></span></div>
+        <div class="cs-section-ribbon"><span><?php esc_html_e( 'Restore from File', 'cloudscale-free-backup-and-restore' ); ?></span></div>
         <div class="cs-card cs-card--red cs-full">
-            <div class="cs-card-stripe cs-stripe--red" style="background:linear-gradient(135deg,#b71c1c 0%,#e53935 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">↩ <?php echo esc_html__( 'Restore from Uploaded File', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csRestoreExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+            <div class="cs-card-stripe cs-stripe--red" style="background:linear-gradient(135deg,#b71c1c 0%,#e53935 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">↩ <?php echo esc_html__( 'Restore from Uploaded File', 'cloudscale-free-backup-and-restore' ); ?></h2><button type="button" onclick="csRestoreExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
             <div class="cs-restore-upload-grid">
                 <div>
                     <p>Upload a <code>.zip</code> (from this plugin) or a raw <code>.sql</code> file to restore the database.</p>
-                    <input type="file" id="cs-restore-file" accept=".zip,.sql">
-                    <button type="button" id="cs-restore-upload-btn" class="button button-secondary cs-mt">↩ <?php esc_html_e( 'Restore from Upload', 'cloudscale-backup' ); ?></button>
+                    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px;">
+                        <label for="cs-restore-file" id="cs-restore-file-label" class="button" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                            <?php esc_html_e( 'Choose File', 'cloudscale-free-backup-and-restore' ); ?>
+                        </label>
+                        <span id="cs-restore-file-name" style="font-size:0.85rem;color:#666;"><?php esc_html_e( 'No file chosen', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    </div>
+                    <input type="file" id="cs-restore-file" accept=".zip,.sql" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;">
+                    <button type="button" id="cs-restore-upload-btn" class="button button-secondary cs-mt" style="display:inline-flex;align-items:center;gap:6px;">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0"/><polyline points="9 12 12 9 15 12"/><line x1="12" y1="21" x2="12" y2="9"/></svg>
+                        <?php esc_html_e( 'Restore from Upload', 'cloudscale-free-backup-and-restore' ); ?>
+                    </button>
                 </div>
                 <div id="cs-restore-upload-progress" style="display:none" class="cs-progress-panel">
                     <p id="cs-restore-upload-msg" class="cs-progress-msg">Uploading...</p>
@@ -1235,10 +1252,10 @@ function cs_admin_page(): void {
 
         <div id="cs-restore-modal" class="cs-modal" style="display:none">
             <div class="cs-modal-box">
-                <h2>⚠ <?php esc_html_e( 'Restore Database', 'cloudscale-backup' ); ?></h2>
+                <h2>⚠ <?php esc_html_e( 'Restore Database', 'cloudscale-free-backup-and-restore' ); ?></h2>
                 <div class="cs-modal-body">
                     <div class="cs-warning-box">
-                        <strong><?php esc_html_e( 'BEFORE YOU RESTORE — TAKE A SNAPSHOT', 'cloudscale-backup' ); ?></strong>
+                        <strong><?php esc_html_e( 'BEFORE YOU RESTORE — TAKE A SNAPSHOT', 'cloudscale-free-backup-and-restore' ); ?></strong>
                         <ul>
                             <li>Take a server/VM snapshot in your hosting control panel or AWS console <strong>right now</strong>.</li>
                             <li>If anything goes wrong you can roll back to the snapshot instantly.</li>
@@ -1256,8 +1273,8 @@ function cs_admin_page(): void {
                     </div>
                 </div>
                 <div class="cs-modal-footer">
-                    <button type="button" id="cs-modal-cancel" class="button"><?php esc_html_e( 'Cancel — keep current database', 'cloudscale-backup' ); ?></button>
-                    <button type="button" id="cs-modal-confirm" class="button button-primary cs-btn-danger" disabled><?php esc_html_e( 'Restore Now', 'cloudscale-backup' ); ?></button>
+                    <button type="button" id="cs-modal-cancel" class="button"><?php esc_html_e( 'Cancel — keep current database', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" id="cs-modal-confirm" class="button button-primary cs-btn-danger" disabled><?php esc_html_e( 'Restore Now', 'cloudscale-free-backup-and-restore' ); ?></button>
                 </div>
                 <div id="cs-modal-progress" style="display:none" class="cs-modal-progress">
                     <p id="cs-modal-progress-msg" class="cs-progress-msg">Enabling maintenance mode...</p>
@@ -1278,7 +1295,7 @@ function cs_admin_page(): void {
 
             <!-- CLOUD SCHEDULE CARD -->
             <div class="cs-card cs-card--blue">
-                <div class="cs-card-stripe cs-stripe--blue" style="background:linear-gradient(135deg,#1565c0 0%,#2196f3 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⏰ <?php echo esc_html__( 'Cloud Backup Settings', 'cloudscale-backup' ); ?></h2><button type="button" onclick="csScheduleExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
+                <div class="cs-card-stripe cs-stripe--blue" style="background:linear-gradient(135deg,#1565c0 0%,#2196f3 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⏰ <?php echo esc_html__( 'Cloud Backup Settings', 'cloudscale-free-backup-and-restore' ); ?></h2><button type="button" onclick="csCloudScheduleExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button></div>
 
                 <?php if (!$enabled && ($s3_sync_enabled || $gdrive_sync_enabled)): ?>
                 <div style="background:#fff8e1;border:1px solid #f9a825;border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:0.88rem;color:#5d4037;">
@@ -1289,7 +1306,7 @@ function cs_admin_page(): void {
                 <div class="cs-field-group">
                     <label class="cs-enable-label">
                         <input type="checkbox" id="cs-cloud-schedule-enabled" <?php checked($cloud_schedule_enabled); ?>>
-                        <?php esc_html_e( 'Enable automatic cloud backups', 'cloudscale-backup' ); ?>
+                        <?php esc_html_e( 'Enable automatic cloud backups', 'cloudscale-free-backup-and-restore' ); ?>
                     </label>
                 </div>
 
@@ -1313,23 +1330,17 @@ function cs_admin_page(): void {
                     </div>
 
                     <div class="cs-field-group">
-                        <label class="cs-field-label" for="cs-ami-run-hour"><?php esc_html_e( 'Cloud Backup Time', 'cloudscale-backup' ); ?></label>
+                        <label class="cs-field-label" for="cs-cloud-backup-delay"><?php esc_html_e( 'Cloud Backup Delay', 'cloudscale-free-backup-and-restore' ); ?></label>
                         <div class="cs-inline">
-                            <select id="cs-ami-run-hour" class="cs-input-sm">
-                                <?php for ($h = 0; $h < 24; $h++): ?>
-                                    <option value="<?php echo (int) $h; ?>" <?php selected($ami_run_hour, $h); ?>><?php echo esc_html(str_pad($h, 2, '0', STR_PAD_LEFT)); ?></option>
-                                <?php endfor; ?>
-                            </select>
-                            <span class="cs-muted-text">:</span>
-                            <select id="cs-ami-run-minute" class="cs-input-sm">
-                                <?php foreach ([0, 15, 30, 45] as $m): ?>
-                                    <option value="<?php echo (int) $m; ?>" <?php selected($ami_run_minute, $m); ?>><?php echo esc_html(str_pad($m, 2, '0', STR_PAD_LEFT)); ?></option>
-                                <?php endforeach; ?>
-                            </select>
-                            <span class="cs-muted-text">server time &nbsp;·&nbsp; now: <?php echo esc_html(current_time('H:i T')); ?> &nbsp;·&nbsp; TZ: <?php echo esc_html(wp_timezone_string()); ?></span>
+                            <input type="number" id="cs-cloud-backup-delay" class="cs-input-sm"
+                                   min="15" max="1440" step="1"
+                                   value="<?php echo (int) $cloud_backup_delay; ?>"
+                                   style="width:80px;">
+                            <span class="cs-muted-text">minutes after local backup (min 15)</span>
+                            <span id="cs-cloud-delay-preview" style="margin-left:10px;font-weight:600;color:#1565c0;"></span>
                         </div>
                         <?php if ($ami_next_run): ?>
-                        <p class="cs-help">Next cloud backup: <strong><?php echo esc_html(get_date_from_gmt(date('Y-m-d H:i:s', $ami_next_run), 'D j M \a\t H:i')); ?></strong></p>
+                        <p class="cs-help">Next cloud backup: <strong><?php echo esc_html(get_date_from_gmt(gmdate('Y-m-d H:i:s', $ami_next_run), 'D j M \a\t H:i')); ?></strong></p>
                         <?php endif; ?>
                     </div>
 
@@ -1358,14 +1369,14 @@ function cs_admin_page(): void {
                     Automatic cloud backups are <strong>off</strong>. Enable the checkbox above to configure a schedule.
                 </div>
 
-                <button type="button" onclick="csCloudScheduleSave()" class="button button-primary cs-mt"><?php esc_html_e( 'Save Schedule', 'cloudscale-backup' ); ?></button>
+                <button type="button" onclick="csCloudScheduleSave()" class="button button-primary cs-mt"><?php esc_html_e( 'Save Schedule', 'cloudscale-free-backup-and-restore' ); ?></button>
                 <span id="cs-cloud-schedule-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
             </div>
 
             <!-- S3 REMOTE BACKUP CARD -->
             <div class="cs-card cs-card--pink">
                 <div class="cs-card-stripe cs-stripe--pink" style="background:linear-gradient(135deg,#880e4f 0%,#e91e8c 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
-                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#9729; <?php echo esc_html__( 'S3 Remote Backup', 'cloudscale-backup' ); ?></h2>
+                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#9729; <?php echo esc_html__( 'S3 Remote Backup', 'cloudscale-free-backup-and-restore' ); ?></h2>
                     <button type="button" onclick="csS3Explain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button>
                 </div>
 
@@ -1386,10 +1397,10 @@ function cs_admin_page(): void {
                 </div>
 
                 <div style="margin-top:12px;">
-                    <button type="button" onclick="csS3Save()" class="button button-primary"><?php esc_html_e( 'Save S3 Settings', 'cloudscale-backup' ); ?></button>
-                    <button type="button" onclick="csS3Test()" class="button" style="margin-left:8px"><?php esc_html_e( 'Test Connection', 'cloudscale-backup' ); ?></button>
-                    <button type="button" onclick="csS3Diagnose()" class="button" style="margin-left:8px"><?php esc_html_e( 'Diagnose', 'cloudscale-backup' ); ?></button>
-                    <button type="button" onclick="csS3SyncLatest()" class="button" style="margin-left:8px"><?php esc_html_e( 'Sync Local Backup Now', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csS3Save()" class="button button-primary"><?php esc_html_e( 'Save S3 Settings', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" onclick="csS3Test()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Test Connection', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" onclick="csS3Diagnose()" class="button" style="margin-left:8px;background:#e65100!important;color:#fff!important;border-color:#bf360c!important;"><?php esc_html_e( 'Diagnose', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" onclick="csS3SyncLatest()" class="button" style="margin-left:8px;background:#6a1b9a!important;color:#fff!important;border-color:#4a148c!important;"><?php esc_html_e( 'Sync Local Backup Now', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <span id="cs-s3-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
                 </div>
 
@@ -1412,7 +1423,7 @@ function cs_admin_page(): void {
             <!-- GOOGLE DRIVE BACKUP CARD -->
             <div class="cs-card cs-card--gdrive">
                 <div class="cs-card-stripe" style="background:linear-gradient(135deg,#0f9d58 0%,#34a853 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
-                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128196; <?php echo esc_html__( 'Google Drive Backup', 'cloudscale-backup' ); ?></h2>
+                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128196; <?php echo esc_html__( 'Google Drive Backup', 'cloudscale-free-backup-and-restore' ); ?></h2>
                     <button type="button" onclick="csGDriveExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button>
                 </div>
 
@@ -1433,10 +1444,10 @@ function cs_admin_page(): void {
                 </div>
 
                 <div style="margin-top:12px;">
-                    <button type="button" onclick="csGDriveSave()" class="button button-primary"><?php esc_html_e( 'Save Drive Settings', 'cloudscale-backup' ); ?></button>
-                    <button type="button" onclick="csGDriveTest()" class="button" style="margin-left:8px"><?php esc_html_e( 'Test Connection', 'cloudscale-backup' ); ?></button>
-                    <button type="button" onclick="csGDriveDiagnose()" class="button" style="margin-left:8px"><?php esc_html_e( 'Diagnose', 'cloudscale-backup' ); ?></button>
-                    <button type="button" onclick="csGDriveSyncLatest()" class="button" style="margin-left:8px"><?php esc_html_e( 'Sync Local Backup Now', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csGDriveSave()" class="button button-primary"><?php esc_html_e( 'Save Drive Settings', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" onclick="csGDriveTest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Test Connection', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" onclick="csGDriveDiagnose()" class="button" style="margin-left:8px;background:#e65100!important;color:#fff!important;border-color:#bf360c!important;"><?php esc_html_e( 'Diagnose', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" onclick="csGDriveSyncLatest()" class="button" style="margin-left:8px;background:#6a1b9a!important;color:#fff!important;border-color:#4a148c!important;"><?php esc_html_e( 'Sync Local Backup Now', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <span id="cs-gdrive-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
                 </div>
 
@@ -1459,7 +1470,7 @@ function cs_admin_page(): void {
             <!-- AMI SNAPSHOT CARD -->
             <div class="cs-card cs-card--indigo">
                 <div class="cs-card-stripe cs-stripe--indigo" style="background:linear-gradient(135deg,#1a237e 0%,#3949ab 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
-                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128247; <?php echo esc_html__( 'EC2 AMI Snapshot', 'cloudscale-backup' ); ?></h2>
+                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128247; <?php echo esc_html__( 'EC2 AMI Snapshot', 'cloudscale-free-backup-and-restore' ); ?></h2>
                     <button type="button" onclick="csAmiExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;">Explain&hellip;</button>
                 </div>
 
@@ -1516,7 +1527,7 @@ function cs_admin_page(): void {
                 </div>
 
                 <div style="margin-top:12px;">
-                    <button type="button" onclick="csAmiSave()" class="button button-primary"><?php esc_html_e( 'Save AMI Settings', 'cloudscale-backup' ); ?></button>
+                    <button type="button" onclick="csAmiSave()" class="button button-primary"><?php esc_html_e( 'Save AMI Settings', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csAmiCreate()" class="button" style="margin-left:8px;background:#1a237e!important;color:#fff!important;border-color:#1a237e!important;" <?php echo $ami_instance_id ? '' : 'disabled title="EC2 instance not detected"'; ?>>&#128247; Create AMI Now</button>
                     <button type="button" onclick="csAmiStatus()" class="button" style="margin-left:4px;" <?php echo $ami_instance_id ? '' : 'disabled'; ?>>Check Status</button>
                     <button type="button" onclick="csAmiResetAndRefresh()" class="button" id="cs-ami-refresh-all" style="margin-left:4px;background:#c2185b!important;color:#fff!important;border-color:#880e4f!important;">&#8635; Refresh All</button>
@@ -1525,7 +1536,7 @@ function cs_admin_page(): void {
 
                 <?php if (!empty($ami_log_recent)): ?>
                 <div class="cs-mt" style="margin-top:16px;">
-                    <p class="cs-field-label" style="margin-bottom:6px;"><?php esc_html_e( 'Recent AMI snapshots', 'cloudscale-backup' ); ?></p>
+                    <p class="cs-field-label" style="margin-bottom:6px;"><?php esc_html_e( 'Recent AMI snapshots', 'cloudscale-free-backup-and-restore' ); ?></p>
                     <div class="cs-table-wrap">
                     <table class="widefat cs-table" style="font-size:0.82rem;">
                         <thead>
@@ -1545,12 +1556,12 @@ function cs_admin_page(): void {
                             $is_deleted  = ($entry_state === 'deleted in AWS');
                             $is_ok       = !empty($entry['ok']);
                             ?>
-                            <tr id="cs-ami-row-<?php echo $row_ami_id; ?>">
+                            <tr id="cs-ami-row-<?php echo esc_attr( $row_ami_id ); ?>">
                                 <?php $faded = $is_deleted ? 'style="opacity:0.45;"' : ''; ?>
-                                <td <?php echo $faded; ?>><?php echo esc_html($entry['name'] ?? '—'); ?></td>
-                                <td <?php echo $faded; ?>><code style="font-size:0.78rem;"><?php echo esc_html($entry['ami_id'] ?? '—'); ?></code></td>
-                                <td <?php echo $faded; ?>><?php echo esc_html(isset($entry['time']) ? wp_date('j M Y H:i', $entry['time']) : '—'); ?></td>
-                                <td id="cs-ami-state-<?php echo $row_ami_id; ?>" <?php echo $faded; ?>>
+                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><?php echo esc_html($entry['name'] ?? '—'); ?></td>
+                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><code style="font-size:0.78rem;"><?php echo esc_html($entry['ami_id'] ?? '—'); ?></code></td>
+                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><?php echo esc_html(isset($entry['time']) ? wp_date('j M Y H:i', $entry['time']) : '—'); ?></td>
+                                <td id="cs-ami-state-<?php echo esc_attr( $row_ami_id ); ?>" <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>>
                                     <?php if ($is_deleted): ?>
                                         <span style="color:#999;font-weight:600;">&#128465; deleted in AWS</span>
                                     <?php elseif ($is_ok): ?>
@@ -1558,7 +1569,7 @@ function cs_admin_page(): void {
                                         $sc = $entry_state === 'available' ? '#2e7d32' : ($entry_state === 'pending' ? '#e65100' : '#757575');
                                         $si = $entry_state === 'available' ? '&#10003;' : ($entry_state === 'pending' ? '&#9203;' : '&#10007;');
                                         ?>
-                                        <span style="color:<?php echo $sc; ?>;font-weight:600;"><?php echo $si; ?> <?php echo esc_html($entry_state ?: 'Created'); ?></span>
+                                        <span style="color:<?php echo esc_attr( $sc ); ?>;font-weight:600;"><?php echo $si; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded HTML entity ?> <?php echo esc_html($entry_state ?: 'Created'); ?></span>
                                     <?php else: ?>
                                         <?php $err_raw = substr($entry['error'] ?? '', 0, 120); ?>
                                         <span style="color:#c62828;font-weight:600;" title="<?php echo esc_attr($err_raw ?: 'No error detail recorded'); ?>">&#10007; Failed</span>
@@ -1567,12 +1578,12 @@ function cs_admin_page(): void {
                                         <?php endif; ?>
                                     <?php endif; ?>
                                 </td>
-                                <td id="cs-ami-actions-<?php echo $row_ami_id; ?>">
+                                <td id="cs-ami-actions-<?php echo esc_attr( $row_ami_id ); ?>">
                                     <?php if (!empty($entry['ami_id'])): ?>
                                     <?php if (!$is_deleted): ?>
-                                    <button type="button" onclick="csAmiRefreshOne('<?php echo $row_ami_id; ?>')" class="button button-small" title="Refresh this AMI state from AWS" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+                                    <button type="button" onclick="csAmiRefreshOne('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" title="Refresh this AMI state from AWS" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
                                     <?php endif; ?>
-                                    <button type="button" onclick="csAmiDelete('<?php echo $row_ami_id; ?>', '<?php echo esc_js($entry['name'] ?? ''); ?>', <?php echo $is_deleted ? 'true' : 'false'; ?>)" class="button button-small" title="<?php echo $is_deleted ? 'Remove record' : 'Deregister AMI'; ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? 'Remove' : 'Delete'; ?></button>
+                                    <button type="button" onclick="csAmiDelete('<?php echo esc_js( $row_ami_id ); ?>', '<?php echo esc_js($entry['name'] ?? ''); ?>', <?php echo $is_deleted ? 'true' : 'false'; ?>)" class="button button-small" title="<?php echo $is_deleted ? 'Remove record' : 'Deregister AMI'; ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? 'Remove' : 'Delete'; ?></button>
                                     <?php else: ?>
                                     <button type="button" onclick="csAmiRemoveFailed('<?php echo esc_js($entry['name'] ?? ''); ?>')" class="button button-small" title="Remove failed record" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Remove</button>
                                     <?php endif; ?>
@@ -1605,6 +1616,7 @@ add_action('wp_ajax_cs_run_backup', function (): void {
     cs_verify_nonce();
     cs_ensure_backup_dir();
 
+    // phpcs:disable WordPress.Security.NonceVerification.Missing -- nonce verified via cs_verify_nonce() above
     $include_db        = !empty($_POST['include_db']);
     $include_media     = !empty($_POST['include_media']);
     $include_plugins   = !empty($_POST['include_plugins']);
@@ -1614,6 +1626,7 @@ add_action('wp_ajax_cs_run_backup', function (): void {
     $include_dropins   = !empty($_POST['include_dropins']);
     $include_htaccess    = !empty($_POST['include_htaccess']);
     $include_wpconfig    = !empty($_POST['include_wpconfig']);
+    // phpcs:enable WordPress.Security.NonceVerification.Missing
 
     if (!$include_db && !$include_media && !$include_plugins && !$include_themes
         && !$include_mu && !$include_languages && !$include_dropins
@@ -1621,7 +1634,7 @@ add_action('wp_ajax_cs_run_backup', function (): void {
         wp_send_json_error('Select at least one option.');
     }
 
-    set_time_limit(0);
+    set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
     ignore_user_abort(true);
 
     try {
@@ -1666,10 +1679,11 @@ add_action('wp_ajax_cs_delete_backup', function (): void {
         wp_send_json_error( 'Forbidden', 403 );
     }
     cs_verify_nonce();
-    $file = sanitize_file_name($_POST['file'] ?? '');
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $file = sanitize_file_name( wp_unslash( $_POST['file'] ?? '' ) );
     $path = CS_BACKUP_DIR . $file;
     if (file_exists($path) && strpos(realpath($path), realpath(CS_BACKUP_DIR)) === 0) {
-        unlink($path);
+        wp_delete_file( $path );
         wp_send_json_success('Deleted.');
     }
     wp_send_json_error('File not found.');
@@ -1684,10 +1698,11 @@ add_action('wp_ajax_cs_restore_backup', function (): void {
         wp_send_json_error( 'Forbidden', 403 );
     }
     cs_verify_nonce();
-    set_time_limit(0);
+    set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
     ignore_user_abort(true);
 
-    $file = sanitize_file_name($_POST['file'] ?? '');
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $file = sanitize_file_name( wp_unslash( $_POST['file'] ?? '' ) );
     $path = CS_BACKUP_DIR . $file;
 
     if (!file_exists($path) || strpos(realpath($path), realpath(CS_BACKUP_DIR)) !== 0) {
@@ -1714,15 +1729,17 @@ add_action('wp_ajax_cs_restore_upload', function (): void {
         wp_send_json_error( 'Forbidden', 403 );
     }
     cs_verify_nonce();
-    set_time_limit(0);
+    set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
     ignore_user_abort(true);
 
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.InputNotValidated -- nonce verified via cs_verify_nonce(); tmp_name is a server path, not user input; file extension is validated below
     if (empty($_FILES['backup_file'])) {
         wp_send_json_error('No file uploaded.');
     }
 
     $tmp = $_FILES['backup_file']['tmp_name'];
-    $ext = strtolower(pathinfo($_FILES['backup_file']['name'], PATHINFO_EXTENSION));
+    $ext = strtolower(pathinfo(sanitize_file_name( wp_unslash( $_FILES['backup_file']['name'] ) ), PATHINFO_EXTENSION));
+    // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.InputNotValidated
 
     if (!in_array($ext, ['zip', 'sql'], true)) {
         wp_send_json_error('Only .zip or .sql files accepted.');
@@ -1755,7 +1772,8 @@ add_action('wp_ajax_cs_save_manual_defaults', function (): void {
     }
     cs_verify_nonce();
     $valid = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'htaccess', 'wpconfig'];
-    $raw   = isset($_POST['components']) && is_array($_POST['components']) ? $_POST['components'] : [];
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via cs_verify_nonce(); values validated via array_intersect() against a whitelist
+    $raw   = isset($_POST['components']) && is_array($_POST['components']) ? wp_unslash( $_POST['components'] ) : [];
     $clean = array_values(array_intersect($raw, $valid));
     update_option('cs_manual_defaults', $clean);
     wp_send_json_success('Defaults saved');
@@ -1781,7 +1799,7 @@ add_action('wp_ajax_cs_test_s3', function (): void {
     }
     $prefix = trim($prefix, '/');
     $dest   = 's3://' . rtrim($bucket, '/') . '/' . ($prefix ? $prefix . '/' : '') . 'cloudscale-test.txt';
-    $content = "CloudScale Backup connection test\nWritten: " . date('Y-m-d H:i:s T') . "\nBucket: " . $bucket . "\n";
+    $content = "CloudScale Backup connection test\nWritten: " . gmdate('Y-m-d H:i:s T') . "\nBucket: " . $bucket . "\n";
     $tmp = tempnam(sys_get_temp_dir(), 'cs_test_');
     file_put_contents($tmp, $content);
     $real_tmp = realpath($tmp) ?: $tmp;
@@ -1801,8 +1819,10 @@ add_action('wp_ajax_cs_save_s3', function (): void {
         wp_send_json_error( 'Forbidden', 403 );
     }
     cs_verify_nonce();
-    $bucket = sanitize_text_field($_POST['bucket'] ?? '');
-    $prefix = sanitize_text_field($_POST['prefix'] ?? 'backups/');
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $bucket = sanitize_text_field( wp_unslash( $_POST['bucket'] ?? '' ) );
+    $prefix = sanitize_text_field( wp_unslash( $_POST['prefix'] ?? 'backups/' ) );
+    // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
     // Ensure prefix ends with /
     $prefix = rtrim($prefix, '/') . '/';
     update_option('cs_s3_bucket', $bucket);
@@ -1826,7 +1846,8 @@ add_action('wp_ajax_cs_s3_sync_file', function (): void {
         wp_send_json_error( 'Forbidden', 403 );
     }
     cs_verify_nonce();
-    $filename = sanitize_file_name($_POST['filename'] ?? '');
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     if (!$filename || !str_ends_with($filename, '.zip')) {
         wp_send_json_error('Invalid filename.');
     }
@@ -1854,10 +1875,12 @@ add_action('wp_ajax_cs_save_ami', function (): void {
         wp_send_json_error( 'Forbidden', 403 );
     }
     cs_verify_nonce();
-    $prefix          = sanitize_text_field($_POST['prefix'] ?? '');
-    $reboot          = !empty($_POST['reboot']);
-    $region_override = sanitize_text_field($_POST['region_override'] ?? '');
-    $ami_max         = max(1, min(999, intval($_POST['ami_max'] ?? 10)));
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $prefix          = sanitize_text_field( wp_unslash( $_POST['prefix'] ?? '' ) );
+    $reboot          = !empty( $_POST['reboot'] );
+    $region_override = sanitize_text_field( wp_unslash( $_POST['region_override'] ?? '' ) );
+    $ami_max         = max(1, min(999, intval( $_POST['ami_max'] ?? 10 )));
+    // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
     // Validate region format if provided: letters, digits, hyphens only
     if ($region_override && !preg_match('/^[a-z0-9-]+$/', $region_override)) {
         wp_send_json_error('Invalid region format. Example: af-south-1');
@@ -1872,34 +1895,34 @@ add_action('wp_ajax_cs_save_ami', function (): void {
 add_action('wp_ajax_cs_save_cloud_schedule', function (): void {
     if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
     cs_verify_nonce();
-    $raw_days   = isset($_POST['ami_schedule_days']) && is_array($_POST['ami_schedule_days']) ? $_POST['ami_schedule_days'] : [];
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $raw_days   = array_filter(explode(',', sanitize_text_field( wp_unslash( $_POST['ami_schedule_days'] ?? '' ) )));
     $clean_days = array_values(array_filter(array_map('intval', $raw_days), fn($d) => $d >= 1 && $d <= 7));
-    update_option('cs_ami_schedule_days', $clean_days);
-    update_option('cs_ami_run_hour',     max(0, min(23, intval($_POST['ami_run_hour']   ?? 3))));
-    update_option('cs_ami_run_minute',   max(0, min(59, intval($_POST['ami_run_minute'] ?? 30))));
+    update_option('cs_ami_schedule_days',   $clean_days);
+    update_option('cs_cloud_backup_delay',  max(15, intval( $_POST['cloud_backup_delay'] ?? 30 )));
     update_option('cs_s3_sync_enabled',        !empty($_POST['s3_sync_enabled']));
     update_option('cs_gdrive_sync_enabled',    !empty($_POST['gdrive_sync_enabled']));
     update_option('cs_ami_sync_enabled',       !empty($_POST['ami_sync_enabled']));
     update_option('cs_cloud_schedule_enabled', !empty($_POST['cloud_schedule_enabled']));
     wp_cache_delete('cs_ami_schedule_days',      'options');
-    wp_cache_delete('cs_ami_run_hour',           'options');
-    wp_cache_delete('cs_ami_run_minute',         'options');
+    wp_cache_delete('cs_cloud_backup_delay',     'options');
     wp_cache_delete('cs_s3_sync_enabled',        'options');
     wp_cache_delete('cs_gdrive_sync_enabled',    'options');
     wp_cache_delete('cs_ami_sync_enabled',       'options');
     wp_cache_delete('cs_cloud_schedule_enabled', 'options');
     wp_cache_delete('alloptions',                'options');
+    // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
     cs_reschedule();
-    $day_names    = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    $saved_labels = implode(', ', array_map(fn($d) => $day_names[$d] ?? $d, $clean_days));
-    wp_send_json_success($saved_labels ?: 'No days selected — AMI scheduling disabled');
+    wp_send_json_success('Saved');
 });
 
 add_action('wp_ajax_cs_save_gdrive', function (): void {
     if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
     cs_verify_nonce();
-    $remote = sanitize_text_field($_POST['remote'] ?? '');
-    $path   = sanitize_text_field($_POST['path']   ?? 'cloudscale-backups/');
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $remote = sanitize_text_field( wp_unslash( $_POST['remote'] ?? '' ) );
+    $path   = sanitize_text_field( wp_unslash( $_POST['path']   ?? 'cloudscale-backups/' ) );
+    // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
     if ($remote && !preg_match('/^[a-zA-Z0-9_\-]+$/', $remote)) {
         wp_send_json_error('Invalid remote name. Use only letters, numbers, hyphens and underscores.');
     }
@@ -1948,7 +1971,7 @@ add_action('wp_ajax_cs_create_ami', function (): void {
         wp_send_json_error( 'Forbidden', 403 );
     }
     cs_verify_nonce();
-    set_time_limit(120);
+    set_time_limit(120); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to allow AMI create-image API call to complete
 
     $instance_id = cs_get_instance_id();
     if (!$instance_id) {
@@ -2197,7 +2220,8 @@ add_action('wp_ajax_cs_ami_status', function (): void {
     }
 
     // Accept optional specific AMI ID for per-row refresh
-    $specific_ami = isset($_POST['ami_id']) ? sanitize_text_field($_POST['ami_id']) : '';
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $specific_ami = isset($_POST['ami_id']) ? sanitize_text_field( wp_unslash( $_POST['ami_id'] ) ) : '';
 
     $log = (array) get_option('cs_ami_log', []);
 
@@ -2258,7 +2282,8 @@ add_action('wp_ajax_cs_deregister_ami', function (): void {
     }
     cs_verify_nonce();
 
-    $ami_id = sanitize_text_field($_POST['ami_id'] ?? '');
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $ami_id = sanitize_text_field( wp_unslash( $_POST['ami_id'] ?? '' ) );
     if (!$ami_id || !preg_match('/^ami-[a-f0-9]+$/', $ami_id)) {
         wp_send_json_error('Invalid AMI ID.');
     }
@@ -2300,7 +2325,7 @@ add_action('wp_ajax_cs_ami_refresh_all', function (): void {
         wp_send_json_error( 'Forbidden', 403 );
     }
     cs_verify_nonce();
-    set_time_limit(0);
+    set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
 
     $aws = cs_find_aws();
     if (!$aws) {
@@ -2310,6 +2335,7 @@ add_action('wp_ajax_cs_ami_refresh_all', function (): void {
     // Read directly from DB — bypasses object cache which may serve stale state
     // after cs_ami_reset_deleted has just written new values
     global $wpdb;
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- bypasses object cache intentionally; post-reset read must be authoritative
     $raw_log = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'cs_ami_log' ) );
     $log     = $raw_log ? (array) maybe_unserialize($raw_log) : [];
 
@@ -2409,7 +2435,8 @@ add_action('wp_ajax_cs_ami_remove_record', function (): void {
     }
     cs_verify_nonce();
 
-    $ami_id = sanitize_text_field($_POST['ami_id'] ?? '');
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $ami_id = sanitize_text_field( wp_unslash( $_POST['ami_id'] ?? '' ) );
     if (!$ami_id || !preg_match('/^ami-[a-f0-9]+$/', $ami_id)) {
         wp_send_json_error('Invalid AMI ID.');
     }
@@ -2426,7 +2453,8 @@ add_action('wp_ajax_cs_ami_remove_failed', function (): void {
         wp_send_json_error( 'Forbidden', 403 );
     }
     cs_verify_nonce();
-    $name = sanitize_text_field($_POST['name'] ?? '');
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $name = sanitize_text_field( wp_unslash( $_POST['name'] ?? '' ) );
     if (!$name) {
         wp_send_json_error('No name provided.');
     }
@@ -2444,9 +2472,11 @@ add_action('wp_ajax_cs_save_retention', function (): void {
         wp_send_json_error( 'Forbidden', 403 );
     }
     cs_verify_nonce();
-    $r = max(1, min(9999, intval($_POST['retention'] ?? 8)));
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $r = max(1, min(9999, intval( $_POST['retention'] ?? 8 )));
     update_option('cs_retention', $r);
-    $prefix = sanitize_key($_POST['backup_prefix'] ?? 'bkup') ?: 'bkup';
+    $prefix = sanitize_key( wp_unslash( $_POST['backup_prefix'] ?? 'bkup' ) ) ?: 'bkup';
+    // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
     update_option('cs_backup_prefix', $prefix);
     wp_send_json_success('Saved');
 });
@@ -2458,21 +2488,22 @@ add_action('wp_ajax_cs_save_retention', function (): void {
 add_action('admin_post_cs_download', function (): void {
     check_admin_referer('cs_download');
     if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( 'Forbidden' );
+        wp_die( esc_html__( 'Forbidden', 'cloudscale-free-backup-and-restore' ) );
     }
 
-    $file = sanitize_file_name($_GET['file'] ?? '');
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- GET param sanitised immediately via sanitize_file_name()
+    $file = sanitize_file_name( wp_unslash( $_GET['file'] ?? '' ) );
     $path = CS_BACKUP_DIR . $file;
 
     if (!file_exists($path) || strpos(realpath($path), realpath(CS_BACKUP_DIR)) !== 0) {
-        wp_die('File not found.');
+        wp_die( esc_html__( 'File not found.', 'cloudscale-free-backup-and-restore' ) );
     }
 
     header('Content-Type: application/zip');
     header('Content-Disposition: attachment; filename="' . $file . '"');
     header('Content-Length: ' . filesize($path));
     header('Cache-Control: no-cache');
-    readfile($path);
+    readfile($path); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- streaming binary download requires readfile(); WP_Filesystem has no streaming equivalent
     exit;
 });
 
@@ -2492,10 +2523,10 @@ add_action('admin_post_cs_download', function (): void {
 add_action( 'admin_post_cs_quick_backup', function (): void {
     check_admin_referer( 'cs_quick_backup', '_cs_quick_nonce' );
     if ( ! current_user_can( 'manage_options' ) ) {
-        wp_die( 'Forbidden' );
+        wp_die( esc_html__( 'Forbidden', 'cloudscale-free-backup-and-restore' ) );
     }
 
-    set_time_limit( 0 );
+    set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
     ignore_user_abort( true );
     cs_ensure_backup_dir();
 
@@ -2517,7 +2548,7 @@ add_action( 'admin_post_cs_quick_backup', function (): void {
 add_action('wp_dashboard_setup', function (): void {
     wp_add_dashboard_widget(
         'cs_backup_status_widget',
-        '&#128736; ' . esc_html__( 'CloudScale Backup Status', 'cloudscale-backup' ),
+        '&#128736; ' . esc_html__( 'CloudScale Backup Status', 'cloudscale-free-backup-and-restore' ),
         'cs_render_dashboard_widget'
     );
 });
@@ -2572,21 +2603,21 @@ function cs_render_dashboard_widget(): void {
         <div style="<?php echo esc_attr( $stats_style ); ?>">
 
             <div style="<?php echo esc_attr( $row_style ); ?>">
-                <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Last backup', 'cloudscale-backup' ); ?></span>
+                <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Last backup', 'cloudscale-free-backup-and-restore' ); ?></span>
                 <span style="<?php echo esc_attr( $value_style . ' color:' . $age_color ); ?>">
                     <?php echo esc_html($age_label); ?>
                 </span>
             </div>
 
             <div style="<?php echo esc_attr( $row_style ); ?>">
-                <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Last backup size', 'cloudscale-backup' ); ?></span>
+                <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Last backup size', 'cloudscale-free-backup-and-restore' ); ?></span>
                 <span style="<?php echo esc_attr( $value_style ); ?>">
                     <?php echo $latest ? esc_html(cs_format_size((int)$latest['size'])) : '—'; ?>
                 </span>
             </div>
 
             <div style="<?php echo esc_attr( $row_style ); ?>">
-                <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Backups stored', 'cloudscale-backup' ); ?></span>
+                <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Backups stored', 'cloudscale-free-backup-and-restore' ); ?></span>
                 <span style="<?php echo esc_attr( $value_style ); ?>">
                     <?php
                     $retention = (int) get_option('cs_retention', 8);
@@ -2596,7 +2627,7 @@ function cs_render_dashboard_widget(): void {
             </div>
 
             <div style="<?php echo esc_attr( $row_style . ' border-bottom:none;' ); ?>">
-                <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Free disk space', 'cloudscale-backup' ); ?></span>
+                <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Free disk space', 'cloudscale-free-backup-and-restore' ); ?></span>
                 <span style="<?php echo esc_attr( $value_style ); ?>">
                     <?php echo $free_bytes !== false ? esc_html(cs_format_size((int)$free_bytes)) : '—'; ?>
                 </span>
@@ -2606,13 +2637,13 @@ function cs_render_dashboard_widget(): void {
 
         <a href="<?php echo esc_url($settings_url); ?>"
            style="<?php echo esc_attr( $btn_base . ' background: linear-gradient(90deg, #e65100 0%, #b71c1c 100%); margin-top:8px;' ); ?>">
-            &#128736; <?php esc_html_e( 'CloudScale Backup & Restore', 'cloudscale-backup' ); ?>
+            &#128736; <?php esc_html_e( 'CloudScale Backup & Restore', 'cloudscale-free-backup-and-restore' ); ?>
         </a>
         <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0;padding:0;">
             <?php wp_nonce_field( 'cs_quick_backup', '_cs_quick_nonce' ); ?>
             <input type="hidden" name="action" value="cs_quick_backup">
             <button type="submit" style="<?php echo esc_attr( $btn_base ); ?> background: linear-gradient(90deg, #00897b 0%, #1b5e20 100%); margin-top:2px; border-radius: 0 0 3px 3px; width:100%; border:none; cursor:pointer;">
-                &#9654; <?php esc_html_e( 'Run Backup Now', 'cloudscale-backup' ); ?>
+                &#9654; <?php esc_html_e( 'Run Backup Now', 'cloudscale-free-backup-and-restore' ); ?>
             </button>
         </form>
     </div>
@@ -2705,7 +2736,7 @@ function cs_create_backup(
 
     $zip = new ZipArchive();
     if ($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
-        throw new Exception('Cannot create zip at: ' . $zip_path);
+        throw new Exception('Cannot create zip at: ' . $zip_path); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception caught and message passed to wp_send_json_error()
     }
 
     if ($include_db) {
@@ -2752,7 +2783,7 @@ function cs_create_backup(
 
     $zip->addFromString('backup-meta.json', json_encode([
         'plugin_version'    => CS_BACKUP_VERSION,
-        'created'           => date('c'),
+        'created'           => gmdate('c'),
         'wp_version'        => get_bloginfo('version'),
         'site_url'          => get_site_url(),
         'table_prefix'      => $GLOBALS['wpdb']->prefix,
@@ -2795,6 +2826,7 @@ function cs_create_backup(
 function cs_get_imds_token(): string {
     if (!function_exists('curl_init')) return '';
     try {
+        // phpcs:disable WordPress.WP.AlternativeFunctions.curl_curl_init, WordPress.WP.AlternativeFunctions.curl_curl_setopt_array, WordPress.WP.AlternativeFunctions.curl_curl_exec, WordPress.WP.AlternativeFunctions.curl_curl_getinfo, WordPress.WP.AlternativeFunctions.curl_curl_close -- AWS IMDS requires sub-second connect timeout (1s); wp_remote_get() does not support CURLOPT_CONNECTTIMEOUT separately from CURLOPT_TIMEOUT
         $ch = @curl_init('http://169.254.169.254/latest/api/token');
         if (!$ch) return '';
         curl_setopt_array($ch, [
@@ -2807,6 +2839,7 @@ function cs_get_imds_token(): string {
         $token = @curl_exec($ch);
         $code  = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+        // phpcs:enable WordPress.WP.AlternativeFunctions.curl_curl_init, WordPress.WP.AlternativeFunctions.curl_curl_setopt_array, WordPress.WP.AlternativeFunctions.curl_curl_exec, WordPress.WP.AlternativeFunctions.curl_curl_getinfo, WordPress.WP.AlternativeFunctions.curl_curl_close
         return ($code === 200 && $token) ? $token : '';
     } catch (\Throwable $e) {
         return '';
@@ -2829,6 +2862,7 @@ function cs_imds_get(string $path): string {
         $token   = cs_get_imds_token();
         $headers = $token ? ['X-aws-ec2-metadata-token: ' . $token] : [];
 
+        // phpcs:disable WordPress.WP.AlternativeFunctions.curl_curl_init, WordPress.WP.AlternativeFunctions.curl_curl_setopt_array, WordPress.WP.AlternativeFunctions.curl_curl_exec, WordPress.WP.AlternativeFunctions.curl_curl_getinfo, WordPress.WP.AlternativeFunctions.curl_curl_close -- AWS IMDS requires sub-second connect timeout; wp_remote_get() does not support CURLOPT_CONNECTTIMEOUT separately
         $ch = @curl_init('http://169.254.169.254' . $path);
         if (!$ch) return '';
         curl_setopt_array($ch, [
@@ -2840,6 +2874,7 @@ function cs_imds_get(string $path): string {
         $body = @curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         curl_close($ch);
+        // phpcs:enable WordPress.WP.AlternativeFunctions.curl_curl_init, WordPress.WP.AlternativeFunctions.curl_curl_setopt_array, WordPress.WP.AlternativeFunctions.curl_curl_exec, WordPress.WP.AlternativeFunctions.curl_curl_getinfo, WordPress.WP.AlternativeFunctions.curl_curl_close
 
         return ($code === 200 && $body) ? trim($body) : '';
     } catch (\Throwable $e) {
@@ -2925,7 +2960,7 @@ function cs_find_rclone(): string {
 /**
  * Upload a local backup file to Google Drive using rclone.
  *
- * @since 3.2.37
+ * @since 3.2.51
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
@@ -3106,7 +3141,7 @@ function cs_dump_via_mysqldump(): string {
     }
 
     $sql = file_get_contents($tmp);
-    unlink($tmp);
+    wp_delete_file( $tmp );
     return $sql;
 }
 
@@ -3123,7 +3158,7 @@ function cs_dump_via_mysqldump(): string {
 function cs_dump_via_php(\wpdb $wpdb): string {
     $out   = [];
     $out[] = '-- CloudScale Free Backup v' . CS_BACKUP_VERSION;
-    $out[] = '-- Generated: ' . date('Y-m-d H:i:s');
+    $out[] = '-- Generated: ' . gmdate('Y-m-d H:i:s');
     $out[] = '-- Site: ' . get_site_url();
     $out[] = '-- Database: ' . DB_NAME;
     $out[] = '';
@@ -3132,29 +3167,31 @@ function cs_dump_via_php(\wpdb $wpdb): string {
     $out[] = 'SET NAMES utf8mb4;';
     $out[] = '';
 
-    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoPrepare -- SHOW TABLES has no parameters; prepare() not applicable
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare -- SHOW TABLES: schema introspection required for backup; no user input; caching not applicable
     $tables = $wpdb->get_col( 'SHOW TABLES' );
 
     foreach ($tables as $table) {
         $safe_table = esc_sql( $table );
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoPrepare,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- schema queries; table name from SHOW TABLES, escaped via esc_sql()
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare, WordPress.DB.DirectDatabaseQuery.SchemaChange, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- schema introspection required for backup; table name from SHOW TABLES, sanitised via esc_sql()
         $create     = $wpdb->get_row( "SHOW CREATE TABLE `{$safe_table}`", ARRAY_N );
         $out[]      = "DROP TABLE IF EXISTS `{$safe_table}`;";
         $out[]      = $create[1] . ';';
         $out[]      = '';
 
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoPrepare,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name sanitised via esc_sql()
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table row count; table name sanitised via esc_sql()
         $total   = (int) $wpdb->get_var( "SELECT COUNT(*) FROM `{$safe_table}`" );
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoPrepare,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- table name sanitised via esc_sql()
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- column list required for backup; table name sanitised via esc_sql()
         $columns = $wpdb->get_col( "DESCRIBE `{$safe_table}`" );
         $chunk   = 500;
         $offset  = 0;
 
         while ($offset < $total) {
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- backup dump; $safe_table sanitised via esc_sql(); caching not applicable for backup
             $rows = $wpdb->get_results(
-                $wpdb->prepare("SELECT * FROM `{$safe_table}` LIMIT %d OFFSET %d", $chunk, $offset),
+                $wpdb->prepare( "SELECT * FROM `{$safe_table}` LIMIT %d OFFSET %d", $chunk, $offset ),
                 ARRAY_N
             );
+            // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
             if (empty($rows)) break;
 
             $col_list = '`' . implode('`, `', $columns) . '`';
@@ -3272,20 +3309,22 @@ function cs_execute_sql_string(string $sql): void {
         return;
     }
 
-    $wpdb->query('SET FOREIGN_KEY_CHECKS=0'); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoPrepare
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare -- static session variable; no user input; restore requires direct execution
+    $wpdb->query('SET FOREIGN_KEY_CHECKS=0');
 
     foreach (cs_split_sql($sql) as $stmt) {
         $stmt = trim($stmt);
         if (empty($stmt) || str_starts_with($stmt, '--') || str_starts_with($stmt, '/*')) {
             continue;
         }
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.NoPrepare,WordPress.DB.PreparedSQL.NotPrepared -- full SQL statements from a trusted backup file; prepare() is not applicable to DDL/DML replay
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- full SQL from a trusted backup file; prepare() cannot be applied to DDL/DML replay
         $wpdb->query($stmt);
         if ($wpdb->last_error) {
             cs_log('CS Restore statement error: ' . $wpdb->last_error . ' | ' . substr($stmt, 0, 200));
         }
     }
 
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare -- static session variable; restore requires direct execution
     $wpdb->query('SET FOREIGN_KEY_CHECKS=1');
 }
 
@@ -3328,10 +3367,10 @@ function cs_restore_via_mysql_cli(string $sql): void {
     );
 
     exec($cmd, $output, $rc);
-    unlink($tmp);
+    wp_delete_file( $tmp );
 
     if ($rc !== 0) {
-        throw new Exception('mysql CLI restore failed: ' . implode(' | ', $output));
+        throw new Exception('mysql CLI restore failed: ' . implode(' | ', $output)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception caught and message passed to wp_send_json_error()
     }
 }
 

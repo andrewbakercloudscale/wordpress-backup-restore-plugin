@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.37 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.51 */
 jQuery(function ($) {
     'use strict';
 
@@ -39,6 +39,21 @@ jQuery(function ($) {
     $('#cs-cloud-schedule-enabled').on('change', function () {
         applyCloudScheduleState($(this).is(':checked'));
     });
+
+    // Cloud Backup Delay — live preview of run time
+    function updateCloudDelayPreview() {
+        var localH  = parseInt($('#cs-run-hour').val()  || '3', 10);
+        var localM  = parseInt($('#cs-run-minute').val() || '0', 10);
+        var delay   = parseInt($('#cs-cloud-backup-delay').val() || '30', 10);
+        var $prev   = $('#cs-cloud-delay-preview');
+        if (isNaN(delay) || delay < 1) { $prev.text(''); return; }
+        var total   = (localH * 60 + localM + delay) % 1440;
+        var h = Math.floor(total / 60);
+        var m = total % 60;
+        $prev.text('\u2192 runs at ' + String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0'));
+    }
+    updateCloudDelayPreview();
+    $('#cs-cloud-backup-delay, #cs-run-hour, #cs-run-minute').on('input change', updateCloudDelayPreview);
 
     // ================================================================
     // Tab switching
@@ -341,6 +356,11 @@ jQuery(function ($) {
     // Restore from Upload
     // ================================================================
 
+    $('#cs-restore-file').on('change', function () {
+        var name = this.files && this.files[0] ? this.files[0].name : 'No file chosen';
+        $('#cs-restore-file-name').text(name);
+    });
+
     $('#cs-restore-upload-btn').on('click', function () {
         var file = $('#cs-restore-file')[0].files[0];
         if (!file) { alert('Please select a backup file to upload.'); return; }
@@ -472,16 +492,27 @@ function csShowExplain(title, body) {
 }
 
 window.csScheduleExplain = function () {
-    csShowExplain('Backup Schedule',
-        '<p>Two independent backup types, each with their own day and time schedule:</p>' +
-        '<ul style="margin:8px 0 8px 18px;padding:0;">' +
-        '<li><strong>File backup</strong> — packages your chosen components (database, media, plugins, themes, etc.) into a single <code>.zip</code> stored on the server. If S3 is configured the zip is synced off-site straight after.</li>' +
-        '<li><strong>AMI snapshot</strong> — creates a full Amazon Machine Image of this EC2 instance via the AWS CLI: a complete disk-level snapshot you can use to launch a new server or roll back everything. Requires AWS CLI and <code>ec2:CreateImage</code> / <code>ec2:RebootInstances</code> IAM permissions.</li>' +
+    csShowExplain('Local Backup Schedule',
+        '<p>Automatically runs a file backup on the days and time you choose. The backup packages your selected components (database, media, plugins, themes, etc.) into a single <code>.zip</code> stored on the server.</p>' +
+        '<p><strong>Days</strong> — tick one or more days of the week. You can pick multiple days, e.g. Monday, Wednesday, Friday.</p>' +
+        '<p><strong>Components</strong> — choose what to include in each scheduled backup. Manual backups always let you choose individually regardless of this setting.</p>' +
+        '<p><strong>Time</strong> — when the backup fires (server time). Backups run via WP-Cron, which triggers on the next page load at or after the scheduled time. On low-traffic sites add a real server cron for accurate timing: <code>*/5 * * * * wget -q -O- yoursite.com/wp-cron.php</code></p>' +
+        '<p>Leave all days unchecked or disable the toggle to turn off automatic local backups and run manually only.</p>'
+    );
+};
+
+window.csCloudScheduleExplain = function () {
+    csShowExplain('Cloud Backup Settings',
+        '<p>Runs cloud backup tasks on the days and time you choose, <strong>independently</strong> of the local backup schedule.</p>' +
+        '<p><strong>Cloud Backup Delay</strong> — how many minutes after the local backup finishes before the cloud tasks run. Set this long enough for your local backup to complete (default 30 min). The calculated run time is shown next to the field.</p>' +
+        '<p><strong>Include in cloud backup</strong> — choose which destinations are used on each scheduled run:</p>' +
+        '<ul style="margin:6px 0 10px 18px;padding:0;">' +
+        '<li><strong>EC2 AMI Snapshot</strong> — creates a full disk-level image of this server in AWS. Requires AWS CLI and an AMI name prefix configured below.</li>' +
+        '<li><strong>S3 Remote Backup</strong> — copies the latest local backup zip to your S3 bucket. Requires S3 configured below.</li>' +
+        '<li><strong>Google Drive Backup</strong> — copies the latest local backup zip to Google Drive via rclone. Requires Drive configured below.</li>' +
         '</ul>' +
-        '<p>For each type, tick the days of the week it should run and set the time. You can pick multiple days — for example Monday, Wednesday, Friday for file backups and Sunday for AMI snapshots.</p>' +
-        '<p>Backups fire via WP-Cron, which triggers on the next page load at or after the scheduled time. On low-traffic sites add a real server cron (<code>*/5 * * * * wget -q -O- yoursite.com/wp-cron.php</code>) for accurate timing.</p>' +
-        '<p>Leave all days unchecked (or disable the toggle) to turn off automatic backups and run manually only.</p>' +
-        '<p><strong>Cloud Backup Time</strong> must be set at least 30 minutes after the Local Backup Time. This ensures the local backup has finished before the cloud sync runs. For example: local backup at 02:00, cloud backup at 03:00.</p>'
+        '<p>Order of execution: AMI snapshot first, then S3 sync, then Google Drive sync.</p>' +
+        '<p>Runs via WP-Cron — on low-traffic sites add a real server cron for accurate timing.</p>'
     );
 };
 
@@ -543,9 +574,20 @@ window.csS3Diagnose = function () {
 
 window.csCloudScheduleSave = function () {
     var $ = window.jQuery;
+    // Use native DOM to collect checked days
     var days = [];
-    $('.cs-ami-day-check:checked').each(function () { days.push($(this).val()); });
-    var $msg = $('#cs-cloud-schedule-msg');
+    document.querySelectorAll('.cs-ami-day-check').forEach(function (el) {
+        if (el.checked) days.push(el.value);
+    });
+    var daysStr = days.join(',');
+var $msg = $('#cs-cloud-schedule-msg');
+
+    // Validate delay >= 15 mins
+    var delay = parseInt($('#cs-cloud-backup-delay').val() || '30', 10);
+    if (isNaN(delay) || delay < 15) {
+        $msg.text('\u26A0 Minimum delay is 15 minutes.').css('color', '#c62828').show();
+        return;
+    }
 
     $msg.text('Saving\u2026').css('color', '#888').show();
     $.ajax({
@@ -556,9 +598,8 @@ window.csCloudScheduleSave = function () {
             action:                 'cs_save_cloud_schedule',
             nonce:                  CS.nonce,
             cloud_schedule_enabled: $('#cs-cloud-schedule-enabled').is(':checked') ? '1' : '0',
-            ami_schedule_days:      days,
-            ami_run_hour:           $('#cs-ami-run-hour').val(),
-            ami_run_minute:         $('#cs-ami-run-minute').val(),
+            ami_schedule_days:      daysStr,
+            cloud_backup_delay:     delay,
             ami_sync_enabled:       $('#cs-cloud-ami-enabled').is(':checked')    ? '1' : '0',
             s3_sync_enabled:        $('#cs-cloud-s3-enabled').is(':checked')     ? '1' : '0',
             gdrive_sync_enabled:    $('#cs-cloud-gdrive-enabled').is(':checked') ? '1' : '0',
