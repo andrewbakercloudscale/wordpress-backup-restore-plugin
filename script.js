@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.51 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.59 */
 jQuery(function ($) {
     'use strict';
 
@@ -603,6 +603,7 @@ var $msg = $('#cs-cloud-schedule-msg');
             ami_sync_enabled:       $('#cs-cloud-ami-enabled').is(':checked')    ? '1' : '0',
             s3_sync_enabled:        $('#cs-cloud-s3-enabled').is(':checked')     ? '1' : '0',
             gdrive_sync_enabled:    $('#cs-cloud-gdrive-enabled').is(':checked') ? '1' : '0',
+            cloud_max:              parseInt($('#cs-ami-max').val() || '10', 10),
         },
         success: function (res) {
             if (res.success) {
@@ -967,13 +968,11 @@ window.csAmiSave = function () {
     var prefix         = document.getElementById('cs-ami-prefix').value.trim();
     var reboot         = document.getElementById('cs-ami-reboot').checked ? '1' : '0';
     var regionOverride = document.getElementById('cs-ami-region-override').value.trim();
-    var amiMax         = parseInt(document.getElementById('cs-ami-max').value, 10) || 10;
     csAmiMsg('Saving...', true);
     csAmiPost('cs_save_ami',
         'prefix=' + encodeURIComponent(prefix) +
         '&reboot=' + reboot +
-        '&region_override=' + encodeURIComponent(regionOverride) +
-        '&ami_max=' + amiMax,
+        '&region_override=' + encodeURIComponent(regionOverride),
         function (res) { csAmiMsg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success); }
     );
 };
@@ -1004,36 +1003,60 @@ window.csAmiStatus = function () {
 };
 
 function csAmiRefreshAll() {
-    var btn = document.getElementById('cs-ami-refresh-all');
-    if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Refreshing\u2026'; }
-    csAmiMsg('Refreshing all AMI states\u2026', true);
-    csAmiPost('cs_ami_refresh_all', '', function (res) {
-        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh All'; }
-        if (!res.success) { csAmiMsg('&#10007; ' + (res.data || 'Refresh failed'), false); return; }
-        var results = res.data.results || [];
-        var updated = 0;
-        results.forEach(function (r) {
-            var amiId       = r.ami_id;
-            var state       = r.state;
-            var stateCell   = document.getElementById('cs-ami-state-' + amiId);
-            var actionsCell = document.getElementById('cs-ami-actions-' + amiId);
-            var row         = document.getElementById('cs-ami-row-' + amiId);
-            if (!stateCell) return;
-            updated++;
-            if (state === 'deleted in AWS') {
-                if (row) row.querySelectorAll('td:not(:last-child)').forEach(function (td) { td.style.opacity = '0.45'; });
-                stateCell.innerHTML = '<span style="color:#999;font-weight:600;">&#128465; deleted in AWS</span>';
-                if (actionsCell) actionsCell.innerHTML = '<button type="button" onclick="csAmiDelete(\'' + amiId + '\',\'' + r.name.replace(/'/g, '') + '\',true)" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Remove</button>';
-            } else {
-                if (row) row.querySelectorAll('td').forEach(function (td) { td.style.opacity = ''; });
-                var color = state === 'available' ? '#2e7d32' : (state === 'pending' ? '#e65100' : '#757575');
-                var icon  = state === 'available' ? '&#10003;' : (state === 'pending' ? '&#9203;' : '&#10007;');
-                stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + state + '</span>';
-                if (actionsCell) actionsCell.innerHTML = '<button type="button" onclick="csAmiDelete(\'' + amiId + '\',\'' + r.name.replace(/'/g, '') + '\',false)" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>';
+    var btn  = document.getElementById('cs-ami-refresh-all');
+    var rows = Array.from(document.querySelectorAll('[id^="cs-ami-row-"]'));
+    var total = rows.length;
+
+    if (total === 0) {
+        csAmiMsg('No AMIs to refresh', true);
+        return;
+    }
+
+    if (btn) { btn.disabled = true; btn.innerHTML = '&#8635; Refresh All'; }
+
+    var current = 0;
+
+    function updateRow(amiId, state, name) {
+        var stateCell   = document.getElementById('cs-ami-state-' + amiId);
+        var actionsCell = document.getElementById('cs-ami-actions-' + amiId);
+        var row         = document.getElementById('cs-ami-row-' + amiId);
+        if (!stateCell) return;
+        var safeName = (name || '').replace(/'/g, '');
+        if (state === 'deleted in AWS') {
+            if (row) row.querySelectorAll('td:not(:last-child)').forEach(function (td) { td.style.opacity = '0.45'; });
+            stateCell.innerHTML = '<span style="color:#999;font-weight:600;">&#128465; deleted in AWS</span>';
+            if (actionsCell) actionsCell.innerHTML = '<button type="button" onclick="csAmiDelete(\'' + amiId + '\',\'' + safeName + '\',true)" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Remove</button>';
+        } else {
+            if (row) row.querySelectorAll('td').forEach(function (td) { td.style.opacity = ''; });
+            var color = state === 'available' ? '#2e7d32' : (state === 'pending' ? '#e65100' : '#757575');
+            var icon  = state === 'available' ? '&#10003;' : (state === 'pending' ? '&#9203;' : '&#10007;');
+            stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + state + '</span>';
+            if (actionsCell) actionsCell.innerHTML = '<button type="button" onclick="csAmiDelete(\'' + amiId + '\',\'' + safeName + '\',false)" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>';
+        }
+    }
+
+    function processNext() {
+        if (current >= total) {
+            if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh All'; }
+            csAmiMsg('&#10003; Refreshed ' + total + ' AMI' + (total !== 1 ? 's' : ''), true);
+            return;
+        }
+        var amiId = rows[current].id.replace('cs-ami-row-', '');
+        current++;
+        csAmiMsg('Refreshing ' + current + ' of ' + total + '\u2026', true);
+
+        var stateCell = document.getElementById('cs-ami-state-' + amiId);
+        if (stateCell) stateCell.innerHTML = '<span style="color:#888;">&#8635; checking\u2026</span>';
+
+        csAmiPost('cs_ami_status', 'ami_id=' + encodeURIComponent(amiId), function (res) {
+            if (res.success && res.data && res.data.state) {
+                updateRow(amiId, res.data.state, res.data.name || '');
             }
+            processNext();
         });
-        csAmiMsg('&#10003; Refreshed ' + updated + ' AMI' + (updated !== 1 ? 's' : ''), true);
-    });
+    }
+
+    processNext();
 }
 
 window.csAmiResetAndRefresh = function () {
@@ -1084,12 +1107,18 @@ window.csAmiDelete = function (amiId, amiName, alreadyDeleted) {
     }
     if (!confirm('Deregister (delete) this AMI?\n\n' + label + '\n\nAssociated EBS snapshots will NOT be deleted automatically.')) return;
     csAmiMsg('Deregistering ' + amiId + '\u2026', true);
+    // Show pending state immediately
+    var stateCell = document.getElementById('cs-ami-state-' + amiId);
+    if (stateCell) stateCell.innerHTML = '<span style="color:#e65100;font-weight:600;">&#9203; Pending Delete\u2026</span>';
     csAmiPost('cs_deregister_ami', 'ami_id=' + encodeURIComponent(amiId), function (res) {
         if (res.success) {
-            csAmiMsg('&#10003; ' + (res.data || 'AMI deregistered'), true);
-            var row = document.getElementById('cs-ami-row-' + amiId);
-            if (row) row.remove();
+            csAmiMsg('&#10003; Delete requested — status will update in 15 minutes', true);
+            // Keep row visible with pending state; cron will clean up
+            var actionsCell = document.getElementById('cs-ami-actions-' + amiId);
+            if (actionsCell) actionsCell.innerHTML = '<span style="color:#888;font-size:0.82rem;">Pending\u2026</span>';
         } else {
+            // Revert state on failure
+            if (stateCell) stateCell.innerHTML = '<span style="color:#c62828;font-weight:600;">&#10007; Delete failed</span>';
             csAmiMsg('&#10007; ' + (res.data || 'Deregister failed'), false);
         }
     });
