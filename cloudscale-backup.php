@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.59
+ * Version:           3.2.60
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.59');
+define('CS_BACKUP_VERSION',    '3.2.60');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -612,6 +612,9 @@ function cs_admin_page(): void {
         $gdrive_log    = (array) get_option('cs_gdrive_log', []);
         $gdrive_synced = array_filter($gdrive_log, fn($e) => !empty($e['ok']));
         $gdrive_last   = empty($gdrive_synced) ? null : max(array_column($gdrive_synced, 'time'));
+        // Stored remote counts — updated by retention enforcement after each sync
+        $s3_remote_count     = get_option('cs_s3_remote_count', null);
+        $gdrive_remote_count = get_option('cs_gdrive_remote_count', null);
         try {
             $ami_instance_id = cs_get_instance_id();
             $ami_region      = cs_get_instance_region();
@@ -1048,7 +1051,7 @@ function cs_admin_page(): void {
                 'aws_version' => $aws_ver,
                 'bucket'      => $s3_bucket,
                 'prefix'      => $s3_prefix,
-                'synced'      => count($s3_synced),
+                'synced'      => $s3_remote_count !== null ? (int) $s3_remote_count : count($s3_synced),
                 'total'       => count($backups),
                 'last_fmt'    => $s3_last ? cs_human_age($s3_last) . ' ago (' . wp_date('j M Y H:i', $s3_last) . ')' : null,
             ];
@@ -1058,7 +1061,7 @@ function cs_admin_page(): void {
                 'rclone_version' => $rclone_ver,
                 'remote'         => $gdrive_remote,
                 'path'           => $gdrive_path,
-                'synced'         => count($gdrive_synced),
+                'synced'         => $gdrive_remote_count !== null ? (int) $gdrive_remote_count : count($gdrive_synced),
                 'total'          => count($backups),
                 'last_fmt'       => $gdrive_last ? cs_human_age($gdrive_last) . ' ago (' . wp_date('j M Y H:i', $gdrive_last) . ')' : null,
             ];
@@ -1413,7 +1416,7 @@ function cs_admin_page(): void {
                 </div>
                 <div class="cs-info-row">
                     <span>Backups in S3</span>
-                    <strong><?php echo (int) count($s3_synced); ?> of <?php echo (int) count($backups); ?></strong>
+                    <strong><?php echo $s3_remote_count !== null ? (int) $s3_remote_count : (int) count($s3_synced); ?> in bucket &nbsp;·&nbsp; <?php echo (int) count($backups); ?> local</strong>
                 </div>
                 <div class="cs-info-row">
                     <span>Last S3 sync</span>
@@ -1459,8 +1462,8 @@ function cs_admin_page(): void {
                     <strong><code><?php echo esc_html(rtrim($gdrive_remote, ':') . ':' . ltrim($gdrive_path, '/')); ?></code></strong>
                 </div>
                 <div class="cs-info-row">
-                    <span>Backups synced</span>
-                    <strong><?php echo (int) count($gdrive_synced); ?> of <?php echo (int) count($backups); ?></strong>
+                    <span>Backups in Drive</span>
+                    <strong><?php echo $gdrive_remote_count !== null ? (int) $gdrive_remote_count : (int) count($gdrive_synced); ?> in Drive &nbsp;·&nbsp; <?php echo (int) count($backups); ?> local</strong>
                 </div>
                 <div class="cs-info-row">
                     <span>Last sync</span>
@@ -3004,7 +3007,7 @@ function cs_get_instance_region(): string {
  *
  * Uses the same retention count as local backups (cs_retention option).
  *
- * @since 3.2.59
+ * @since 3.2.60
  * @return void
  */
 function cs_enforce_s3_retention(): void {
@@ -3015,9 +3018,9 @@ function cs_enforce_s3_retention(): void {
     $aws = cs_find_aws();
     if (!$aws) return;
 
-    $retention  = max(1, intval(get_option('cs_ami_max', 10)));
-    $prefix     = '/' . ltrim(get_option('cs_s3_prefix', 'backups/'), '/');
-    $s3_base    = 's3://' . rtrim($bucket, '/') . rtrim($prefix, '/') . '/';
+    $retention = max(1, intval(get_option('cs_ami_max', 10)));
+    $prefix    = '/' . ltrim(get_option('cs_s3_prefix', 'backups/'), '/');
+    $s3_base   = 's3://' . rtrim($bucket, '/') . rtrim($prefix, '/') . '/';
     $cmd = escapeshellarg($aws) . ' s3 ls ' . escapeshellarg($s3_base) . ' 2>&1';
     $out = trim((string) shell_exec($cmd));
     if (!$out) return;
@@ -3032,16 +3035,30 @@ function cs_enforce_s3_retention(): void {
         }
     }
 
-    if (count($files) <= $retention) return;
+    // Store the current remote count before any deletions
+    $remote_count = count($files);
+
+    if ($remote_count <= $retention) {
+        update_option('cs_s3_remote_count', $remote_count, false);
+        return;
+    }
 
     usort($files, fn($a, $b) => strcmp($a['date'], $b['date'])); // oldest first
-    $to_delete = array_slice($files, 0, count($files) - $retention);
+    $to_delete = array_slice($files, 0, $remote_count - $retention);
 
     foreach ($to_delete as $file) {
         $cmd     = escapeshellarg($aws) . ' s3 rm ' . escapeshellarg($s3_base . $file['name']) . ' 2>&1';
         $del_out = trim((string) shell_exec($cmd));
-        cs_log('[CloudScale Backup] S3 retention: deleted ' . $file['name'] . ($del_out ? ' — ' . $del_out : ' — OK'));
+        // s3 rm prints "delete: s3://..." on success; anything else is an error
+        if ($del_out === '' || str_starts_with($del_out, 'delete:')) {
+            $remote_count--;
+            cs_log('[CloudScale Backup] S3 retention: deleted ' . $file['name']);
+        } else {
+            cs_log('[CloudScale Backup] S3 retention WARNING: failed to delete ' . $file['name'] . ' — ' . $del_out);
+        }
     }
+
+    update_option('cs_s3_remote_count', $remote_count, false);
 }
 
 /**
@@ -3049,7 +3066,7 @@ function cs_enforce_s3_retention(): void {
  *
  * Uses the same retention count as local backups (cs_retention option).
  *
- * @since 3.2.59
+ * @since 3.2.60
  * @return void
  */
 function cs_enforce_gdrive_retention(): void {
@@ -3068,21 +3085,36 @@ function cs_enforce_gdrive_retention(): void {
     $out  = trim((string) shell_exec($cmd));
     if (!$out) return;
 
-    $data  = json_decode($out, true);
+    $data = json_decode($out, true);
     if (!is_array($data)) return;
 
     $files = array_values(array_filter($data, fn($f) => str_ends_with($f['Name'] ?? '', '.zip')));
-    if (count($files) <= $retention) return;
+
+    // Store the current remote count before any deletions
+    $remote_count = count($files);
+
+    if ($remote_count <= $retention) {
+        update_option('cs_gdrive_remote_count', $remote_count, false);
+        return;
+    }
 
     usort($files, fn($a, $b) => strcmp($a['ModTime'] ?? '', $b['ModTime'] ?? '')); // oldest first
-    $to_delete = array_slice($files, 0, count($files) - $retention);
+    $to_delete = array_slice($files, 0, $remote_count - $retention);
 
     foreach ($to_delete as $file) {
         $file_path = $remote_path . ($file['Name'] ?? '');
         $cmd       = escapeshellarg($rclone) . ' delete ' . escapeshellarg($file_path) . ' 2>&1';
         $del_out   = trim((string) shell_exec($cmd));
-        cs_log('[CloudScale Backup] GDrive retention: deleted ' . ($file['Name'] ?? '') . ($del_out ? ' — ' . $del_out : ' — OK'));
+        // rclone delete prints nothing on success; any output indicates an error
+        if ($del_out === '') {
+            $remote_count--;
+            cs_log('[CloudScale Backup] GDrive retention: deleted ' . ($file['Name'] ?? ''));
+        } else {
+            cs_log('[CloudScale Backup] GDrive retention WARNING: failed to delete ' . ($file['Name'] ?? '') . ' — ' . $del_out);
+        }
     }
+
+    update_option('cs_gdrive_remote_count', $remote_count, false);
 }
 
 function cs_find_rclone(): string {
@@ -3104,7 +3136,7 @@ function cs_find_rclone(): string {
 /**
  * Upload a local backup file to Google Drive using rclone.
  *
- * @since 3.2.59
+ * @since 3.2.60
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
