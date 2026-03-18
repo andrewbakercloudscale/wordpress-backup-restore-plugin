@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.59 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.60 */
 jQuery(function ($) {
     'use strict';
 

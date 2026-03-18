@@ -30,6 +30,8 @@ $options = [
     'cs_gdrive_log',
     'cs_s3_sync_enabled',
     'cs_gdrive_sync_enabled',
+    'cs_s3_remote_count',
+    'cs_gdrive_remote_count',
     'cs_ami_sync_enabled',
     'cs_cloud_schedule_enabled',
     'cs_cloud_backup_delay',
