@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.60
+ * Version:           3.2.61
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.60');
+define('CS_BACKUP_VERSION',    '3.2.61');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -407,7 +407,7 @@ add_action('cs_scheduled_ami_backup', function () {
 add_action('admin_menu', function () {
     add_management_page(
         __( 'CloudScale Free Backup and Restore', 'cloudscale-free-backup-and-restore' ),
-        __( 'CloudScale Backup & Restore', 'cloudscale-free-backup-and-restore' ),
+        __( '🌩️ CloudScale Backup & Restore', 'cloudscale-free-backup-and-restore' ),
         'manage_options',
         'cloudscale-backup',
         'cs_admin_page'
@@ -579,6 +579,7 @@ function cs_admin_page(): void {
                 <?php else: ?>
                     <span class="cs-badge cs-badge-ok"><?php esc_html_e( 'Site Online', 'cloudscale-free-backup-and-restore' ); ?></span>
                 <?php endif; ?>
+                <a href="https://andrewbaker.ninja/wordpress-plugin-help/backup-restore-help/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;padding:6px 16px;background:#0277bd!important;color:#fff!important;font-size:0.8rem;font-weight:700;border-radius:20px;text-decoration:none!important;border:1px solid #01579b!important;">? Help</a>
                 <a href="https://andrewbaker.ninja/2026/02/24/cloudscale-free-backup-and-restore-a-wordpress-backup-plugin-that-does-exactly-what-it-says/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;padding:6px 16px;background:#f57c00!important;color:#fff!important;font-size:0.8rem;font-weight:700;border-radius:20px;text-decoration:none!important;border:1px solid #e65100!important;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ffcc80;box-shadow:0 0 5px #ffcc80;flex-shrink:0;"></span>andrewbaker.ninja</a>
             </div>
         </div>
@@ -3007,7 +3008,7 @@ function cs_get_instance_region(): string {
  *
  * Uses the same retention count as local backups (cs_retention option).
  *
- * @since 3.2.60
+ * @since 3.2.61
  * @return void
  */
 function cs_enforce_s3_retention(): void {
@@ -3066,7 +3067,7 @@ function cs_enforce_s3_retention(): void {
  *
  * Uses the same retention count as local backups (cs_retention option).
  *
- * @since 3.2.60
+ * @since 3.2.61
  * @return void
  */
 function cs_enforce_gdrive_retention(): void {
@@ -3136,7 +3137,7 @@ function cs_find_rclone(): string {
 /**
  * Upload a local backup file to Google Drive using rclone.
  *
- * @since 3.2.60
+ * @since 3.2.61
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
