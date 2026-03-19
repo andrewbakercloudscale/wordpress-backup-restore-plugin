@@ -28,3 +28,4 @@ rollback-wordpress.sh
 # Help docs generator
 generate-help-docs.sh
 docs/screenshots/
+repo/
