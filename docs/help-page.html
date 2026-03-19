@@ -32,7 +32,7 @@
 <div class="cs-hero">
 <div class="cs-badge">Free &amp; Open Source</div>
 <h1>CloudScale Free Backup and Restore</h1>
-<p>No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode. Completely free, no subscriptions.</p>
+<p>The only WordPress backup plugin that is 100% free — including restore. UpdraftPlus, BackupBuddy, and Duplicator all charge $70–$200 per year the moment you need to actually recover your site. CloudScale gives you scheduled backups, S3 cloud sync, Google Drive sync, and one-click restore at zero cost, forever. No upsell, no premium tier, no surprises.</p>
 </div>
 
 <div class="cs-toc">
@@ -47,8 +47,14 @@
 
 <div class="cs-panel-section">
 <h3 class="cs-panel-heading" id="backup-list">Backup List</h3>
-<figure class="cs-screenshot"><img src="https://your-wordpress-site.example.com/wp-content/uploads/2026/03/panel-backup-list-3.jpg" alt="Backup List" /></figure>
+<figure class="cs-screenshot"><img src="https://your-wordpress-site.example.com/wp-content/uploads/2026/03/panel-backup-list-4.jpg" alt="Backup List" /></figure>
 <div class="cs-panel-body">
+<div style="background:#f0f9ff;border-left:4px solid #0e6b8f;padding:18px 22px;border-radius:0 8px 8px 0;margin-bottom:28px;">
+<h2 style="margin:0 0 10px;font-size:1.3em;color:#0f172a;">Why CloudScale Free Backup and Restore?</h2>
+<p style="margin:0 0 10px;">Most WordPress backup plugins lure you in with a free tier — and then lock the restore button behind a paywall. UpdraftPlus Premium costs $70/year. BackupBuddy starts at $80/year. Duplicator Pro is $69/year. All of them charge you at exactly the moment you are most desperate: when your site is broken and you need to get it back.</p>
+<p style="margin:0 0 10px;"><strong>CloudScale is free. Not "free with paid restore." Free.</strong> Scheduled or manual backups, one-click restore, maintenance mode, S3 cloud sync, and Google Drive sync — all included, no subscription required, source code on GitHub.</p>
+<p style="margin:0;">Your backups are stored on your server and can be automatically synced to Amazon S3 or Google Drive so a server failure never means data loss. Download any backup to your computer at any time.</p>
+</div>
 <p>The <strong>Backup List</strong> shows every backup stored on your server. Each entry is a single <code>.zip</code> file containing your full site snapshot — database SQL dump, <code>wp-content/uploads/</code>, all active plugins, and the active theme.</p>
 <ul>
 <li><strong>Date / time</strong> — exact timestamp of when the backup completed, displayed in your WordPress timezone.</li>
@@ -64,7 +70,7 @@
 
 <div class="cs-panel-section">
 <h3 class="cs-panel-heading" id="create-backup">Create a Backup</h3>
-<figure class="cs-screenshot"><img src="https://your-wordpress-site.example.com/wp-content/uploads/2026/03/panel-create-backup-3.jpg" alt="Create a Backup" /></figure>
+<figure class="cs-screenshot"><img src="https://your-wordpress-site.example.com/wp-content/uploads/2026/03/panel-create-backup-4.jpg" alt="Create a Backup" /></figure>
 <div class="cs-panel-body">
 <p>Click <strong>Create Backup Now</strong> to immediately create a full site backup. The backup runs synchronously in the browser — keep the tab open until the success message appears. For large sites (&gt;1 GB uploads), increase <code>max_execution_time</code> in <code>php.ini</code> to at least 300 seconds to avoid timeout.</p>
 <p><strong>What is included in every backup:</strong></p>
@@ -82,7 +88,7 @@
 
 <div class="cs-panel-section">
 <h3 class="cs-panel-heading" id="restore">Restore & Maintenance</h3>
-<figure class="cs-screenshot"><img src="https://your-wordpress-site.example.com/wp-content/uploads/2026/03/panel-restore-3.jpg" alt="Restore & Maintenance" /></figure>
+<figure class="cs-screenshot"><img src="https://your-wordpress-site.example.com/wp-content/uploads/2026/03/panel-restore-4.jpg" alt="Restore & Maintenance" /></figure>
 <div class="cs-panel-body">
 <p><strong>Restore</strong> replaces your live site with the contents of the selected backup zip. The plugin activates <strong>Maintenance Mode</strong> during the entire process, serving a "Down for maintenance" HTTP 503 response to all frontend visitors. The wp-admin remains accessible to administrators.</p>
 <p><strong>Full restore sequence:</strong></p>
