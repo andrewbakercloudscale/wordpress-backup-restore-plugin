@@ -12,6 +12,7 @@ helpLib.run({
     pluginDesc: 'The only WordPress backup plugin that is 100% free — including restore. UpdraftPlus, BackupBuddy, and Duplicator all charge $70–$200 per year the moment you need to actually recover your site. CloudScale gives you scheduled backups, S3 cloud sync, Google Drive sync, and one-click restore at zero cost, forever. No upsell, no premium tier, no surprises.',
     pageTitle:  'CloudScale Free Backup and Restore: Online Help',
     pageSlug:   'backup-restore-help',
+    downloadUrl: 'https://your-s3-bucket.s3.af-south-1.amazonaws.com/cloudscale-backup.zip',
     adminUrl:   `${process.env.WP_BASE_URL}/wp-admin/tools.php?page=cloudscale-backup`,
 
     sections: [
