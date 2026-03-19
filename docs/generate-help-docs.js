@@ -9,7 +9,7 @@ helpLib.run({
     docsDir:    process.env.WP_DOCS_DIR,
 
     pluginName: 'CloudScale Free Backup and Restore',
-    pluginDesc: 'No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode. Completely free, no subscriptions.',
+    pluginDesc: 'The only WordPress backup plugin that is 100% free — including restore. UpdraftPlus, BackupBuddy, and Duplicator all charge $70–$200 per year the moment you need to actually recover your site. CloudScale gives you scheduled backups, S3 cloud sync, Google Drive sync, and one-click restore at zero cost, forever. No upsell, no premium tier, no surprises.',
     pageTitle:  'CloudScale Free Backup and Restore: Online Help',
     pageSlug:   'backup-restore-help',
     adminUrl:   `${process.env.WP_BASE_URL}/wp-admin/tools.php?page=cloudscale-backup`,
@@ -22,6 +22,12 @@ helpLib.run({
 
     docs: {
         'backup-list': `
+<div style="background:#f0f9ff;border-left:4px solid #0e6b8f;padding:18px 22px;border-radius:0 8px 8px 0;margin-bottom:28px;">
+<h2 style="margin:0 0 10px;font-size:1.3em;color:#0f172a;">Why CloudScale Free Backup and Restore?</h2>
+<p style="margin:0 0 10px;">Most WordPress backup plugins lure you in with a free tier — and then lock the restore button behind a paywall. UpdraftPlus Premium costs $70/year. BackupBuddy starts at $80/year. Duplicator Pro is $69/year. All of them charge you at exactly the moment you are most desperate: when your site is broken and you need to get it back.</p>
+<p style="margin:0 0 10px;"><strong>CloudScale is free. Not "free with paid restore." Free.</strong> Scheduled or manual backups, one-click restore, maintenance mode, S3 cloud sync, and Google Drive sync — all included, no subscription required, source code on GitHub.</p>
+<p style="margin:0;">Your backups are stored on your server and can be automatically synced to Amazon S3 or Google Drive so a server failure never means data loss. Download any backup to your computer at any time.</p>
+</div>
 <p>The <strong>Backup List</strong> shows every backup stored on your server. Each entry is a single <code>.zip</code> file containing your full site snapshot — database SQL dump, <code>wp-content/uploads/</code>, all active plugins, and the active theme.</p>
 <ul>
 <li><strong>Date / time</strong> — exact timestamp of when the backup completed, displayed in your WordPress timezone.</li>
