@@ -24,3 +24,7 @@ rollback-wordpress.sh
 .svn-credentials.sh
 .claude/
 .claude-flow/
+
+# Help docs generator
+generate-help-docs.sh
+docs/screenshots/

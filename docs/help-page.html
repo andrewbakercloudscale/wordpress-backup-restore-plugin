@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>CloudScale Free Backup and Restore — Help</title></head><body>
+<!-- wp:html -->
+<style>
+.cs-help-docs{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#1a202c;line-height:1.7;max-width:900px;}
+.cs-help-docs a{color:#2563eb;}
+.cs-help-docs code{background:#f1f5f9;border:1px solid #e2e8f0;border-radius:4px;padding:1px 6px;font-size:.88em;}
+.cs-hero{background:linear-gradient(135deg,#0f172a 0%,#1e3a5f 60%,#0e6b8f 100%);color:#fff;border-radius:12px;padding:48px 40px;margin-bottom:40px;}
+.cs-hero h1{font-size:2.2em;font-weight:800;margin:0 0 12px;letter-spacing:-.02em;color:#fff;}
+.cs-hero p{font-size:1.1em;margin:0;opacity:.85;max-width:680px;}
+.cs-hero .cs-badge{display:inline-block;background:rgba(255,255,255,.15);border-radius:20px;padding:4px 14px;font-size:.8em;font-weight:600;margin-bottom:16px;letter-spacing:.05em;text-transform:uppercase;}
+.cs-toc{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:28px 36px;margin:32px 0;}
+.cs-toc-title{font-size:1em;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin:0 0 16px;}
+.cs-toc ol{display:grid;grid-template-columns:1fr 1fr;gap:6px 32px;margin:0;padding-left:24px;}
+.cs-toc li a{color:#2563eb;text-decoration:none;font-weight:500;font-size:.97em;}
+.cs-tab-section{margin:56px 0 0;}
+.cs-tab-heading{font-size:2em;font-weight:800;color:#0f172a;padding:0 0 16px;border-bottom:3px solid #0e6b8f;margin:0 0 8px;}
+.cs-tab-intro{color:#475569;font-size:1.05em;margin:10px 0 32px;}
+.cs-panel-section{margin:36px 0 0;}
+.cs-panel-heading{font-size:1.45em;font-weight:700;color:#1e293b;margin:0 0 16px;padding:0 0 10px;border-bottom:2px solid #e2e8f0;display:flex;align-items:center;gap:10px;}
+.cs-panel-heading::before{content:"";display:inline-block;width:4px;height:1.2em;background:#0e6b8f;border-radius:2px;flex-shrink:0;}
+.cs-screenshot{margin:20px 0 24px;}
+.cs-screenshot img{max-width:100%;border-radius:8px;border:1px solid #d1d5db;box-shadow:0 4px 20px rgba(0,0,0,.10);display:block;}
+.cs-panel-body{color:#334155;}
+.cs-panel-body p{margin:0 0 12px;}
+.cs-panel-body ul,.cs-panel-body ol{padding-left:22px;margin:8px 0 16px;}
+.cs-panel-body li{margin:6px 0;}
+.cs-panel-body strong{color:#1e293b;}
+.cs-divider{border:none;border-top:1px solid #e2e8f0;margin:40px 0;}
+</style>
+<div class="cs-help-docs" style="max-width:900px;margin:0 auto;">
+<div class="cs-hero">
+<div class="cs-badge">Free &amp; Open Source</div>
+<h1>CloudScale Free Backup and Restore</h1>
+<p>No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode. Completely free, no subscriptions.</p>
+</div>
+
+<div class="cs-toc">
+<div class="cs-toc-title">Contents</div>
+<ol><li><a href="#backup-list">Backup List</a></li>
+<li><a href="#create-backup">Create a Backup</a></li>
+<li><a href="#restore">Restore & Maintenance</a></li></ol>
+</div>
+
+<hr class="cs-divider"/>
+
+
+<div class="cs-panel-section">
+<h3 class="cs-panel-heading" id="backup-list">Backup List</h3>
+<figure class="cs-screenshot"><img src="https://your-wordpress-site.example.com/wp-content/uploads/2026/03/panel-backup-list-1.jpg" alt="Backup List" /></figure>
+<div class="cs-panel-body">
+<p>The <strong>Backup List</strong> shows all backups stored on your server. Each backup is a single zip file containing your database, media uploads, plugins, and themes.</p>
+<ul>
+<li><strong>Date / time</strong> — when the backup was created.</li>
+<li><strong>Size</strong> — the zip file size. Useful for monitoring storage usage.</li>
+<li><strong>Type</strong> — Manual (triggered by you) or Scheduled (automatic).</li>
+<li><strong>Download</strong> — download the backup zip to your local machine for offsite storage.</li>
+<li><strong>Restore</strong> — restore your site to the state at the time of this backup. See the Restore section below.</li>
+<li><strong>Delete</strong> — permanently delete a backup to free up disk space.</li>
+</ul></div>
+</div>
+<hr class="cs-divider"/>
+
+<div class="cs-panel-section">
+<h3 class="cs-panel-heading" id="create-backup">Create a Backup</h3>
+<figure class="cs-screenshot"><img src="https://your-wordpress-site.example.com/wp-content/uploads/2026/03/panel-create-backup-1.jpg" alt="Create a Backup" /></figure>
+<div class="cs-panel-body">
+<p>Click <strong>Create Backup Now</strong> to immediately create a full backup of your WordPress site. The backup includes:</p>
+<ul>
+<li>Your complete WordPress database (all posts, pages, settings, users)</li>
+<li>The <code>wp-content/uploads/</code> media library</li>
+<li>All active plugins</li>
+<li>Your active theme</li>
+</ul>
+<p><strong>Scheduled backups</strong> — configure automatic backups to run daily, twice-daily, or weekly. Backups are stored on the same server as your WordPress installation. For offsite backup, download each zip to your local machine or configure S3 storage.</p>
+<p><strong>Retention</strong> — set the maximum number of backups to keep. When the limit is reached, the oldest backup is automatically deleted when a new one is created.</p></div>
+</div>
+<hr class="cs-divider"/>
+
+<div class="cs-panel-section">
+<h3 class="cs-panel-heading" id="restore">Restore & Maintenance</h3>
+<figure class="cs-screenshot"><img src="https://your-wordpress-site.example.com/wp-content/uploads/2026/03/panel-restore-1.jpg" alt="Restore & Maintenance" /></figure>
+<div class="cs-panel-body">
+<p><strong>Restore</strong> replaces your current site with the contents of a backup zip. The plugin puts your site into <strong>Maintenance Mode</strong> during the restore, showing a "Down for maintenance" page to visitors.</p>
+<p>The restore process:</p>
+<ol>
+<li>Maintenance mode is activated</li>
+<li>The backup zip is extracted</li>
+<li>The database is restored from the backup SQL dump</li>
+<li>Files (media, plugins, theme) are restored</li>
+<li>Maintenance mode is deactivated</li>
+</ol>
+<p><strong>Important:</strong> Always download a fresh backup before restoring. A restore is irreversible — any changes made after the backup date will be lost.</p></div>
+</div>
+<hr class="cs-divider"/>
+</div>
+<!-- /wp:html -->
+</body></html>
