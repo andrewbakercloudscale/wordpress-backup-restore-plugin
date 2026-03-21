@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.60 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.64 */
 jQuery(function ($) {
     'use strict';
 
@@ -1031,7 +1031,10 @@ function csAmiRefreshAll() {
             var color = state === 'available' ? '#2e7d32' : (state === 'pending' ? '#e65100' : '#757575');
             var icon  = state === 'available' ? '&#10003;' : (state === 'pending' ? '&#9203;' : '&#10007;');
             stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + state + '</span>';
-            if (actionsCell) actionsCell.innerHTML = '<button type="button" onclick="csAmiDelete(\'' + amiId + '\',\'' + safeName + '\',false)" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>';
+            var restoreBtn = state === 'available'
+                ? '<button type="button" onclick="csAmiRestore(\'' + amiId + '\',\'' + safeName + '\')" class="button button-small" title="Restore server to this AMI snapshot" style="min-width:0;padding:2px 8px;color:#1a237e;border-color:#1a237e;margin-bottom:3px;">&#8617; Restore</button> '
+                : '';
+            if (actionsCell) actionsCell.innerHTML = restoreBtn + '<button type="button" onclick="csAmiDelete(\'' + amiId + '\',\'' + safeName + '\',false)" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>';
         }
     }
 
@@ -1121,6 +1124,84 @@ window.csAmiDelete = function (amiId, amiName, alreadyDeleted) {
             if (stateCell) stateCell.innerHTML = '<span style="color:#c62828;font-weight:600;">&#10007; Delete failed</span>';
             csAmiMsg('&#10007; ' + (res.data || 'Deregister failed'), false);
         }
+    });
+};
+
+window.csAmiRestore = function (amiId, amiName) {
+    var $ = window.jQuery;
+    var modalId = 'cs-ami-restore-modal';
+    $('#cs-ami-restore-overlay, #' + modalId).remove();
+
+    var safeName = $('<span>').text(amiName || amiId).html();
+    var safeId   = $('<span>').text(amiId).html();
+
+    $('body').append(
+        '<div id="cs-ami-restore-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:99998;"></div>' +
+        '<div id="' + modalId + '" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);' +
+            'background:#fff;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,0.35);' +
+            'z-index:99999;padding:28px 32px;max-width:540px;width:92vw;">' +
+            '<div style="background:#b71c1c;color:#fff;border-radius:7px;padding:14px 16px;' +
+                'margin-bottom:18px;display:flex;align-items:flex-start;gap:10px;">' +
+                '<span style="font-size:1.6rem;line-height:1;flex-shrink:0;">&#9888;</span>' +
+                '<div>' +
+                    '<strong style="font-size:1rem;display:block;margin-bottom:5px;">WARNING: All recent changes will be permanently lost</strong>' +
+                    '<span style="font-size:0.88rem;line-height:1.55;">' +
+                        'Restoring to this AMI snapshot replaces the entire root volume of this EC2 instance ' +
+                        'with a fresh copy from the snapshot. <strong>Every change made since this snapshot was taken — ' +
+                        'files, database, uploads, OS configuration — will be gone forever.</strong> ' +
+                        'The server will reboot as part of the restore process.' +
+                    '</span>' +
+                '</div>' +
+            '</div>' +
+            '<p style="margin:0 0 4px;font-size:0.9rem;"><strong>Snapshot:</strong> ' + safeName + '</p>' +
+            '<p style="margin:0 0 16px;font-size:0.9rem;"><strong>AMI ID:</strong> <code>' + safeId + '</code></p>' +
+            '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:0.9rem;margin-bottom:20px;">' +
+                '<input type="checkbox" id="cs-ami-restore-chk" style="margin-top:3px;flex-shrink:0;">' +
+                '<span>I understand that <strong>all changes since this snapshot will be permanently lost</strong> ' +
+                'and the server will reboot. I want to proceed.</span>' +
+            '</label>' +
+            '<div style="display:flex;gap:10px;justify-content:flex-end;">' +
+                '<button type="button" id="cs-ami-restore-cancel" class="button" style="min-width:80px;">Cancel</button>' +
+                '<button type="button" id="cs-ami-restore-go" class="button button-primary" disabled ' +
+                    'style="background:#b71c1c!important;border-color:#b71c1c!important;min-width:130px;">' +
+                    '&#8617; Restore Now' +
+                '</button>' +
+            '</div>' +
+            '<p id="cs-ami-restore-status" style="margin:12px 0 0;font-size:0.85rem;font-weight:600;min-height:1.3em;"></p>' +
+        '</div>'
+    );
+
+    function close() {
+        $('#cs-ami-restore-overlay, #' + modalId).remove();
+    }
+
+    $('#cs-ami-restore-overlay, #cs-ami-restore-cancel').on('click', close);
+
+    $('#cs-ami-restore-chk').on('change', function () {
+        $('#cs-ami-restore-go').prop('disabled', !this.checked);
+    });
+
+    $('#cs-ami-restore-go').on('click', function () {
+        var $btn    = $(this);
+        var $status = $('#cs-ami-restore-status');
+        $btn.prop('disabled', true).text('Sending request\u2026');
+        $status.css('color', '#1565c0').text('Sending restore request to AWS\u2026');
+
+        csAmiPost('cs_ami_restore', 'ami_id=' + encodeURIComponent(amiId), function (res) {
+            if (res.success) {
+                $status.css('color', '#2e7d32').html(
+                    '&#10003; Restore task created (task ID: ' + (res.data && res.data.task_id ? res.data.task_id : 'n/a') + '). ' +
+                    'The server will reboot shortly. <strong>This page will become unreachable during the reboot.</strong>'
+                );
+                $btn.text('Done');
+                $('#cs-ami-restore-cancel').text('Close');
+                csAmiMsg('&#10003; AMI restore task initiated \u2014 server rebooting', true);
+            } else {
+                $status.css('color', '#c62828').text('\u2717 ' + (res.data || 'Restore failed'));
+                $btn.prop('disabled', false).text('&#8617; Restore Now');
+                $('#cs-ami-restore-chk').prop('checked', false);
+            }
+        });
     });
 };
 

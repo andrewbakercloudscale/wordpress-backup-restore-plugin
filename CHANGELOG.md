@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.63] - 2026-03-20
+- NEW: AMI snapshot restore button — click Restore next to any available AMI to trigger an EC2 replace-root-volume-task; modal warns that all changes since the snapshot will be permanently lost and requires explicit confirmation before proceeding
+- FIX: All "Explain…" card header buttons now wrapped in `esc_html_e()` for i18n compliance
+- FIX: Echoed `<style>` tag in `admin_head` replaced with `wp_add_inline_style()` (WordPress.org critical requirement)
+- FIX: Unescaped ternary echoes in Retention card class attributes wrapped in `esc_attr()`
+- FIX: `disabled title="…"` attribute injection replaced with split conditional attributes
+- FIX: AMI Delete/Remove button title and text wrapped in `esc_attr__()`/`esc_html__()`
+- FIX: "Create AMI Now", "Remove failed record", "Remove" button texts wrapped in i18n functions
+- FIX: `$options` global variable in `uninstall.php` renamed to `$cs_options` (PCP `NonPrefixedVariableFound`)
+- FIX: `cs_ami_schedule_days` and `cs_manual_defaults` added to uninstall cleanup list
+
 ## [3.2.56] - 2026-03-18
 - NEW: S3 and Google Drive retention enforcement — oldest zips deleted automatically after each sync
 - NEW: "Max Cloud Backups to Keep" field moved to Cloud Backup Settings card, controls all cloud destinations

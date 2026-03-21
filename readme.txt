@@ -4,7 +4,7 @@ Tags: backup, restore, database, scheduled backup, maintenance mode
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 3.2.60
+Stable tag: 3.2.64
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -164,6 +164,11 @@ Yes. Run a full backup on the old site, install WordPress on the new host, insta
 2. Manual backup panel with individual component checkboxes and live progress bar, plus the full backup history table showing stored backups with type badges, age, and Download / Restore DB / Delete actions.
 
 == Changelog ==
+
+= 3.2.64 =
+* NEW: AMI snapshot restore button — one-click EC2 replace-root-volume-task with data-loss warning modal
+* FIX: WordPress.org PCP compliance pass — escaped output, i18n wrappers, inline style moved to wp_add_inline_style
+* FIX: uninstall.php variable prefixed; two missing options added to cleanup list
 
 = 3.2.1 =
 * Renamed internal constants with CS_BACKUP_ prefix to avoid collisions with other plugins
