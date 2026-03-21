@@ -44,6 +44,8 @@ $cs_options = [
     'cs_ami_log',
     'cs_ami_run_hour',
     'cs_ami_run_minute',
+    'cs_s3_history',
+    'cs_gdrive_history',
 ];
 
 foreach ( $cs_options as $option ) {

@@ -3,6 +3,75 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.78] - 2026-03-21
+- UX: Hover effects added to all header status items (Site Online, Help, andrewbaker.ninja) — lift + colour shift on hover; links moved from inline styles to CSS classes for hover support
+
+## [3.2.77] - 2026-03-21
+- UX: Removed "Local" column from S3 history table (PHP and JS row builder)
+
+## [3.2.76] - 2026-03-21
+- FIX: All table rows now the same height — `white-space:nowrap` added globally to `.cs-table td`, action cells marked explicitly in PHP and JS row builders
+
+## [3.2.75] - 2026-03-21
+- NEW: Golden/non-golden backup counters now show on page load for all three history sections (AMI, S3, GDrive); added `$ami_nongolden_count`, `$s3_nongolden_count`, `$gdrive_nongolden_count` to pre-compute block
+
+## [3.2.74] - 2026-03-21
+- FIX: S3 history Date column empty after Sync — `cs_s3_refresh_history()` now returns `date_fmt` and `local` fields; JS row builder uses date_fmt with Date() fallback
+- FIX: All remaining dot-keeping `keyE` regexes in S3 JS functions corrected
+- CHANGE: "Date" column renamed to "Created" in S3 and GDrive history tables
+- CHANGE: Golden rows changed from soft amber gradient to bright `#fff176` yellow with 4px left border
+- UX: All Explain buttons fully rewritten — S3, GDrive, AMI, Cloud Schedule, Retention now cover golden images, tags, and all action buttons with bullet lists
+
+## [3.2.73] - 2026-03-21
+- CHANGE: S3 history and GDrive history merged into their parent settings cards; separate history cards removed
+- FIX: S3 golden star button — `keyE` dot regex mismatch between PHP IDs and JS selectors; all S3 history functions updated
+
+## [3.2.72] - 2026-03-21
+- UX: "Refresh S3/Drive History" buttons renamed to "Sync from S3" / "Sync from Google Drive" with explanatory text clarifying live query behaviour
+
+## [3.2.71] - 2026-03-21
+- FIX: S3 and GDrive history tables auto-populate on first Cloud tab activation; no manual Refresh click required
+- FIX: "? Help" button changed from blue-on-blue to white background with blue text
+
+## [3.2.70] - 2026-03-21
+- FIX: "X in Drive / X in bucket" counter in settings cards now updates live after Refresh (writes actual count to option) and after Delete (decrements); counter elements given IDs for JS access
+
+## [3.2.69] - 2026-03-21
+- NEW: Google Drive Backup History card — mirrors S3 history; shows all .zip files in your configured Drive remote via `rclone lsjson`
+- NEW: Download button on all Drive history rows (streams via `rclone copyto` to temp file, then to browser)
+- NEW: Golden Images for Drive (up to 4, separate pool); golden files skipped by `cs_enforce_gdrive_retention()`
+- NEW: Tag editor for Drive history entries (inline, Enter/Escape, dot-safe key IDs)
+- NEW: Delete from Drive via `rclone deletefile`; removes entry from `cs_gdrive_history` option
+- NEW: `cs_gdrive_refresh_history()` shared PHP function; `admin_post_cs_gdrive_download` download handler
+- NEW: `cs_gdrive_history` option added to `uninstall.php` cleanup list (next version)
+
+## [3.2.68] - 2026-03-21
+- FIX: Tag save bug — jQuery `$('#id')` selector breaks on filenames containing dots (e.g. `bkup.zip`); switched both tag-edit functions to `querySelectorAll` + `addEventListener`
+- FIX: S3 history `keyE` now strips dots to match JS selector logic; IDs consistent between PHP and JS
+- NEW: Download button on all S3 history rows (not just non-local); streams from local cache or pulls from S3 on demand; replaces the conditional Pull button
+- NEW: `admin_post_cs_s3_download` PHP handler (local-first, S3 fallback, temp-file cleanup)
+- NEW: "X of Y max backups" counter next to golden count for both AMI and S3 tables
+- UX: Empty tag shows "No tag" instead of "—"; edit button labelled "Edit" instead of ✏ icon
+- UX: Updated S3 and AMI Explain text to cover golden images, tags, download, and restore
+- TECH: Added `admin_post_url` and `ami_max` to `wp_localize_script` CS object
+
+## [3.2.66] - 2026-03-21
+- NEW: AMI Tags — add a free-text label to any AMI snapshot entry via inline pencil editor
+- NEW: Golden Images (AMI) — mark up to 4 AMIs as golden; golden images are never auto-deleted and do not count towards Max Cloud Backups to Keep
+- NEW: S3 Backup History card — query your S3 bucket live and display all backup zips in a table with Tag, Golden Image, Pull to Local, and Delete actions
+- NEW: Golden Images (S3) — same 4-slot golden image protection for S3 files, separate pool from AMI golden images
+- NEW: `cs_s3_refresh_history()` shared function for S3 listing with tag/golden merge
+- CHANGE: `cs_ami_enforce_max()` now excludes golden entries from pruning
+- CHANGE: `cs_enforce_s3_retention()` now skips golden S3 files
+
+## [3.2.65] - 2026-03-21
+- FIX: `echo $is_deleted ? 'true' : 'false'` wrapped in `esc_attr()` — PCP `EscapeOutput.OutputNotEscaped` (2 instances)
+- FIX: AMI table `<th>` headers wrapped in `esc_html_e()` for i18n (2 sets)
+- FIX: Refresh AMI button `title` attribute wrapped in `esc_attr_e()`
+- FIX: `#` column header wrapped in `esc_html_e()`
+- FIX: `localStorage` empty `catch` blocks annotated as intentionally silent
+- FIX: `getElementById()` results in `csS3Msg`, `csGDriveMsg`, `csAmiMsg`, `csCopyBackupPath` guarded with null checks
+
 ## [3.2.63] - 2026-03-20
 - NEW: AMI snapshot restore button — click Restore next to any available AMI to trigger an EC2 replace-root-volume-task; modal warns that all changes since the snapshot will be permanently lost and requires explicit confirmation before proceeding
 - FIX: All "Explain…" card header buttons now wrapped in `esc_html_e()` for i18n compliance
