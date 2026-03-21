@@ -11,7 +11,7 @@ defined( 'ABSPATH' ) || exit;
 defined( 'WP_UNINSTALL_PLUGIN' ) || exit;
 
 // Remove all plugin options.
-$options = [
+$cs_options = [
     'cs_loaded_version',
     'cs_schedule_enabled',
     'cs_run_days',
@@ -19,6 +19,7 @@ $options = [
     'cs_run_hour',
     'cs_run_minute',
     'cs_schedule_components',
+    'cs_manual_defaults',
     'cs_retention',
     'cs_backup_prefix',
     'cs_backup_seq',
@@ -33,6 +34,7 @@ $options = [
     'cs_s3_remote_count',
     'cs_gdrive_remote_count',
     'cs_ami_sync_enabled',
+    'cs_ami_schedule_days',
     'cs_cloud_schedule_enabled',
     'cs_cloud_backup_delay',
     'cs_ami_prefix',
@@ -44,7 +46,7 @@ $options = [
     'cs_ami_run_minute',
 ];
 
-foreach ( $options as $option ) {
+foreach ( $cs_options as $option ) {
     delete_option( $option );
 }
 
