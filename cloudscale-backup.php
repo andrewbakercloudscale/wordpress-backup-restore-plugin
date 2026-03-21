@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.64
+ * Version:           3.2.82
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.64');
+define('CS_BACKUP_VERSION',    '3.2.82');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -438,9 +438,11 @@ add_action('admin_enqueue_scripts', function (string $hook): void {
     wp_enqueue_style('cs-style',   plugin_dir_url(__FILE__) . $css_file, [], CS_BACKUP_VERSION);
     wp_enqueue_script('cs-script', plugin_dir_url(__FILE__) . $js_file,  ['jquery'], CS_BACKUP_VERSION, true);
     wp_localize_script('cs-script', 'CS', [
-        'ajax_url' => admin_url('admin-ajax.php'),
-        'nonce'    => wp_create_nonce('cs_nonce'),
-        'site_url' => get_site_url(),
+        'ajax_url'       => admin_url('admin-ajax.php'),
+        'admin_post_url' => admin_url('admin-post.php'),
+        'nonce'          => wp_create_nonce('cs_nonce'),
+        'site_url'       => get_site_url(),
+        'ami_max'        => max(1, intval(get_option('cs_ami_max', 10))),
     ]);
 });
 
@@ -596,8 +598,8 @@ function cs_admin_page(): void {
                 <?php else: ?>
                     <span class="cs-badge cs-badge-ok"><?php esc_html_e( 'Site Online', 'cloudscale-free-backup-and-restore' ); ?></span>
                 <?php endif; ?>
-                <a href="https://andrewbaker.ninja/wordpress-plugin-help/backup-restore-help/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;padding:6px 16px;background:#0277bd!important;color:#fff!important;font-size:0.8rem;font-weight:700;border-radius:20px;text-decoration:none!important;border:1px solid #01579b!important;">? Help</a>
-                <a href="https://andrewbaker.ninja/2026/02/24/cloudscale-free-backup-and-restore-a-wordpress-backup-plugin-that-does-exactly-what-it-says/" target="_blank" rel="noopener" style="display:inline-flex;align-items:center;gap:6px;padding:6px 16px;background:#f57c00!important;color:#fff!important;font-size:0.8rem;font-weight:700;border-radius:20px;text-decoration:none!important;border:1px solid #e65100!important;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ffcc80;box-shadow:0 0 5px #ffcc80;flex-shrink:0;"></span>andrewbaker.ninja</a>
+                <a href="https://andrewbaker.ninja/wordpress-plugin-help/backup-restore-help/" target="_blank" rel="noopener" class="cs-header-help">? Help</a>
+                <a href="https://andrewbaker.ninja/2026/02/24/cloudscale-free-backup-and-restore-a-wordpress-backup-plugin-that-does-exactly-what-it-says/" target="_blank" rel="noopener" class="cs-header-blog"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ffcc80;box-shadow:0 0 5px #ffcc80;flex-shrink:0;"></span>andrewbaker.ninja</a>
             </div>
         </div>
 
@@ -646,6 +648,15 @@ function cs_admin_page(): void {
             $ami_log_recent  = [];
             cs_log('[CloudScale Backup] AMI panel init error: ' . $e->getMessage());
         }
+        // Golden/non-golden counts feed the "⭐ X/4 golden  Y/max backups" counter spans.
+        $ami_golden_count    = count( array_filter( $ami_log_recent, fn( $e ) => ! empty( $e['golden'] ) ) );
+        $ami_nongolden_count = count( array_filter( $ami_log_recent, fn( $e ) =>   empty( $e['golden'] ) ) );
+        $s3_history          = (array) get_option( 'cs_s3_history',     [] );
+        $s3_golden_count     = count( array_filter( $s3_history,     fn( $e ) => ! empty( $e['golden'] ) ) );
+        $s3_nongolden_count  = count( array_filter( $s3_history,     fn( $e ) =>   empty( $e['golden'] ) ) );
+        $gdrive_history      = (array) get_option( 'cs_gdrive_history', [] );
+        $gdrive_golden_count    = count( array_filter( $gdrive_history, fn( $e ) => ! empty( $e['golden'] ) ) );
+        $gdrive_nongolden_count = count( array_filter( $gdrive_history, fn( $e ) =>   empty( $e['golden'] ) ) );
         ?>
 
         <!-- ===================== TABS ===================== -->
@@ -908,6 +919,7 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csAmiSave()" class="button button-primary"><?php esc_html_e( 'Save AMI Settings', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csAmiCreate()" class="button" style="margin-left:8px;background:#1a237e!important;color:#fff!important;border-color:#1a237e!important;" <?php if ( ! $ami_instance_id ): ?> disabled title="<?php esc_attr_e( 'EC2 instance not detected', 'cloudscale-free-backup-and-restore' ); ?>"<?php endif; ?>>&#128247; <?php esc_html_e( 'Create AMI Now', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csAmiResetAndRefresh()" class="button" id="cs-ami-refresh-all" style="margin-left:4px;background:#c2185b!important;color:#fff!important;border-color:#880e4f!important;">&#8635; Refresh All</button>
+                    <span id="cs-ami-golden-count" style="margin-left:10px;font-size:0.82rem;color:#f57f17;font-weight:600;">&#11088; <?php echo (int) $ami_golden_count; ?> / 4 golden&emsp;<?php echo (int) $ami_nongolden_count; ?> / <?php echo (int) $ami_max; ?> <?php esc_html_e( 'max backups', 'cloudscale-free-backup-and-restore' ); ?></span>
                     <span id="cs-ami-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
                 </div>
 
@@ -919,11 +931,12 @@ function cs_admin_page(): void {
                     <table class="widefat cs-table" style="font-size:0.82rem;">
                         <thead>
                             <tr>
-                                <th>AMI Name</th>
-                                <th style="width:130px;">AMI ID</th>
-                                <th style="width:110px;">Created</th>
-                                <th style="width:80px;">Status</th>
-                                <th style="width:180px;">Actions</th>
+                                <th><?php esc_html_e( 'AMI Name', 'cloudscale-free-backup-and-restore' ); ?></th>
+                                <th style="width:120px;"><?php esc_html_e( 'Tag', 'cloudscale-free-backup-and-restore' ); ?></th>
+                                <th style="width:130px;"><?php esc_html_e( 'AMI ID', 'cloudscale-free-backup-and-restore' ); ?></th>
+                                <th style="width:110px;"><?php esc_html_e( 'Created', 'cloudscale-free-backup-and-restore' ); ?></th>
+                                <th style="width:80px;"><?php esc_html_e( 'Status', 'cloudscale-free-backup-and-restore' ); ?></th>
+                                <th style="width:220px;"><?php esc_html_e( 'Actions', 'cloudscale-free-backup-and-restore' ); ?></th>
                             </tr>
                         </thead>
                         <tbody id="cs-ami-tbody">
@@ -934,9 +947,11 @@ function cs_admin_page(): void {
                             $is_deleted  = ($entry_state === 'deleted in AWS');
                             $is_ok       = !empty($entry['ok']);
                             ?>
-                            <tr id="cs-ami-row-<?php echo esc_attr( $row_ami_id ); ?>">
+                            <?php $is_golden = ! empty( $entry['golden'] ); ?>
+                            <tr id="cs-ami-row-<?php echo esc_attr( $row_ami_id ); ?>"<?php if ( $is_golden ): ?> class="cs-row-golden"<?php endif; ?>>
                                 <?php $faded = $is_deleted ? 'style="opacity:0.45;"' : ''; ?>
-                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><?php echo esc_html($entry['name'] ?? '—'); ?></td>
+                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><?php echo esc_html($entry['name'] ?? '—'); ?><span class="cs-ami-golden-star"<?php if ( ! $is_golden ): ?> style="display:none;"<?php endif; ?>> &#11088;</span></td>
+                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?> id="cs-ami-tag-cell-<?php echo esc_attr( $row_ami_id ); ?>" style="white-space:nowrap;"><span class="cs-ami-tag-text"><?php if ( $entry['tag'] ?? '' ): ?><?php echo esc_html( $entry['tag'] ); ?><?php else: ?><span class="cs-muted-text">No tag</span><?php endif; ?></span> <button type="button" onclick="csAmiTagEdit('<?php echo esc_js( $row_ami_id ); ?>','<?php echo esc_js( $entry['tag'] ?? '' ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Edit tag', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;"><?php esc_html_e( 'Edit', 'cloudscale-free-backup-and-restore' ); ?></button></td>
                                 <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><code style="font-size:0.78rem;"><?php echo esc_html($entry['ami_id'] ?? '—'); ?></code></td>
                                 <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><?php echo esc_html(isset($entry['time']) ? wp_date('j M Y H:i', $entry['time']) : '—'); ?></td>
                                 <td id="cs-ami-state-<?php echo esc_attr( $row_ami_id ); ?>" <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>>
@@ -956,15 +971,16 @@ function cs_admin_page(): void {
                                         <?php endif; ?>
                                     <?php endif; ?>
                                 </td>
-                                <td id="cs-ami-actions-<?php echo esc_attr( $row_ami_id ); ?>">
+                                <td id="cs-ami-actions-<?php echo esc_attr( $row_ami_id ); ?>" style="white-space:nowrap;vertical-align:middle;">
                                     <?php if (!empty($entry['ami_id'])): ?>
                                     <?php if (!$is_deleted): ?>
-                                    <button type="button" onclick="csAmiRefreshOne('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" title="Refresh this AMI state from AWS" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+                                    <button type="button" onclick="csAmiRefreshOne('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Refresh this AMI state from AWS', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+                                    <button type="button" onclick="csAmiSetGolden('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" id="cs-ami-golden-btn-<?php echo esc_attr( $row_ami_id ); ?>" data-golden="<?php echo esc_attr( $is_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $is_golden ? __( 'Remove Golden Image', 'cloudscale-free-backup-and-restore' ) : __( 'Mark as Golden Image', 'cloudscale-free-backup-and-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $is_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
                                     <?php if ( $entry_state === 'available' ): ?>
                                     <button type="button" onclick="csAmiRestore('<?php echo esc_js( $row_ami_id ); ?>', '<?php echo esc_js( $entry['name'] ?? '' ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Restore server to this AMI snapshot', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#1a237e;border-color:#1a237e;margin-bottom:3px;">&#8617; <?php esc_html_e( 'Restore', 'cloudscale-free-backup-and-restore' ); ?></button>
                                     <?php endif; // available ?>
                                     <?php endif; // !$is_deleted ?>
-                                    <button type="button" onclick="csAmiDelete('<?php echo esc_js( $row_ami_id ); ?>', '<?php echo esc_js($entry['name'] ?? ''); ?>', <?php echo $is_deleted ? 'true' : 'false'; ?>)" class="button button-small" title="<?php echo $is_deleted ? esc_attr__( 'Remove record', 'cloudscale-free-backup-and-restore' ) : esc_attr__( 'Deregister AMI', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? esc_html__( 'Remove', 'cloudscale-free-backup-and-restore' ) : esc_html__( 'Delete', 'cloudscale-free-backup-and-restore' ); ?></button>
+                                    <button type="button" onclick="csAmiDelete('<?php echo esc_js( $row_ami_id ); ?>', '<?php echo esc_js($entry['name'] ?? ''); ?>', <?php echo esc_attr( $is_deleted ? 'true' : 'false' ); ?>)" class="button button-small" title="<?php echo $is_deleted ? esc_attr__( 'Remove record', 'cloudscale-free-backup-and-restore' ) : esc_attr__( 'Deregister AMI', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? esc_html__( 'Remove', 'cloudscale-free-backup-and-restore' ) : esc_html__( 'Delete', 'cloudscale-free-backup-and-restore' ); ?></button>
                                     <?php else: ?>
                                     <button type="button" onclick="csAmiRemoveFailed('<?php echo esc_js($entry['name'] ?? ''); ?>')" class="button button-small" title="<?php esc_attr_e( 'Remove failed record', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Remove', 'cloudscale-free-backup-and-restore' ); ?></button>
                                     <?php endif; ?>
@@ -1159,7 +1175,7 @@ function cs_admin_page(): void {
                 <thead>
                     <tr>
                         <th class="cs-col-actions" style="width:72px!important;min-width:72px!important;max-width:72px!important;"><?php esc_html_e( 'Actions', 'cloudscale-free-backup-and-restore' ); ?></th>
-                        <th class="cs-col-num" style="width:18px!important;min-width:18px!important;max-width:18px!important;padding-left:4px!important;padding-right:4px!important;">#</th>
+                        <th class="cs-col-num" style="width:18px!important;min-width:18px!important;max-width:18px!important;padding-left:4px!important;padding-right:4px!important;"><?php esc_html_e( '#', 'cloudscale-free-backup-and-restore' ); ?></th>
                         <th><?php esc_html_e( 'Filename', 'cloudscale-free-backup-and-restore' ); ?></th>
                         <th class="cs-col-size"><?php esc_html_e( 'Size', 'cloudscale-free-backup-and-restore' ); ?></th>
                         <th class="cs-col-meta"><?php esc_html_e( 'Created', 'cloudscale-free-backup-and-restore' ); ?></th>
@@ -1437,12 +1453,64 @@ function cs_admin_page(): void {
                 </div>
                 <div class="cs-info-row">
                     <span>Backups in S3</span>
-                    <strong><?php echo $s3_remote_count !== null ? (int) $s3_remote_count : (int) count($s3_synced); ?> in bucket &nbsp;·&nbsp; <?php echo (int) count($backups); ?> local</strong>
+                    <strong id="cs-s3-count-val"><?php echo $s3_remote_count !== null ? (int) $s3_remote_count : (int) count($s3_synced); ?> in bucket &nbsp;·&nbsp; <?php echo (int) count($backups); ?> local</strong>
                 </div>
                 <div class="cs-info-row">
                     <span>Last S3 sync</span>
                     <strong><?php echo $s3_last ? esc_html(cs_human_age($s3_last) . ' ago (' . wp_date('j M Y H:i', $s3_last) . ')') : 'Never'; ?></strong>
                 </div>
+                <?php endif; ?>
+
+                <hr style="border:none;border-top:1px solid #e0e0e0;margin:20px -20px 16px -20px;">
+                <p style="font-size:0.85rem;font-weight:700;margin:0 0 10px;color:#455a64;"><?php esc_html_e( 'Backup History', 'cloudscale-free-backup-and-restore' ); ?></p>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+                    <button type="button" onclick="csS3HistoryRefresh()" class="button" id="cs-s3h-refresh-btn" style="background:#01579b!important;color:#fff!important;border-color:#01579b!important;">&#8635; <?php esc_html_e( 'Sync from S3', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <span id="cs-s3h-golden-count" style="font-size:0.82rem;color:#f57f17;font-weight:600;">&#11088; <?php echo (int) $s3_golden_count; ?> / 4 golden&emsp;<?php echo (int) $s3_nongolden_count; ?> / <?php echo (int) $ami_max; ?> <?php esc_html_e( 'max backups', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    <span id="cs-s3h-msg" style="font-size:0.85rem;font-weight:600;"></span>
+                </div>
+                <p class="cs-help" style="margin:0 0 12px;"><?php esc_html_e( 'Queries S3 live — picks up all backups including ones made before this screen existed, and removes any you deleted directly in S3.', 'cloudscale-free-backup-and-restore' ); ?></p>
+                <?php if ( ! empty( $s3_history ) ): ?>
+                <div class="cs-table-wrap">
+                <table class="widefat cs-table" style="font-size:0.82rem;" id="cs-s3h-table">
+                    <thead>
+                        <tr>
+                            <th><?php esc_html_e( 'File Name', 'cloudscale-free-backup-and-restore' ); ?></th>
+                            <th style="width:120px;"><?php esc_html_e( 'Tag', 'cloudscale-free-backup-and-restore' ); ?></th>
+                            <th style="width:80px;"><?php esc_html_e( 'Size', 'cloudscale-free-backup-and-restore' ); ?></th>
+                            <th style="width:130px;"><?php esc_html_e( 'Created', 'cloudscale-free-backup-and-restore' ); ?></th>
+                            <th style="width:160px;"><?php esc_html_e( 'Actions', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody id="cs-s3h-tbody">
+                    <?php foreach ( $s3_history as $sf_key => $sf ): ?>
+                        <?php
+                        $sf_name   = $sf['name'] ?? $sf_key;
+                        $sf_local  = file_exists( CS_BACKUP_DIR . $sf_name );
+                        $sf_golden = ! empty( $sf['golden'] );
+                        $sf_tag    = $sf['tag'] ?? '';
+                        $sf_key_e  = esc_attr( preg_replace( '/[^a-zA-Z0-9_\-]/', '_', $sf_name ) ); // dots stripped — must match JS keyE regex
+                        $sf_js     = esc_js( $sf_name );
+                        ?>
+                        <tr id="cs-s3h-row-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>"<?php if ( $sf_golden ): ?> class="cs-row-golden"<?php endif; ?>>
+                            <td><?php echo esc_html( $sf_name ); ?><span class="cs-s3h-golden-star"<?php if ( ! $sf_golden ): ?> style="display:none;"<?php endif; ?>> &#11088;</span></td>
+                            <td id="cs-s3h-tag-cell-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;">
+                                <span class="cs-s3h-tag-text"><?php if ( $sf_tag ): ?><?php echo esc_html( $sf_tag ); ?><?php else: ?><span class="cs-muted-text">No tag</span><?php endif; ?></span>
+                                <button type="button" onclick="csS3HistoryTagEdit('<?php echo $sf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>','<?php echo esc_js( $sf_tag ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Edit tag', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;"><?php esc_html_e( 'Edit', 'cloudscale-free-backup-and-restore' ); ?></button>
+                            </td>
+                            <td><?php echo esc_html( $sf['size_fmt'] ?? '—' ); ?></td>
+                            <td><?php echo esc_html( $sf['time'] ? wp_date( 'j M Y H:i', $sf['time'] ) : '—' ); ?></td>
+                            <td id="cs-s3h-actions-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
+                                <button type="button" onclick="csS3HistorySetGolden('<?php echo $sf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-s3h-golden-btn-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $sf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $sf_golden ? __( 'Remove Golden Image', 'cloudscale-free-backup-and-restore' ) : __( 'Mark as Golden Image', 'cloudscale-free-backup-and-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $sf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
+                                <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'cs_s3_download', 'file' => $sf_name, 'nonce' => wp_create_nonce( 'cs_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-free-backup-and-restore' ); ?></a>
+                                <button type="button" onclick="csS3HistoryDelete('<?php echo $sf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" title="<?php esc_attr_e( 'Delete from S3', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-free-backup-and-restore' ); ?></button>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <?php else: ?>
+                <p class="cs-empty"><?php esc_html_e( 'No S3 backups found. Click "Sync from S3" to query your bucket live.', 'cloudscale-free-backup-and-restore' ); ?></p>
                 <?php endif; ?>
             </div>
 
@@ -1484,14 +1552,66 @@ function cs_admin_page(): void {
                 </div>
                 <div class="cs-info-row">
                     <span>Backups in Drive</span>
-                    <strong><?php echo $gdrive_remote_count !== null ? (int) $gdrive_remote_count : (int) count($gdrive_synced); ?> in Drive &nbsp;·&nbsp; <?php echo (int) count($backups); ?> local</strong>
+                    <strong id="cs-gdrive-count-val"><?php echo $gdrive_remote_count !== null ? (int) $gdrive_remote_count : (int) count($gdrive_synced); ?> in Drive &nbsp;·&nbsp; <?php echo (int) count($backups); ?> local</strong>
                 </div>
                 <div class="cs-info-row">
                     <span>Last sync</span>
                     <strong><?php echo $gdrive_last ? esc_html(cs_human_age($gdrive_last) . ' ago (' . wp_date('j M Y H:i', $gdrive_last) . ')') : 'Never'; ?></strong>
                 </div>
                 <?php endif; ?>
+
+                <hr style="border:none;border-top:1px solid #e0e0e0;margin:20px -20px 16px -20px;">
+                <p style="font-size:0.85rem;font-weight:700;margin:0 0 10px;color:#455a64;"><?php esc_html_e( 'Backup History', 'cloudscale-free-backup-and-restore' ); ?></p>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+                    <button type="button" onclick="csGDriveHistoryRefresh()" class="button" id="cs-gd-refresh-btn" style="background:#1b5e20!important;color:#fff!important;border-color:#1b5e20!important;">&#8635; <?php esc_html_e( 'Sync from Google Drive', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <span id="cs-gd-golden-count" style="font-size:0.82rem;color:#f57f17;font-weight:600;">&#11088; <?php echo (int) $gdrive_golden_count; ?> / 4 golden&emsp;<?php echo (int) $gdrive_nongolden_count; ?> / <?php echo (int) $ami_max; ?> <?php esc_html_e( 'max backups', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    <span id="cs-gd-msg" style="font-size:0.85rem;font-weight:600;"></span>
+                </div>
+                <p class="cs-help" style="margin:0 0 12px;"><?php esc_html_e( 'Queries Google Drive live — picks up all backups including ones made before this screen existed, and removes any you deleted directly in Drive.', 'cloudscale-free-backup-and-restore' ); ?></p>
+                <?php if ( ! empty( $gdrive_history ) ): ?>
+                <div class="cs-table-wrap">
+                <table class="widefat cs-table" style="font-size:0.82rem;" id="cs-gd-table">
+                    <thead>
+                        <tr>
+                            <th><?php esc_html_e( 'File Name', 'cloudscale-free-backup-and-restore' ); ?></th>
+                            <th style="width:120px;"><?php esc_html_e( 'Tag', 'cloudscale-free-backup-and-restore' ); ?></th>
+                            <th style="width:80px;"><?php esc_html_e( 'Size', 'cloudscale-free-backup-and-restore' ); ?></th>
+                            <th style="width:130px;"><?php esc_html_e( 'Created', 'cloudscale-free-backup-and-restore' ); ?></th>
+                            <th style="width:180px;"><?php esc_html_e( 'Actions', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        </tr>
+                    </thead>
+                    <tbody id="cs-gd-tbody">
+                    <?php foreach ( $gdrive_history as $gf_key => $gf ): ?>
+                        <?php
+                        $gf_name   = $gf['name'] ?? $gf_key;
+                        $gf_golden = ! empty( $gf['golden'] );
+                        $gf_tag    = $gf['tag'] ?? '';
+                        $gf_key_e  = esc_attr( preg_replace( '/[^a-zA-Z0-9_\-]/', '_', $gf_name ) );
+                        $gf_js     = esc_js( $gf_name );
+                        ?>
+                        <tr id="cs-gd-row-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>"<?php if ( $gf_golden ): ?> class="cs-row-golden"<?php endif; ?>>
+                            <td><?php echo esc_html( $gf_name ); ?><span class="cs-gd-golden-star"<?php if ( ! $gf_golden ): ?> style="display:none;"<?php endif; ?>> &#11088;</span></td>
+                            <td id="cs-gd-tag-cell-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;">
+                                <span class="cs-gd-tag-text"><?php if ( $gf_tag ): ?><?php echo esc_html( $gf_tag ); ?><?php else: ?><span class="cs-muted-text">No tag</span><?php endif; ?></span>
+                                <button type="button" onclick="csGDriveHistoryTagEdit('<?php echo $gf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>','<?php echo esc_js( $gf_tag ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Edit tag', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;">Edit</button>
+                            </td>
+                            <td><?php echo esc_html( $gf['size_fmt'] ?? '—' ); ?></td>
+                            <td><?php echo esc_html( $gf['time'] ? wp_date( 'j M Y H:i', $gf['time'] ) : '—' ); ?></td>
+                            <td id="cs-gd-actions-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
+                                <button type="button" onclick="csGDriveHistorySetGolden('<?php echo $gf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-gd-golden-btn-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $gf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $gf_golden ? __( 'Remove Golden Image', 'cloudscale-free-backup-and-restore' ) : __( 'Mark as Golden Image', 'cloudscale-free-backup-and-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $gf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
+                                <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'cs_gdrive_download', 'file' => $gf_name, 'nonce' => wp_create_nonce( 'cs_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-free-backup-and-restore' ); ?></a>
+                                <button type="button" onclick="csGDriveHistoryDelete('<?php echo $gf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" title="<?php esc_attr_e( 'Delete from Google Drive', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-free-backup-and-restore' ); ?></button>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <?php else: ?>
+                <p class="cs-empty"><?php esc_html_e( 'No Google Drive backups found. Click "Sync from Google Drive" to query your Drive live.', 'cloudscale-free-backup-and-restore' ); ?></p>
+                <?php endif; ?>
             </div>
+
 
             <!-- AMI SNAPSHOT CARD -->
             <div class="cs-card cs-card--indigo">
@@ -1548,6 +1668,7 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csAmiSave()" class="button button-primary"><?php esc_html_e( 'Save AMI Settings', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csAmiCreate()" class="button" style="margin-left:8px;background:#1a237e!important;color:#fff!important;border-color:#1a237e!important;" <?php if ( ! $ami_instance_id ): ?> disabled title="<?php esc_attr_e( 'EC2 instance not detected', 'cloudscale-free-backup-and-restore' ); ?>"<?php endif; ?>>&#128247; <?php esc_html_e( 'Create AMI Now', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csAmiResetAndRefresh()" class="button" id="cs-ami-refresh-all" style="margin-left:4px;background:#c2185b!important;color:#fff!important;border-color:#880e4f!important;">&#8635; Refresh All</button>
+                    <span id="cs-ami-golden-count" style="margin-left:10px;font-size:0.82rem;color:#f57f17;font-weight:600;">&#11088; <?php echo (int) $ami_golden_count; ?> / 4 golden&emsp;<?php echo (int) $ami_nongolden_count; ?> / <?php echo (int) $ami_max; ?> <?php esc_html_e( 'max backups', 'cloudscale-free-backup-and-restore' ); ?></span>
                     <span id="cs-ami-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
                 </div>
 
@@ -1558,11 +1679,12 @@ function cs_admin_page(): void {
                     <table class="widefat cs-table" style="font-size:0.82rem;">
                         <thead>
                             <tr>
-                                <th>AMI Name</th>
-                                <th style="width:130px;">AMI ID</th>
-                                <th style="width:110px;">Created</th>
-                                <th style="width:80px;">Status</th>
-                                <th style="width:180px;">Actions</th>
+                                <th><?php esc_html_e( 'AMI Name', 'cloudscale-free-backup-and-restore' ); ?></th>
+                                <th style="width:120px;"><?php esc_html_e( 'Tag', 'cloudscale-free-backup-and-restore' ); ?></th>
+                                <th style="width:130px;"><?php esc_html_e( 'AMI ID', 'cloudscale-free-backup-and-restore' ); ?></th>
+                                <th style="width:110px;"><?php esc_html_e( 'Created', 'cloudscale-free-backup-and-restore' ); ?></th>
+                                <th style="width:80px;"><?php esc_html_e( 'Status', 'cloudscale-free-backup-and-restore' ); ?></th>
+                                <th style="width:220px;"><?php esc_html_e( 'Actions', 'cloudscale-free-backup-and-restore' ); ?></th>
                             </tr>
                         </thead>
                         <tbody id="cs-ami-tbody">
@@ -1573,9 +1695,11 @@ function cs_admin_page(): void {
                             $is_deleted  = ($entry_state === 'deleted in AWS');
                             $is_ok       = !empty($entry['ok']);
                             ?>
-                            <tr id="cs-ami-row-<?php echo esc_attr( $row_ami_id ); ?>">
+                            <?php $is_golden = ! empty( $entry['golden'] ); ?>
+                            <tr id="cs-ami-row-<?php echo esc_attr( $row_ami_id ); ?>"<?php if ( $is_golden ): ?> class="cs-row-golden"<?php endif; ?>>
                                 <?php $faded = $is_deleted ? 'style="opacity:0.45;"' : ''; ?>
-                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><?php echo esc_html($entry['name'] ?? '—'); ?></td>
+                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><?php echo esc_html($entry['name'] ?? '—'); ?><span class="cs-ami-golden-star"<?php if ( ! $is_golden ): ?> style="display:none;"<?php endif; ?>> &#11088;</span></td>
+                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?> id="cs-ami-tag-cell-<?php echo esc_attr( $row_ami_id ); ?>" style="white-space:nowrap;"><span class="cs-ami-tag-text"><?php if ( $entry['tag'] ?? '' ): ?><?php echo esc_html( $entry['tag'] ); ?><?php else: ?><span class="cs-muted-text">No tag</span><?php endif; ?></span> <button type="button" onclick="csAmiTagEdit('<?php echo esc_js( $row_ami_id ); ?>','<?php echo esc_js( $entry['tag'] ?? '' ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Edit tag', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;"><?php esc_html_e( 'Edit', 'cloudscale-free-backup-and-restore' ); ?></button></td>
                                 <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><code style="font-size:0.78rem;"><?php echo esc_html($entry['ami_id'] ?? '—'); ?></code></td>
                                 <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><?php echo esc_html(isset($entry['time']) ? wp_date('j M Y H:i', $entry['time']) : '—'); ?></td>
                                 <td id="cs-ami-state-<?php echo esc_attr( $row_ami_id ); ?>" <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>>
@@ -1595,15 +1719,16 @@ function cs_admin_page(): void {
                                         <?php endif; ?>
                                     <?php endif; ?>
                                 </td>
-                                <td id="cs-ami-actions-<?php echo esc_attr( $row_ami_id ); ?>">
+                                <td id="cs-ami-actions-<?php echo esc_attr( $row_ami_id ); ?>" style="white-space:nowrap;vertical-align:middle;">
                                     <?php if (!empty($entry['ami_id'])): ?>
                                     <?php if (!$is_deleted): ?>
-                                    <button type="button" onclick="csAmiRefreshOne('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" title="Refresh this AMI state from AWS" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+                                    <button type="button" onclick="csAmiRefreshOne('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Refresh this AMI state from AWS', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+                                    <button type="button" onclick="csAmiSetGolden('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" id="cs-ami-golden-btn-<?php echo esc_attr( $row_ami_id ); ?>" data-golden="<?php echo esc_attr( $is_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $is_golden ? __( 'Remove Golden Image', 'cloudscale-free-backup-and-restore' ) : __( 'Mark as Golden Image', 'cloudscale-free-backup-and-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $is_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
                                     <?php if ( $entry_state === 'available' ): ?>
                                     <button type="button" onclick="csAmiRestore('<?php echo esc_js( $row_ami_id ); ?>', '<?php echo esc_js( $entry['name'] ?? '' ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Restore server to this AMI snapshot', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#1a237e;border-color:#1a237e;margin-bottom:3px;">&#8617; <?php esc_html_e( 'Restore', 'cloudscale-free-backup-and-restore' ); ?></button>
                                     <?php endif; // available ?>
                                     <?php endif; // !$is_deleted ?>
-                                    <button type="button" onclick="csAmiDelete('<?php echo esc_js( $row_ami_id ); ?>', '<?php echo esc_js($entry['name'] ?? ''); ?>', <?php echo $is_deleted ? 'true' : 'false'; ?>)" class="button button-small" title="<?php echo $is_deleted ? esc_attr__( 'Remove record', 'cloudscale-free-backup-and-restore' ) : esc_attr__( 'Deregister AMI', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? esc_html__( 'Remove', 'cloudscale-free-backup-and-restore' ) : esc_html__( 'Delete', 'cloudscale-free-backup-and-restore' ); ?></button>
+                                    <button type="button" onclick="csAmiDelete('<?php echo esc_js( $row_ami_id ); ?>', '<?php echo esc_js($entry['name'] ?? ''); ?>', <?php echo esc_attr( $is_deleted ? 'true' : 'false' ); ?>)" class="button button-small" title="<?php echo $is_deleted ? esc_attr__( 'Remove record', 'cloudscale-free-backup-and-restore' ) : esc_attr__( 'Deregister AMI', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? esc_html__( 'Remove', 'cloudscale-free-backup-and-restore' ) : esc_html__( 'Delete', 'cloudscale-free-backup-and-restore' ); ?></button>
                                     <?php else: ?>
                                     <button type="button" onclick="csAmiRemoveFailed('<?php echo esc_js($entry['name'] ?? ''); ?>')" class="button button-small" title="<?php esc_attr_e( 'Remove failed record', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Remove', 'cloudscale-free-backup-and-restore' ); ?></button>
                                     <?php endif; ?>
@@ -2097,10 +2222,12 @@ add_action('wp_ajax_cs_create_ami', function (): void {
  */
 function cs_ami_enforce_max(array $log, string $aws, string $region): array {
     $ami_max      = max(1, intval(get_option('cs_ami_max', 10)));
-    $ok_entries   = array_values(array_filter($log, fn($e) => !empty($e['ok']) && !empty($e['ami_id'])));
-    $fail_entries = array_values(array_filter($log, fn($e) =>  empty($e['ok']) ||  empty($e['ami_id'])));
+    // Golden images are never pruned and do not count towards the quota.
+    $golden_entries = array_values(array_filter($log, fn($e) => !empty($e['ok']) && !empty($e['ami_id']) && !empty($e['golden'])));
+    $ok_entries     = array_values(array_filter($log, fn($e) => !empty($e['ok']) && !empty($e['ami_id']) &&  empty($e['golden'])));
+    $fail_entries   = array_values(array_filter($log, fn($e) =>  empty($e['ok']) ||  empty($e['ami_id'])));
 
-    // Sort oldest first
+    // Sort oldest first (non-golden only — these are the pruneable entries)
     usort($ok_entries, fn($a, $b) => ($a['time'] ?? 0) <=> ($b['time'] ?? 0));
 
     if (count($ok_entries) > $ami_max) {
@@ -2136,7 +2263,7 @@ function cs_ami_enforce_max(array $log, string $aws, string $region): array {
 
     // Keep at most 20 failed entries
     $fail_entries = array_slice($fail_entries, -20);
-    $log = array_values(array_merge($ok_entries, $fail_entries));
+    $log = array_values(array_merge($golden_entries, $ok_entries, $fail_entries));
     update_option('cs_ami_log', $log, false);
     return $log;
 }
@@ -2289,7 +2416,7 @@ add_action('wp_ajax_cs_ami_status', function (): void {
         update_option('cs_ami_log', $log, false);
 
         if ($specific_ami) {
-            wp_send_json_success(['ami_id' => $target['ami_id'], 'name' => $target['name'] ?? '', 'state' => $state]);
+            wp_send_json_success(['ami_id' => $target['ami_id'], 'name' => $target['name'] ?? '', 'state' => $state, 'golden' => ! empty( $target['golden'] ), 'tag' => $target['tag'] ?? '']);
         } else {
             wp_send_json_success($target['ami_id'] . ' (' . ($target['name'] ?? '') . ') — state: ' . $state);
         }
@@ -2559,7 +2686,7 @@ add_action('wp_ajax_cs_ami_remove_failed', function (): void {
 /**
  * AJAX: initiate an EC2 replace-root-volume-task from an AMI snapshot.
  *
- * @since 3.2.64
+ * @since 3.2.82
  * @return void Sends JSON success with task_id, or JSON error with message.
  */
 add_action('wp_ajax_cs_ami_restore', function (): void {
@@ -2606,6 +2733,345 @@ add_action('wp_ajax_cs_ami_restore', function (): void {
     }
 });
 
+// ============================================================
+// AJAX — AMI tag and golden image management
+// ============================================================
+
+/**
+ * AJAX: set or clear a tag on an AMI log entry.
+ *
+ * @since 3.2.82
+ * @return void Sends JSON success with new tag value.
+ */
+add_action('wp_ajax_cs_ami_set_tag', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
+    cs_verify_nonce();
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $ami_id = sanitize_text_field( wp_unslash( $_POST['ami_id'] ?? '' ) );
+    $tag    = sanitize_text_field( wp_unslash( $_POST['tag']    ?? '' ) );
+    // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
+    if ( ! preg_match( '/^ami-[a-f0-9]{8,17}$/', $ami_id ) ) {
+        wp_send_json_error( 'Invalid AMI ID.' );
+    }
+    $log   = (array) get_option( 'cs_ami_log', [] );
+    $found = false;
+    foreach ( $log as &$entry ) {
+        if ( ( $entry['ami_id'] ?? '' ) === $ami_id ) {
+            $entry['tag'] = $tag;
+            $found = true;
+            break;
+        }
+    }
+    unset( $entry );
+    if ( ! $found ) { wp_send_json_error( 'AMI not found in log.' ); }
+    update_option( 'cs_ami_log', $log, false );
+    wp_send_json_success( [ 'tag' => $tag ] );
+});
+
+/**
+ * AJAX: toggle golden image status for an AMI log entry.
+ *
+ * Enforces a maximum of 4 golden images across all AMI entries.
+ * Golden images are exempt from auto-pruning in cs_ami_enforce_max().
+ *
+ * @since 3.2.82
+ * @return void Sends JSON success with new golden bool.
+ */
+add_action('wp_ajax_cs_ami_set_golden', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
+    cs_verify_nonce();
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $ami_id = sanitize_text_field( wp_unslash( $_POST['ami_id'] ?? '' ) );
+    if ( ! preg_match( '/^ami-[a-f0-9]{8,17}$/', $ami_id ) ) {
+        wp_send_json_error( 'Invalid AMI ID.' );
+    }
+    $log = (array) get_option( 'cs_ami_log', [] );
+    $idx = null;
+    foreach ( $log as $i => $entry ) {
+        if ( ( $entry['ami_id'] ?? '' ) === $ami_id ) { $idx = $i; break; }
+    }
+    if ( $idx === null ) { wp_send_json_error( 'AMI not found in log.' ); }
+    $currently = ! empty( $log[ $idx ]['golden'] );
+    if ( ! $currently ) {
+        $count = count( array_filter( $log, fn( $e ) => ! empty( $e['golden'] ) ) );
+        if ( $count >= 4 ) {
+            wp_send_json_error( 'Maximum 4 golden images. Remove one first.' );
+        }
+    }
+    $log[ $idx ]['golden'] = ! $currently;
+    update_option( 'cs_ami_log', $log, false );
+    wp_send_json_success( [ 'golden' => ! $currently ] );
+});
+
+// ============================================================
+// AJAX — S3 history management
+// ============================================================
+
+/**
+ * AJAX: refresh S3 history by querying the bucket via AWS CLI.
+ *
+ * @since 3.2.82
+ * @return void Sends JSON success with array of file entries.
+ */
+// ============================================================
+// AJAX — Google Drive history management
+// ============================================================
+
+/**
+ * AJAX: refresh Google Drive history by querying the remote via rclone.
+ *
+ * @since 3.2.82
+ * @return void Sends JSON success with array of file entries.
+ */
+add_action('wp_ajax_cs_gdrive_refresh_history', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
+    cs_verify_nonce();
+    if ( ! get_option( 'cs_gdrive_remote', '' ) ) {
+        wp_send_json_error( 'Google Drive not configured.' );
+    }
+    $gd_hist = cs_gdrive_refresh_history();
+    update_option( 'cs_gdrive_remote_count', count( $gd_hist ), false );
+    wp_send_json_success( [ 'files' => array_values( $gd_hist ), 'count' => count( $gd_hist ) ] );
+});
+
+/**
+ * AJAX: set or clear a tag on a GDrive history entry.
+ *
+ * @since 3.2.82
+ * @return void Sends JSON success with new tag value.
+ */
+add_action('wp_ajax_cs_gdrive_set_tag', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
+    cs_verify_nonce();
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
+    $tag      = sanitize_text_field( wp_unslash( $_POST['tag']      ?? '' ) );
+    // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
+    if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
+    $hist = (array) get_option( 'cs_gdrive_history', [] );
+    if ( ! isset( $hist[ $filename ] ) ) { wp_send_json_error( 'File not found in history.' ); }
+    $hist[ $filename ]['tag'] = $tag;
+    update_option( 'cs_gdrive_history', $hist, false );
+    wp_send_json_success( [ 'tag' => $tag ] );
+});
+
+/**
+ * AJAX: toggle golden image status for a GDrive history entry.
+ *
+ * Enforces a maximum of 4 golden images (separate pool from AMI and S3).
+ *
+ * @since 3.2.82
+ * @return void Sends JSON success with new golden bool.
+ */
+add_action('wp_ajax_cs_gdrive_set_golden', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
+    cs_verify_nonce();
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
+    if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
+    $hist = (array) get_option( 'cs_gdrive_history', [] );
+    if ( ! isset( $hist[ $filename ] ) ) { wp_send_json_error( 'File not found in history.' ); }
+    $currently = ! empty( $hist[ $filename ]['golden'] );
+    if ( ! $currently ) {
+        $count = count( array_filter( $hist, fn( $e ) => ! empty( $e['golden'] ) ) );
+        if ( $count >= 4 ) {
+            wp_send_json_error( 'Maximum 4 golden images. Remove one first.' );
+        }
+    }
+    $hist[ $filename ]['golden'] = ! $currently;
+    update_option( 'cs_gdrive_history', $hist, false );
+    wp_send_json_success( [ 'golden' => ! $currently ] );
+});
+
+/**
+ * AJAX: delete a file from Google Drive and remove it from the local history.
+ *
+ * @since 3.2.82
+ * @return void Sends JSON success or error.
+ */
+add_action('wp_ajax_cs_gdrive_delete_remote', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
+    cs_verify_nonce();
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
+    if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
+    $remote = get_option( 'cs_gdrive_remote', '' );
+    if ( ! $remote ) { wp_send_json_error( 'Google Drive not configured.' ); }
+    $rclone = cs_find_rclone();
+    if ( ! $rclone ) { wp_send_json_error( 'rclone not found.' ); }
+    $dest_path   = ltrim( get_option( 'cs_gdrive_path', 'cloudscale-backups/' ), '/' );
+    $remote_file = rtrim( $remote, ':' ) . ':' . $dest_path . $filename;
+    $cmd         = escapeshellarg( $rclone ) . ' deletefile ' . escapeshellarg( $remote_file ) . ' 2>&1';
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out = trim( (string) shell_exec( $cmd ) );
+    if ( $out === '' ) {
+        $hist = (array) get_option( 'cs_gdrive_history', [] );
+        unset( $hist[ $filename ] );
+        update_option( 'cs_gdrive_history', $hist, false );
+        update_option( 'cs_gdrive_remote_count', max( 0, (int) get_option( 'cs_gdrive_remote_count', 0 ) - 1 ), false );
+        cs_log( '[CloudScale Backup] GDrive history: deleted ' . $filename );
+        wp_send_json_success( 'Deleted.' );
+    } else {
+        wp_send_json_error( trim( substr( $out, 0, 200 ) ) );
+    }
+});
+
+add_action('wp_ajax_cs_s3_refresh_history', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
+    cs_verify_nonce();
+    if ( ! get_option( 'cs_s3_bucket', '' ) ) {
+        wp_send_json_error( 'S3 not configured.' );
+    }
+    $s3_hist = cs_s3_refresh_history();
+    update_option( 'cs_s3_remote_count', count( $s3_hist ), false );
+    wp_send_json_success( [ 'files' => array_values( $s3_hist ), 'count' => count( $s3_hist ) ] );
+});
+
+/**
+ * AJAX: set or clear a tag on an S3 history entry.
+ *
+ * @since 3.2.82
+ * @return void Sends JSON success with new tag value.
+ */
+add_action('wp_ajax_cs_s3_set_tag', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
+    cs_verify_nonce();
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
+    $tag      = sanitize_text_field( wp_unslash( $_POST['tag']      ?? '' ) );
+    // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
+    if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
+    $hist = (array) get_option( 'cs_s3_history', [] );
+    if ( ! isset( $hist[ $filename ] ) ) { wp_send_json_error( 'File not found in history.' ); }
+    $hist[ $filename ]['tag'] = $tag;
+    update_option( 'cs_s3_history', $hist, false );
+    wp_send_json_success( [ 'tag' => $tag ] );
+});
+
+/**
+ * AJAX: toggle golden image status for an S3 history entry.
+ *
+ * Enforces a maximum of 4 golden images across all S3 history entries
+ * (separate pool from AMI golden images).
+ *
+ * @since 3.2.82
+ * @return void Sends JSON success with new golden bool.
+ */
+add_action('wp_ajax_cs_s3_set_golden', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
+    cs_verify_nonce();
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
+    if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
+    $hist = (array) get_option( 'cs_s3_history', [] );
+    if ( ! isset( $hist[ $filename ] ) ) { wp_send_json_error( 'File not found in history.' ); }
+    $currently = ! empty( $hist[ $filename ]['golden'] );
+    if ( ! $currently ) {
+        $count = count( array_filter( $hist, fn( $e ) => ! empty( $e['golden'] ) ) );
+        if ( $count >= 4 ) {
+            wp_send_json_error( 'Maximum 4 golden images. Remove one first.' );
+        }
+    }
+    $hist[ $filename ]['golden'] = ! $currently;
+    update_option( 'cs_s3_history', $hist, false );
+    wp_send_json_success( [ 'golden' => ! $currently ] );
+});
+
+/**
+ * AJAX: delete a file from S3 and remove it from the local history.
+ *
+ * @since 3.2.82
+ * @return void Sends JSON success or error.
+ */
+add_action('wp_ajax_cs_s3_delete_remote', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
+    cs_verify_nonce();
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
+    if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
+    $bucket = get_option( 'cs_s3_bucket', '' );
+    if ( ! $bucket ) { wp_send_json_error( 'S3 not configured.' ); }
+    $aws = cs_find_aws();
+    if ( ! $aws ) { wp_send_json_error( 'AWS CLI not found.' ); }
+    $prefix  = '/' . ltrim( get_option( 'cs_s3_prefix', 'backups/' ), '/' );
+    $s3_path = 's3://' . rtrim( $bucket, '/' ) . rtrim( $prefix, '/' ) . '/' . $filename;
+    $cmd     = escapeshellarg( $aws ) . ' s3 rm ' . escapeshellarg( $s3_path ) . ' 2>&1';
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out = trim( (string) shell_exec( $cmd ) );
+    if ( $out === '' || str_starts_with( $out, 'delete:' ) ) {
+        $hist = (array) get_option( 'cs_s3_history', [] );
+        unset( $hist[ $filename ] );
+        update_option( 'cs_s3_history', $hist, false );
+        update_option( 'cs_s3_remote_count', max( 0, (int) get_option( 'cs_s3_remote_count', 0 ) - 1 ), false );
+        cs_log( '[CloudScale Backup] S3 history: deleted ' . $filename );
+        wp_send_json_success( 'Deleted.' );
+    } else {
+        wp_send_json_error( trim( substr( $out, 0, 200 ) ) );
+    }
+});
+
+/**
+ * AJAX: pull a file from S3 to the local backup directory.
+ *
+ * After a successful pull the file will appear in the Backup History table
+ * on the next page load.
+ *
+ * @since 3.2.82
+ * @return void Sends JSON success or error.
+ */
+add_action('wp_ajax_cs_s3_pull', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Forbidden', 403 );
+    }
+    cs_verify_nonce();
+    cs_ensure_backup_dir();
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
+    if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
+    $bucket = get_option( 'cs_s3_bucket', '' );
+    if ( ! $bucket ) { wp_send_json_error( 'S3 not configured.' ); }
+    $aws = cs_find_aws();
+    if ( ! $aws ) { wp_send_json_error( 'AWS CLI not found.' ); }
+    $prefix     = '/' . ltrim( get_option( 'cs_s3_prefix', 'backups/' ), '/' );
+    $s3_path    = 's3://' . rtrim( $bucket, '/' ) . rtrim( $prefix, '/' ) . '/' . $filename;
+    $local_path = CS_BACKUP_DIR . $filename;
+    $cmd        = escapeshellarg( $aws ) . ' s3 cp ' . escapeshellarg( $s3_path ) . ' ' . escapeshellarg( $local_path ) . ' 2>&1';
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out = trim( (string) shell_exec( $cmd ) );
+    if ( ! file_exists( $local_path ) ) {
+        wp_send_json_error( $out ?: 'Pull failed — file not found after download.' );
+    }
+    // Belt-and-braces path check (sanitize_file_name prevents traversal, but verify)
+    $real_dir  = realpath( CS_BACKUP_DIR );
+    $real_file = realpath( $local_path );
+    if ( $real_dir && $real_file && strpos( $real_file, $real_dir ) !== 0 ) {
+        wp_delete_file( $local_path );
+        wp_send_json_error( 'Security check failed.' );
+    }
+    cs_log( '[CloudScale Backup] S3 pull: downloaded ' . $filename );
+    wp_send_json_success( 'Pulled to local backup folder. Reload to see it in Backup History.' );
+});
+
 add_action('wp_ajax_cs_save_retention', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
@@ -2646,6 +3112,102 @@ add_action('admin_post_cs_download', function (): void {
     exit;
 });
 
+
+/**
+ * S3 download handler — streams a backup zip from S3 (or local cache) to the browser.
+ *
+ * Serves from CS_BACKUP_DIR if the file exists locally; otherwise pulls from S3
+ * to a temporary path, streams it, then cleans up.
+ *
+ * @since 3.2.82
+ * @return void
+ */
+add_action('admin_post_cs_s3_download', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_die( esc_html__( 'Forbidden', 'cloudscale-free-backup-and-restore' ) );
+    }
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- sanitised immediately
+    if ( ! isset( $_GET['nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['nonce'] ) ), 'cs_nonce' ) ) {
+        wp_die( esc_html__( 'Security check failed.', 'cloudscale-free-backup-and-restore' ) );
+    }
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- sanitised immediately
+    $filename = sanitize_file_name( wp_unslash( $_GET['file'] ?? '' ) );
+    if ( ! $filename ) {
+        wp_die( esc_html__( 'No file specified.', 'cloudscale-free-backup-and-restore' ) );
+    }
+    $local   = CS_BACKUP_DIR . $filename;
+    $cleanup = false;
+    if ( ! file_exists( $local ) ) {
+        // File not cached locally — pull from S3 to a temp path
+        $bucket = get_option( 'cs_s3_bucket', '' );
+        $aws    = cs_find_aws();
+        if ( ! $bucket || ! $aws ) {
+            wp_die( esc_html__( 'S3 not configured or AWS CLI not found.', 'cloudscale-free-backup-and-restore' ) );
+        }
+        $prefix  = '/' . ltrim( get_option( 'cs_s3_prefix', 'backups/' ), '/' );
+        $s3_path = 's3://' . rtrim( $bucket, '/' ) . rtrim( $prefix, '/' ) . '/' . $filename;
+        $tmp     = get_temp_dir() . 'cs_s3dl_' . md5( $filename . wp_generate_uuid4() ) . '.zip';
+        $cmd     = escapeshellarg( $aws ) . ' s3 cp ' . escapeshellarg( $s3_path ) . ' ' . escapeshellarg( $tmp ) . ' 2>&1';
+        // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+        shell_exec( $cmd );
+        if ( ! file_exists( $tmp ) ) {
+            wp_die( esc_html__( 'Could not retrieve file from S3.', 'cloudscale-free-backup-and-restore' ) );
+        }
+        $local   = $tmp;
+        $cleanup = true;
+    }
+    header( 'Content-Type: application/zip' );
+    header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
+    header( 'Content-Length: ' . filesize( $local ) );
+    header( 'Cache-Control: no-cache' );
+    readfile( $local ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- streaming binary download
+    if ( $cleanup ) wp_delete_file( $local );
+    exit;
+});
+
+/**
+ * Google Drive download handler — streams a backup zip from Drive to the browser.
+ *
+ * Uses rclone copyto to pull the file to a temp path, streams it, then cleans up.
+ *
+ * @since 3.2.82
+ * @return void
+ */
+add_action('admin_post_cs_gdrive_download', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_die( esc_html__( 'Forbidden', 'cloudscale-free-backup-and-restore' ) );
+    }
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- sanitised immediately
+    if ( ! isset( $_GET['nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['nonce'] ) ), 'cs_nonce' ) ) {
+        wp_die( esc_html__( 'Security check failed.', 'cloudscale-free-backup-and-restore' ) );
+    }
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- sanitised immediately
+    $filename = sanitize_file_name( wp_unslash( $_GET['file'] ?? '' ) );
+    if ( ! $filename ) {
+        wp_die( esc_html__( 'No file specified.', 'cloudscale-free-backup-and-restore' ) );
+    }
+    $remote = get_option( 'cs_gdrive_remote', '' );
+    $rclone = cs_find_rclone();
+    if ( ! $remote || ! $rclone ) {
+        wp_die( esc_html__( 'Google Drive not configured or rclone not found.', 'cloudscale-free-backup-and-restore' ) );
+    }
+    $dest_path   = ltrim( get_option( 'cs_gdrive_path', 'cloudscale-backups/' ), '/' );
+    $remote_file = rtrim( $remote, ':' ) . ':' . $dest_path . $filename;
+    $tmp         = get_temp_dir() . 'cs_gddl_' . md5( $filename . wp_generate_uuid4() ) . '.zip';
+    $cmd         = escapeshellarg( $rclone ) . ' copyto ' . escapeshellarg( $remote_file ) . ' ' . escapeshellarg( $tmp ) . ' 2>&1';
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    shell_exec( $cmd );
+    if ( ! file_exists( $tmp ) ) {
+        wp_die( esc_html__( 'Could not retrieve file from Google Drive.', 'cloudscale-free-backup-and-restore' ) );
+    }
+    header( 'Content-Type: application/zip' );
+    header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
+    header( 'Content-Length: ' . filesize( $tmp ) );
+    header( 'Cache-Control: no-cache' );
+    readfile( $tmp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- streaming binary download
+    wp_delete_file( $tmp );
+    exit;
+});
 // ============================================================
 // Quick backup from dashboard widget
 // ============================================================
@@ -3085,7 +3647,7 @@ function cs_get_instance_region(): string {
  *
  * Uses the same retention count as local backups (cs_retention option).
  *
- * @since 3.2.64
+ * @since 3.2.82
  * @return void
  */
 function cs_enforce_s3_retention(): void {
@@ -3114,15 +3676,18 @@ function cs_enforce_s3_retention(): void {
     }
 
     // Store the current remote count before any deletions
-    $remote_count = count($files);
+    // Golden images are never pruned and do not count towards the quota.
+    $s3_hist   = (array) get_option( 'cs_s3_history', [] );
+    $pruneable = array_values( array_filter( $files, fn( $f ) => empty( $s3_hist[ $f['name'] ]['golden'] ) ) );
+    $remote_count = count( $files ); // total (including goldens) for display
 
-    if ($remote_count <= $retention) {
+    if ( count( $pruneable ) <= $retention ) {
         update_option('cs_s3_remote_count', $remote_count, false);
         return;
     }
 
-    usort($files, fn($a, $b) => strcmp($a['date'], $b['date'])); // oldest first
-    $to_delete = array_slice($files, 0, $remote_count - $retention);
+    usort($pruneable, fn($a, $b) => strcmp($a['date'], $b['date'])); // oldest non-golden first
+    $to_delete = array_slice($pruneable, 0, count($pruneable) - $retention);
 
     foreach ($to_delete as $file) {
         $cmd     = escapeshellarg($aws) . ' s3 rm ' . escapeshellarg($s3_base . $file['name']) . ' 2>&1';
@@ -3144,7 +3709,7 @@ function cs_enforce_s3_retention(): void {
  *
  * Uses the same retention count as local backups (cs_retention option).
  *
- * @since 3.2.64
+ * @since 3.2.82
  * @return void
  */
 function cs_enforce_gdrive_retention(): void {
@@ -3168,16 +3733,18 @@ function cs_enforce_gdrive_retention(): void {
 
     $files = array_values(array_filter($data, fn($f) => str_ends_with($f['Name'] ?? '', '.zip')));
 
-    // Store the current remote count before any deletions
-    $remote_count = count($files);
+    // Golden images are never pruned and do not count towards the quota.
+    $gdrive_hist = (array) get_option( 'cs_gdrive_history', [] );
+    $pruneable   = array_values( array_filter( $files, fn( $f ) => empty( $gdrive_hist[ $f['Name'] ?? '' ]['golden'] ) ) );
+    $remote_count = count( $files ); // total (including goldens) for display
 
-    if ($remote_count <= $retention) {
+    if ( count( $pruneable ) <= $retention ) {
         update_option('cs_gdrive_remote_count', $remote_count, false);
         return;
     }
 
-    usort($files, fn($a, $b) => strcmp($a['ModTime'] ?? '', $b['ModTime'] ?? '')); // oldest first
-    $to_delete = array_slice($files, 0, $remote_count - $retention);
+    usort($pruneable, fn($a, $b) => strcmp($a['ModTime'] ?? '', $b['ModTime'] ?? '')); // oldest non-golden first
+    $to_delete = array_slice($pruneable, 0, count($pruneable) - $retention);
 
     foreach ($to_delete as $file) {
         $file_path = $remote_path . ($file['Name'] ?? '');
@@ -3195,6 +3762,60 @@ function cs_enforce_gdrive_retention(): void {
     update_option('cs_gdrive_remote_count', $remote_count, false);
 }
 
+
+// ============================================================
+// GDrive history — query remote and merge with stored tags/golden
+// ============================================================
+
+/**
+ * Refresh the Google Drive backup history by querying the configured remote.
+ *
+ * Runs `rclone lsjson`, parses Name/Size/ModTime for each .zip, and merges
+ * the result with the existing cs_gdrive_history option (preserving tag and
+ * golden fields). Entries no longer on Drive are dropped.
+ *
+ * @since 3.2.82
+ * @return array Updated history keyed by filename, or empty array if not configured.
+ */
+function cs_gdrive_refresh_history(): array {
+    $remote = get_option( 'cs_gdrive_remote', '' );
+    if ( ! $remote ) return [];
+    $rclone = cs_find_rclone();
+    if ( ! $rclone ) return [];
+
+    $dest_path   = ltrim( get_option( 'cs_gdrive_path', 'cloudscale-backups/' ), '/' );
+    $remote_path = rtrim( $remote, ':' ) . ':' . $dest_path;
+    $cmd         = escapeshellarg( $rclone ) . ' lsjson ' . escapeshellarg( $remote_path ) . ' --files-only 2>&1';
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out  = trim( (string) shell_exec( $cmd ) );
+    $data = json_decode( $out ?: '[]', true );
+    if ( ! is_array( $data ) ) return [];
+
+    $existing = (array) get_option( 'cs_gdrive_history', [] );
+    $found    = [];
+
+    foreach ( $data as $f ) {
+        $name = $f['Name'] ?? '';
+        if ( ! str_ends_with( $name, '.zip' ) ) continue;
+        $size = (int) ( $f['Size']    ?? 0 );
+        $mod  = $f['ModTime'] ?? '';
+        $ts   = $mod ? (int) strtotime( $mod ) : 0;
+        $found[ $name ] = [
+            'name'       => $name,
+            'size_bytes' => $size,
+            'size_fmt'   => cs_format_size( $size ),
+            'time'       => $ts,
+            'tag'        => $existing[ $name ]['tag']    ?? '',
+            'golden'     => $existing[ $name ]['golden'] ?? false,
+            'date_fmt'   => $ts ? wp_date( 'j M Y H:i', $ts ) : '—',
+        ];
+    }
+
+    // Newest first for display
+    uasort( $found, fn( $a, $b ) => ( $b['time'] ?? 0 ) <=> ( $a['time'] ?? 0 ) );
+    update_option( 'cs_gdrive_history', $found, false );
+    return $found;
+}
 function cs_find_rclone(): string {
     $candidates = [
         trim((string) shell_exec('which rclone 2>/dev/null')),
@@ -3214,7 +3835,7 @@ function cs_find_rclone(): string {
 /**
  * Upload a local backup file to Google Drive using rclone.
  *
- * @since 3.2.64
+ * @since 3.2.82
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
@@ -3343,6 +3964,60 @@ function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
 // Core — Database dump
 // ============================================================
 
+
+// ============================================================
+// S3 history — query bucket and merge with stored tags/golden
+// ============================================================
+
+/**
+ * Refresh the S3 backup history by querying the configured bucket.
+ *
+ * Runs `aws s3 ls`, parses date/size/filename for each .zip, and merges the
+ * result with the existing cs_s3_history option (preserving tag and golden
+ * fields for files that still exist in S3). Entries for files no longer in
+ * S3 are dropped.
+ *
+ * @since 3.2.82
+ * @return array Updated history keyed by filename, or empty array if S3 not configured.
+ */
+function cs_s3_refresh_history(): array {
+    $bucket = get_option( 'cs_s3_bucket', '' );
+    if ( ! $bucket ) return [];
+    $aws = cs_find_aws();
+    if ( ! $aws ) return [];
+
+    $prefix    = '/' . ltrim( get_option( 'cs_s3_prefix', 'backups/' ), '/' );
+    $s3_base   = 's3://' . rtrim( $bucket, '/' ) . rtrim( $prefix, '/' ) . '/';
+    $cmd       = escapeshellarg( $aws ) . ' s3 ls ' . escapeshellarg( $s3_base ) . ' 2>&1';
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out       = trim( (string) shell_exec( $cmd ) );
+    $existing  = (array) get_option( 'cs_s3_history', [] );
+    $found     = [];
+
+    foreach ( explode( "\n", $out ) as $line ) {
+        $line = trim( $line );
+        if ( ! $line ) continue;
+        // Format: "2026-03-18 03:30:00     12345 bkup_f44.zip"
+        if ( preg_match( '/^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+(\d+)\s+(.+\.zip)$/', $line, $m ) ) {
+            $name = $m[3];
+            $ts   = (int) strtotime( $m[1] );
+            $size = (int) $m[2];
+            $found[ $name ] = [
+                'name'       => $name,
+                'size_bytes' => $size,
+                'size_fmt'   => cs_format_size( $size ),
+                'time'       => $ts,
+                'tag'        => $existing[ $name ]['tag']    ?? '',
+                'golden'     => $existing[ $name ]['golden'] ?? false,
+                'date_fmt'   => $ts ? wp_date( 'j M Y H:i', $ts ) : '—',
+                'local'      => file_exists( CS_BACKUP_DIR . $name ),
+            ];
+        }
+    }
+
+    update_option( 'cs_s3_history', $found, false );
+    return $found;
+}
 /**
  * Dump the full WordPress database to a SQL string using the best available method.
  *

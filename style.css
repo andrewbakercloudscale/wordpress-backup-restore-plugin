@@ -21,23 +21,27 @@
     font-size: 0.92rem;
     font-weight: 600;
     cursor: pointer;
-    background: #c8d8f0;
-    border: 1px solid #90aad6;
+    background: #dde3ea;
+    border: 1px solid #b0bec5;
     border-bottom: none;
     border-radius: 6px 6px 0 0;
-    color: #1a3a6b;
+    color: #607d8b;
     position: relative;
     top: 2px;
     transition: background 0.12s, color 0.12s;
     line-height: 1.4;
 }
-.cs-tab:hover { background: #b3caea; color: #0d2a55; }
+.cs-tab:hover { background: #c5d0db; color: #37474f; }
 .cs-tab--active {
     background: #1565c0;
     color: #fff;
     border-color: #1565c0;
     border-bottom: 3px solid #1565c0;
+    border-top: 3px solid #42a5f5;
+    font-weight: 700;
+    font-size: 0.95rem;
     z-index: 1;
+    box-shadow: 0 -2px 8px rgba(21,101,192,0.18);
 }
 .cs-tab-panel { padding-top: 16px; }
 
@@ -63,10 +67,30 @@
    BADGES
    ================================================================ */
 
-.cs-badge { display: inline-block; padding: 5px 14px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; }
+.cs-badge { display: inline-block; padding: 5px 14px; border-radius: 20px; font-size: 0.8rem; font-weight: 600; transition: transform 0.12s, box-shadow 0.12s, background 0.12s; }
 .cs-badge-ok   { background: #16a34a; color: #fff !important; border: 1px solid #15803d; }
 .cs-badge-ok::before { content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #86efac; box-shadow: 0 0 5px #86efac; margin-right: 6px; vertical-align: middle; position: relative; top: -1px; }
+.cs-badge-ok:hover   { background: #15803d !important; transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0,0,0,0.2); }
 .cs-badge-warn { background: #fff3cd; color: #856404; border: 1px solid #ffc107; animation: cs-pulse 2s infinite; }
+.cs-badge-warn:hover { background: #ffc107 !important; transform: translateY(-1px); }
+
+.cs-header-help {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 16px; background: #fff; color: #0d47a1;
+    font-size: 0.8rem; font-weight: 700; border-radius: 20px;
+    text-decoration: none; border: none;
+    transition: background 0.12s, color 0.12s, transform 0.12s, box-shadow 0.12s;
+}
+.cs-header-help:hover { background: #e3f0ff !important; color: #0a3370 !important; transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0,0,0,0.15); text-decoration: none !important; }
+
+.cs-header-blog {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 16px; background: #f57c00; color: #fff;
+    font-size: 0.8rem; font-weight: 700; border-radius: 20px;
+    text-decoration: none; border: 1px solid #e65100;
+    transition: background 0.12s, transform 0.12s, box-shadow 0.12s;
+}
+.cs-header-blog:hover { background: #e65100 !important; color: #fff !important; transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0,0,0,0.2); text-decoration: none !important; }
 
 @keyframes cs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.65; } }
 
@@ -617,11 +641,14 @@ select.cs-input-sm { width: 90px !important; }
    ================================================================ */
 
 .cs-table { margin-top: 6px; border: 1px solid #e0e0e0 !important; }
-.cs-table td { padding: 8px 10px !important; vertical-align: middle !important; }
+.cs-table td { padding: 6px 8px !important; vertical-align: middle !important; white-space: nowrap; }
+.cs-table td:first-child { white-space: normal; } /* allow filename to wrap if needed */
 .cs-table th { padding: 8px 10px !important; }
 .cs-table-wrap { display: block; width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .cs-table th { font-size: 0.77rem; font-weight: 700; color: #607d8b; text-transform: uppercase; letter-spacing: 0.06em; background: #eceff1 !important; }
 .cs-row-latest td { background: #e8f5e9 !important; }
+.cs-row-golden    { border-left: 4px solid #f9a825 !important; }
+.cs-row-golden td { background: #fff176 !important; }
 .cs-idx      { color: #90a4ae; font-size: 0.8rem; }
 .cs-age      { color: #90a4ae; font-size: 0.82rem; }
 .cs-empty    { text-align: center; color: #90a4ae; font-style: italic; padding: 40px 0; }

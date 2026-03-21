@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.64 */
+/* CloudScale Free Backup & Restore — Admin Script v3.2.82 */
 jQuery(function ($) {
     'use strict';
 
@@ -61,15 +61,30 @@ jQuery(function ($) {
 
     (function () {
         var STORAGE_KEY = 'cs_active_tab';
+        var cloudAutoRefreshDone = false;
         function switchTab(tab) {
             $('.cs-tab').removeClass('cs-tab--active');
             $('.cs-tab[data-tab="' + tab + '"]').addClass('cs-tab--active');
             $('.cs-tab-panel').hide();
             $('#cs-tab-' + tab).show();
-            try { localStorage.setItem(STORAGE_KEY, tab); } catch(e) {}
+            try { localStorage.setItem(STORAGE_KEY, tab); } catch(e) { /* localStorage unavailable — silently ignored */ }
+            // Auto-populate history tables the first time the Cloud tab is shown
+            if (tab === 'cloud' && !cloudAutoRefreshDone) {
+                cloudAutoRefreshDone = true;
+                setTimeout(function () {
+                    if (document.getElementById('cs-s3h-refresh-btn') &&
+                        document.querySelectorAll('#cs-s3h-tbody tr').length === 0) {
+                        if (window.csS3HistoryRefresh) csS3HistoryRefresh();
+                    }
+                    if (document.getElementById('cs-gd-refresh-btn') &&
+                        document.querySelectorAll('#cs-gd-tbody tr').length === 0) {
+                        if (window.csGDriveHistoryRefresh) csGDriveHistoryRefresh();
+                    }
+                }, 300);
+            }
         }
         var saved = 'local';
-        try { saved = localStorage.getItem(STORAGE_KEY) || 'local'; } catch(e) {}
+        try { saved = localStorage.getItem(STORAGE_KEY) || 'local'; } catch(e) { /* localStorage unavailable — silently ignored */ }
         switchTab(saved);
         $('.cs-tab').on('click', function () { switchTab($(this).data('tab')); });
     })();
@@ -504,33 +519,42 @@ window.csScheduleExplain = function () {
 window.csCloudScheduleExplain = function () {
     csShowExplain('Cloud Backup Settings',
         '<p>Runs cloud backup tasks on the days and time you choose, <strong>independently</strong> of the local backup schedule.</p>' +
-        '<p><strong>Cloud Backup Delay</strong> — how many minutes after the local backup finishes before the cloud tasks run. Set this long enough for your local backup to complete (default 30 min). The calculated run time is shown next to the field.</p>' +
+        '<p><strong>Cloud Backup Delay</strong> — how many minutes after the local backup finishes before the cloud tasks run. Set this long enough for your local backup to complete (default 30 min).</p>' +
         '<p><strong>Include in cloud backup</strong> — choose which destinations are used on each scheduled run:</p>' +
         '<ul style="margin:6px 0 10px 18px;padding:0;">' +
-        '<li><strong>EC2 AMI Snapshot</strong> — creates a full disk-level image of this server in AWS. Requires AWS CLI and an AMI name prefix configured below.</li>' +
-        '<li><strong>S3 Remote Backup</strong> — copies the latest local backup zip to your S3 bucket. Requires S3 configured below.</li>' +
-        '<li><strong>Google Drive Backup</strong> — copies the latest local backup zip to Google Drive via rclone. Requires Drive configured below.</li>' +
+        '<li><strong>EC2 AMI Snapshot</strong> — creates a full disk-level image of this server in AWS.</li>' +
+        '<li><strong>S3 Remote Backup</strong> — copies the latest local backup zip to your S3 bucket.</li>' +
+        '<li><strong>Google Drive Backup</strong> — copies the latest local backup zip to Google Drive via rclone.</li>' +
         '</ul>' +
-        '<p>Order of execution: AMI snapshot first, then S3 sync, then Google Drive sync.</p>' +
-        '<p>Runs via WP-Cron — on low-traffic sites add a real server cron for accurate timing.</p>'
+        '<p><strong>Max Cloud Backups to Keep</strong> — the maximum number of backups retained across S3 and Google Drive (and AMIs in AWS). Once the limit is reached the oldest is automatically deleted. <strong>Golden Images</strong> are excluded from this count and are never deleted automatically — they always survive regardless of this setting.</p>' +
+        '<p>Order of execution: AMI snapshot first, then S3 sync, then Google Drive sync. Runs via WP-Cron.</p>'
     );
 };
 
 window.csRetentionExplain = function () {
     csShowExplain('Retention & Storage',
-        '<p>Controls how many backup zips are kept on disk. After every backup (scheduled or manual) the oldest files beyond this limit are deleted automatically.</p>' +
-        '<p><strong>Filename prefix</strong> — the prefix is prepended to every backup zip name (e.g. <code>mysite_f12.zip</code>). Changing it does not affect existing backups.</p>' +
+        '<p>Controls how many local backup zips are kept on disk. After every backup (scheduled or manual) the oldest files beyond this limit are deleted automatically. This applies to local backups only — cloud retention is set in Cloud Backup Settings.</p>' +
+        '<p><strong>Filename prefix</strong> — prepended to every backup zip name (e.g. <code>mysite_f12.zip</code>). Changing it does not affect existing backups.</p>' +
         '<p><strong>Storage estimate</strong> — based on the size of your most recent backup multiplied by your retention count. If the estimate exceeds free disk space the counter turns red — lower retention or free up space before the next backup.</p>'
     );
 };
 
 window.csS3Explain = function () {
+    var $ = window.jQuery;
+    setTimeout(function () { $('#cs-explain-modal').css('max-width', '620px'); }, 0);
     csShowExplain('S3 Remote Backup',
-        '<p>After every local backup (scheduled or manual), the most recent backup zip is automatically synced to your AWS S3 bucket — an off-site copy that survives server failure or data loss.</p>' +
-        '<p>Use <strong>Sync Local Backup Now</strong> to manually push the latest local backup to S3 at any time, without creating a new backup.</p>' +
-        '<p><strong>Requirements:</strong> AWS CLI installed on the server with credentials granting <code>s3:PutObject</code> and <code>s3:ListBucket</code> on the target bucket. Use the <em>Test connection</em> button to verify before relying on it.</p>' +
-        '<p><strong>Bucket</strong> — just the bucket name (e.g. <code>my-backups</code>). <strong>Path prefix</strong> — optional subfolder inside the bucket (e.g. <code>backups/prod/</code>). Leave prefix blank to put files in the bucket root.</p>' +
-        '<p>If a sync fails, the plugin retries automatically after 5 minutes. Sync status for each file is shown in the Backup History table.</p>'
+        '<p>After every local backup, the most recent zip is automatically copied to your S3 bucket. Use <strong>Sync Local Backup Now</strong> to push manually at any time.</p>' +
+        '<p><strong>Requirements:</strong> AWS CLI on the server with <code>s3:PutObject</code>, <code>s3:ListBucket</code>, and <code>s3:DeleteObject</code>. Use <em>Test Connection</em> to verify, or <em>Diagnose</em> to see detailed AWS CLI info.</p>' +
+        '<p><strong>Bucket</strong> — bucket name only (no <code>s3://</code>). <strong>Path prefix</strong> — optional subfolder, e.g. <code>backups/prod/</code>. Leave blank for bucket root. If a sync fails, the plugin retries automatically after 5 minutes.</p>' +
+        '<hr style="margin:12px 0;border:none;border-top:1px solid #e0e0e0;">' +
+        '<p><strong>Backup History</strong> — lists every zip currently in your bucket. Actions:</p>' +
+        '<ul style="margin:4px 0 8px 18px;padding:0;">' +
+        '<li><strong>Sync from S3</strong> — queries S3 live. Picks up backups made before this screen existed and removes anything deleted directly in S3.</li>' +
+        '<li><strong>Tag (Edit)</strong> — attach a free-text label to any file, e.g. "pre-upgrade". Persists across syncs.</li>' +
+        '<li><strong>&#11088; Golden Image</strong> — mark up to 4 files as permanently protected. Golden images are never auto-deleted and do not count towards <em>Max Cloud Backups to Keep</em>.</li>' +
+        '<li><strong>&#8659; Download</strong> — streams the zip directly to your browser. If the file is not cached locally it is pulled from S3 first.</li>' +
+        '<li><strong>&#128465; Delete</strong> — permanently removes the file from S3. Cannot be undone.</li>' +
+        '</ul>'
     );
 };
 
@@ -618,11 +642,18 @@ var $msg = $('#cs-cloud-schedule-msg');
 
 window.csAmiExplain = function () {
     csShowExplain('EC2 AMI Snapshot',
-        '<p>Creates a full Amazon Machine Image (AMI) of this EC2 instance — a disk-level snapshot of the entire server you can use to launch a replacement instance or roll back to a known-good state.</p>' +
-        '<p>Unlike a file backup (which only captures WordPress files and the database), an AMI captures the whole disk: OS, web server config, PHP, every file. It is the safest recovery option if the server itself becomes unrecoverable.</p>' +
-        '<p><strong>Requirements:</strong> AWS CLI installed on this instance, with IAM permissions: <code>ec2:CreateImage</code>, <code>ec2:DescribeImages</code>, <code>ec2:DeregisterImage</code>, <code>ec2:RebootInstances</code>. Set an AMI name prefix to identify snapshots.</p>' +
-        '<p>⚠ AMI creation briefly reboots the instance by default. Schedule it during low-traffic hours.</p>' +
-        '<p>Creation is asynchronous — the plugin polls AWS every 10 minutes and logs when the image becomes available. Old AMIs beyond the retention limit are deregistered automatically.</p>'
+        '<p>Creates a full Amazon Machine Image (AMI) of this EC2 instance — a disk-level snapshot of the entire server including OS, web server config, PHP, and all files. Unlike a file backup (database + uploads only), an AMI is the safest recovery option if the server itself becomes unrecoverable.</p>' +
+        '<p><strong>Requirements:</strong> AWS CLI with IAM permissions: <code>ec2:CreateImage</code>, <code>ec2:DescribeImages</code>, <code>ec2:DeregisterImage</code>, <code>ec2:CreateReplaceRootVolumeTask</code>, <code>ec2:RebootInstances</code>.</p>' +
+        '<p>Creation is asynchronous — the plugin polls AWS every 10 minutes and updates status. Old AMIs beyond the limit are deregistered automatically. ⚠ Creation reboots the instance by default — schedule during low-traffic hours.</p>' +
+        '<hr style="margin:12px 0;border:none;border-top:1px solid #e0e0e0;">' +
+        '<p><strong>Snapshot table actions:</strong></p>' +
+        '<ul style="margin:4px 0 8px 18px;padding:0;">' +
+        '<li><strong>Tag (Edit)</strong> — attach a free-text label to any snapshot, e.g. "pre-upgrade".</li>' +
+        '<li><strong>&#11088; Golden Image</strong> — mark up to 4 AMIs as permanently protected. Golden images are never auto-deleted and do not count towards <em>Max Cloud Backups to Keep</em>.</li>' +
+        '<li><strong>Refresh (&#8635;)</strong> — re-queries AWS for the current state of that AMI (pending → available).</li>' +
+        '<li><strong>Restore</strong> — triggers an EC2 replace-root-volume-task. <strong>All changes since the snapshot will be permanently lost</strong> and the server will reboot. Requires explicit checkbox confirmation.</li>' +
+        '<li><strong>&#128465; Delete</strong> — deregisters the AMI from AWS.</li>' +
+        '</ul>'
     );
 };
 
@@ -669,8 +700,10 @@ window.csHistoryExplain = function () {
 };
 
 window.csCopyBackupPath = function () {
-    var path = document.getElementById('cs-backup-path').textContent;
-    var btn  = document.getElementById('cs-copy-path');
+    var pathEl = document.getElementById('cs-backup-path');
+    var btn    = document.getElementById('cs-copy-path');
+    if (!pathEl || !btn) return;
+    var path = pathEl.textContent;
     navigator.clipboard.writeText(path).then(function () {
         btn.textContent = 'Copied!';
         setTimeout(function () { btn.textContent = 'Copy'; }, 2000);
@@ -704,6 +737,7 @@ window.csRestoreExplain = function () {
 
 function csS3Msg(text, ok) {
     var el = document.getElementById('cs-s3-msg');
+    if (!el) return;
     el.innerHTML = text;
     el.style.color = ok ? '#2e7d32' : '#c62828';
 }
@@ -769,6 +803,7 @@ window.csS3SyncFile = function (btn, filename) {
 
 function csGDriveMsg(text, ok) {
     var el = document.getElementById('cs-gdrive-msg');
+    if (!el) return;
     el.innerHTML = text;
     el.style.color = ok ? '#2e7d32' : '#c62828';
 }
@@ -788,8 +823,11 @@ function csGDrivePost(action, extra, onDone) {
 }
 
 window.csGDriveSave = function () {
-    var remote = document.getElementById('cs-gdrive-remote').value.trim();
-    var path   = document.getElementById('cs-gdrive-path').value.trim() || 'cloudscale-backups/';
+    var remoteEl = document.getElementById('cs-gdrive-remote');
+    var pathEl   = document.getElementById('cs-gdrive-path');
+    if (!remoteEl || !pathEl) return;
+    var remote = remoteEl.value.trim();
+    var path   = pathEl.value.trim() || 'cloudscale-backups/';
     csGDriveMsg('Saving\u2026', true);
     csGDrivePost('cs_save_gdrive',
         'remote=' + encodeURIComponent(remote) + '&path=' + encodeURIComponent(path),
@@ -832,6 +870,14 @@ window.csGDriveExplain = function () {
 
     csShowExplain('Google Drive Backup — Setup Guide',
         '<p style="margin:0 0 8px;">After every local backup, the most recent backup zip is automatically copied to your Google Drive via <strong>rclone</strong>. Use <strong>Sync Local Backup Now</strong> to push the latest backup manually at any time. Setup takes about 5 minutes and only needs to be done once.</p>' +
+        '<p style="margin:0 0 4px;"><strong>Backup History</strong> — lists every zip currently on your Drive. Actions:</p>' +
+        '<ul style="margin:0 0 10px 18px;padding:0;">' +
+        '<li><strong>Sync from Google Drive</strong> — queries Drive live. Picks up backups made before this screen existed and removes anything deleted directly in Drive.</li>' +
+        '<li><strong>Tag (Edit)</strong> — attach a free-text label to any file, e.g. "pre-upgrade".</li>' +
+        '<li><strong>&#11088; Golden Image</strong> — mark up to 4 files as permanently protected. Never auto-deleted, do not count towards <em>Max Cloud Backups to Keep</em>.</li>' +
+        '<li><strong>&#8659; Download</strong> — uses rclone to pull the file from Drive to a temp file, then streams it to your browser.</li>' +
+        '<li><strong>&#128465; Delete</strong> — permanently removes the file from Google Drive. Cannot be undone.</li>' +
+        '</ul>' +
         hr() +
 
         h('Step 1 — Install rclone on the server') +
@@ -956,6 +1002,7 @@ window.csGDriveDiagnose = function () {
 
 function csAmiMsg(text, ok) {
     var el = document.getElementById('cs-ami-msg');
+    if (!el) return;
     el.innerHTML = text;
     el.style.color = ok ? '#2e7d32' : '#c62828';
 }
@@ -965,9 +1012,13 @@ function csAmiPost(action, extra, onDone) {
 }
 
 window.csAmiSave = function () {
-    var prefix         = document.getElementById('cs-ami-prefix').value.trim();
-    var reboot         = document.getElementById('cs-ami-reboot').checked ? '1' : '0';
-    var regionOverride = document.getElementById('cs-ami-region-override').value.trim();
+    var prefixEl = document.getElementById('cs-ami-prefix');
+    var rebootEl = document.getElementById('cs-ami-reboot');
+    var regionEl = document.getElementById('cs-ami-region-override');
+    if (!prefixEl || !rebootEl || !regionEl) return;
+    var prefix         = prefixEl.value.trim();
+    var reboot         = rebootEl.checked ? '1' : '0';
+    var regionOverride = regionEl.value.trim();
     csAmiMsg('Saving...', true);
     csAmiPost('cs_save_ami',
         'prefix=' + encodeURIComponent(prefix) +
@@ -978,9 +1029,12 @@ window.csAmiSave = function () {
 };
 
 window.csAmiCreate = function () {
-    var prefix = document.getElementById('cs-ami-prefix').value.trim();
+    var prefixEl = document.getElementById('cs-ami-prefix');
+    var rebootEl = document.getElementById('cs-ami-reboot');
+    if (!prefixEl || !rebootEl) return;
+    var prefix = prefixEl.value.trim();
     if (!prefix) { csAmiMsg('&#10007; Enter an AMI name prefix first.', false); return; }
-    var reboot = document.getElementById('cs-ami-reboot').checked;
+    var reboot = rebootEl.checked;
     var msg = 'Create an AMI snapshot of this instance now?';
     if (reboot) msg += '\n\nWARNING: The instance will be REBOOTED. This will cause brief downtime.';
     if (!confirm(msg)) return;
@@ -1027,14 +1081,20 @@ function csAmiRefreshAll() {
             stateCell.innerHTML = '<span style="color:#999;font-weight:600;">&#128465; deleted in AWS</span>';
             if (actionsCell) actionsCell.innerHTML = '<button type="button" onclick="csAmiDelete(\'' + amiId + '\',\'' + safeName + '\',true)" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Remove</button>';
         } else {
-            if (row) row.querySelectorAll('td').forEach(function (td) { td.style.opacity = ''; });
+            if (row) { row.querySelectorAll('td').forEach(function (td) { td.style.opacity = ''; }); row.classList.remove('cs-row-golden'); }
             var color = state === 'available' ? '#2e7d32' : (state === 'pending' ? '#e65100' : '#757575');
             var icon  = state === 'available' ? '&#10003;' : (state === 'pending' ? '&#9203;' : '&#10007;');
             stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + state + '</span>';
-            var restoreBtn = state === 'available'
+            var isGolden    = row && row.dataset && row.dataset.golden === '1';
+            var goldenStyle = isGolden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '';
+            var goldenTitle = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+            var goldenBtn   = '<button type="button" onclick="csAmiSetGolden(\'' + amiId + '\')" class="button button-small" id="cs-ami-golden-btn-' + amiId + '" data-golden="' + (isGolden ? '1' : '0') + '" title="' + goldenTitle + '" style="min-width:0;padding:2px 6px;margin-bottom:3px;' + goldenStyle + '">&#11088;</button>';
+            var restoreBtn  = state === 'available'
                 ? '<button type="button" onclick="csAmiRestore(\'' + amiId + '\',\'' + safeName + '\')" class="button button-small" title="Restore server to this AMI snapshot" style="min-width:0;padding:2px 8px;color:#1a237e;border-color:#1a237e;margin-bottom:3px;">&#8617; Restore</button> '
                 : '';
-            if (actionsCell) actionsCell.innerHTML = restoreBtn + '<button type="button" onclick="csAmiDelete(\'' + amiId + '\',\'' + safeName + '\',false)" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>';
+            var svgRefresh  = '<svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>';
+            var refreshBtn  = '<button type="button" onclick="csAmiRefreshOne(\'' + amiId + '\')" class="button button-small" title="Refresh this AMI state from AWS" style="min-width:0;padding:2px 6px;margin-bottom:3px;">' + svgRefresh + '</button>';
+            if (actionsCell) { actionsCell.style.whiteSpace = 'nowrap'; actionsCell.style.verticalAlign = 'middle'; actionsCell.innerHTML = refreshBtn + goldenBtn + restoreBtn + '<button type="button" onclick="csAmiDelete(\'' + amiId + '\',\'' + safeName + '\',false)" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>'; }
         }
     }
 
@@ -1205,6 +1265,89 @@ window.csAmiRestore = function (amiId, amiName) {
     });
 };
 
+// ================================================================
+// AMI tag and golden image functions
+// ================================================================
+
+window.csAmiTagEdit = function (amiId, currentTag) {
+    var $ = window.jQuery;
+    var cell = document.getElementById('cs-ami-tag-cell-' + amiId);
+    if (!cell) return;
+    var saved = cell.innerHTML;
+    // Use querySelectorAll to avoid jQuery CSS-selector escaping issues with hyphens
+    cell.innerHTML =
+        '<input type="text" value="' + $('<span>').text(currentTag).html() + '" ' +
+        'style="width:90px;font-size:0.8rem;padding:1px 4px;vertical-align:middle;" maxlength="40"> ' +
+        '<button type="button" class="button button-small" style="padding:1px 6px;font-size:0.78rem;">Save</button> ' +
+        '<button type="button" class="button button-small" style="padding:1px 6px;font-size:0.78rem;">\u00d7</button>';
+    var btns      = cell.querySelectorAll('button');
+    var inp       = cell.querySelector('input');
+    var saveBtn   = btns[0];
+    var cancelBtn = btns[1];
+    if (inp) inp.focus();
+    cancelBtn.addEventListener('click', function () { cell.innerHTML = saved; });
+    var doSave = function () {
+        var tag = inp ? inp.value.trim().substring(0, 40) : '';
+        csAmiPost('cs_ami_set_tag', 'ami_id=' + encodeURIComponent(amiId) + '&tag=' + encodeURIComponent(tag), function (res) {
+            if (res.success) {
+                var tagJs = tag.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                cell.innerHTML =
+                    '<span class="cs-ami-tag-text">' + (tag ? $('<span>').text(tag).html() : '<span class="cs-muted-text">No tag</span>') + '</span> ' +
+                    '<button type="button" onclick="csAmiTagEdit(\'' + amiId + '\',\'' + tagJs + '\')" class="button button-small" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;">Edit</button>';
+                csAmiMsg('\u2713 Tag saved', true);
+            } else {
+                cell.innerHTML = saved;
+                csAmiMsg('\u2717 ' + (res.data || 'Save failed'), false);
+            }
+        });
+    };
+    saveBtn.addEventListener('click', doSave);
+    if (inp) {
+        inp.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter')  { doSave(); }
+            if (e.key === 'Escape') { cell.innerHTML = saved; }
+        });
+    }
+};
+
+window.csAmiSetGolden = function (amiId) {
+    csAmiPost('cs_ami_set_golden', 'ami_id=' + encodeURIComponent(amiId), function (res) {
+        if (res.success) {
+            var isGolden = !!(res.data && res.data.golden);
+            var btn = document.getElementById('cs-ami-golden-btn-' + amiId);
+            if (btn) {
+                btn.dataset.golden = isGolden ? '1' : '0';
+                btn.title = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+                btn.style.color       = isGolden ? '#f57f17' : '';
+                btn.style.borderColor = isGolden ? '#f57f17' : '';
+                btn.style.fontWeight  = isGolden ? '700'     : '';
+            }
+            var row = document.getElementById('cs-ami-row-' + amiId);
+            if (row) {
+                row.classList.toggle('cs-row-golden', isGolden);
+                
+                
+                var star = row.querySelector('.cs-ami-golden-star');
+                if (star) star.style.display = isGolden ? '' : 'none';
+            }
+            csAmiUpdateGoldenCount();
+            csAmiMsg(isGolden ? '&#11088; Marked as golden image' : 'Golden image removed', true);
+        } else {
+            csAmiMsg('\u2717 ' + (res.data || 'Failed'), false);
+        }
+    });
+};
+
+function csAmiUpdateGoldenCount() {
+    var el = document.getElementById('cs-ami-golden-count');
+    if (!el) return;
+    var goldenCount   = document.querySelectorAll('[id^="cs-ami-golden-btn-"][data-golden="1"]').length;
+    var totalRows     = document.querySelectorAll('#cs-ami-tbody tr[id^="cs-ami-row-"]').length;
+    var nonGolden     = totalRows - goldenCount;
+    var amiMax        = (window.CS && CS.ami_max) ? parseInt(CS.ami_max, 10) : '?';
+    el.innerHTML = '&#11088; ' + goldenCount + ' / 4 golden\u2003' + nonGolden + ' of ' + amiMax + ' max backups';
+}
+
 window.csAmiRemoveFailed = function (name) {
     if (!confirm('Remove this failed record from the log?\n\n' + name)) return;
     csAmiMsg('Removing\u2026', true);
@@ -1217,6 +1360,378 @@ window.csAmiRemoveFailed = function (name) {
             });
         } else {
             csAmiMsg('&#10007; ' + (res.data || 'Remove failed'), false);
+        }
+    });
+};
+
+// ================================================================
+// S3 History functions
+// ================================================================
+
+function csS3HMsg(text, ok) {
+    var el = document.getElementById('cs-s3h-msg');
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = ok ? '#2e7d32' : '#c62828';
+}
+
+function csS3HPost(action, extra, onDone) {
+    csS3Post(action, extra, onDone); // reuse S3 transport
+}
+
+function csS3HUpdateGoldenCount() {
+    var el = document.getElementById('cs-s3h-golden-count');
+    if (!el) return;
+    var goldenCount = document.querySelectorAll('[id^="cs-s3h-golden-btn-"][data-golden="1"]').length;
+    var totalRows   = document.querySelectorAll('#cs-s3h-tbody tr').length;
+    var nonGolden   = totalRows - goldenCount;
+    var s3Max       = (window.CS && CS.ami_max) ? parseInt(CS.ami_max, 10) : '?';
+    el.innerHTML = '&#11088; ' + goldenCount + ' / 4 golden\u2003' + nonGolden + ' of ' + s3Max + ' max backups';
+}
+
+window.csS3HistoryRefresh = function () {
+    var btn = document.getElementById('cs-s3h-refresh-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Querying S3\u2026'; }
+    csS3HMsg('Refreshing\u2026', true);
+    csS3HPost('cs_s3_refresh_history', '', function (res) {
+        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Sync from S3'; }
+        if (!res.success) {
+            csS3HMsg('\u2717 ' + (res.data || 'Refresh failed'), false);
+            return;
+        }
+        var files  = (res.data && res.data.files) ? res.data.files : (res.data || []);
+        var count  = (res.data && res.data.count != null) ? res.data.count : files.length;
+        var cEl    = document.getElementById('cs-s3-count-val');
+        if (cEl) cEl.innerHTML = count + ' in bucket &nbsp;&middot;&nbsp; ' + cEl.innerHTML.replace(/.*·\s*/, '');
+        var tbody  = document.getElementById('cs-s3h-tbody');
+        var table  = document.getElementById('cs-s3h-table');
+        var $ = window.jQuery;
+        if (!tbody) {
+            // Table doesn't exist yet — reload page to show it
+            csS3HMsg('\u2713 Done — reloading\u2026', true);
+            setTimeout(function () { location.reload(); }, 1200);
+            return;
+        }
+        tbody.innerHTML = '';
+        files.forEach(function (sf) {
+            var name      = sf.name || '';
+            // keyE must NOT include dots (jQuery $() treats '.' as class selector)
+            var keyE      = name.replace(/[^a-zA-Z0-9_\-]/g, '_');
+            var nameJs    = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            var tag       = sf.tag || '';
+            var tagJs     = tag.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            var isGolden  = !!sf.golden;
+            var goldenD   = isGolden ? '1' : '0';
+            var goldenSt  = isGolden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '';
+            var goldenTit = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+            var dlUrl     = CS.admin_post_url + '?action=cs_s3_download&file=' + encodeURIComponent(name) + '&nonce=' + CS.nonce;
+            var dlBtn     = '<a href="' + dlUrl + '" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; Download</a> ';
+            var tr = document.createElement('tr');
+            tr.id = 'cs-s3h-row-' + keyE;
+            if (isGolden) tr.className = 'cs-row-golden';
+            tr.innerHTML =
+                '<td>' + $('<span>').text(name).html() + '<span class="cs-s3h-golden-star"' + (isGolden ? '' : ' style="display:none;"') + '> &#11088;</span></td>' +
+                '<td id="cs-s3h-tag-cell-' + keyE + '" style="white-space:nowrap;">' +
+                    '<span class="cs-s3h-tag-text">' + (tag ? $('<span>').text(tag).html() : '<span class="cs-muted-text">No tag</span>') + '</span> ' +
+                    '<button type="button" onclick="csS3HistoryTagEdit(\'' + nameJs + '\',\'' + tagJs + '\')" class="button button-small" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;">Edit</button>' +
+                '</td>' +
+                '<td>' + $('<span>').text(sf.size_fmt || '\u2014').html() + '</td>' +
+                '<td>' + $('<span>').text(sf.date_fmt || (sf.time ? new Date(sf.time * 1000).toLocaleDateString() : '\u2014')).html() + '</td>' +
+                '<td id="cs-s3h-actions-' + keyE + '" style="white-space:nowrap;vertical-align:middle;">' +
+                    '<button type="button" onclick="csS3HistorySetGolden(\'' + nameJs + '\')" class="button button-small" id="cs-s3h-golden-btn-' + keyE + '" data-golden="' + goldenD + '" title="' + goldenTit + '" style="min-width:0;padding:2px 6px;margin-bottom:3px;' + goldenSt + '">&#11088;</button> ' +
+                    dlBtn +
+                    '<button type="button" onclick="csS3HistoryDelete(\'' + nameJs + '\')" class="button button-small" title="Delete from S3" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>' +
+                '</td>';
+            tbody.appendChild(tr);
+        });
+        csS3HMsg('\u2713 ' + files.length + ' file' + (files.length !== 1 ? 's' : '') + ' found', true);
+        csS3HUpdateGoldenCount();
+    });
+};
+
+window.csS3HistoryTagEdit = function (filename, currentTag) {
+    var $ = window.jQuery;
+    // keyE must NOT include dots — jQuery $() selector treats '.' as class selector
+    var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    var cell = document.getElementById('cs-s3h-tag-cell-' + keyE);
+    if (!cell) return;
+    var saved = cell.innerHTML;
+    // Use querySelectorAll — avoids jQuery CSS-selector dot/special-char escaping bug
+    cell.innerHTML =
+        '<input type="text" value="' + $('<span>').text(currentTag).html() + '" ' +
+        'style="width:90px;font-size:0.8rem;padding:1px 4px;vertical-align:middle;" maxlength="40"> ' +
+        '<button type="button" class="button button-small" style="padding:1px 6px;font-size:0.78rem;">Save</button> ' +
+        '<button type="button" class="button button-small" style="padding:1px 6px;font-size:0.78rem;">\u00d7</button>';
+    var btns      = cell.querySelectorAll('button');
+    var inp       = cell.querySelector('input');
+    var saveBtn   = btns[0];
+    var cancelBtn = btns[1];
+    if (inp) inp.focus();
+    cancelBtn.addEventListener('click', function () { cell.innerHTML = saved; });
+    var filenameJs = filename.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    var doSave = function () {
+        var tag = inp ? inp.value.trim().substring(0, 40) : '';
+        csS3HPost('cs_s3_set_tag', 'filename=' + encodeURIComponent(filename) + '&tag=' + encodeURIComponent(tag), function (res) {
+            if (res.success) {
+                var tagJs = tag.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                cell.innerHTML =
+                    '<span class="cs-s3h-tag-text">' + (tag ? $('<span>').text(tag).html() : '<span class="cs-muted-text">No tag</span>') + '</span> ' +
+                    '<button type="button" onclick="csS3HistoryTagEdit(\'' + filenameJs + '\',\'' + tagJs + '\')" class="button button-small" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;">Edit</button>';
+                csS3HMsg('\u2713 Tag saved', true);
+            } else {
+                cell.innerHTML = saved;
+                csS3HMsg('\u2717 ' + (res.data || 'Save failed'), false);
+            }
+        });
+    };
+    saveBtn.addEventListener('click', doSave);
+    if (inp) {
+        inp.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter')  { doSave(); }
+            if (e.key === 'Escape') { cell.innerHTML = saved; }
+        });
+    }
+};
+
+window.csS3HistorySetGolden = function (filename) {
+    var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    csS3HPost('cs_s3_set_golden', 'filename=' + encodeURIComponent(filename), function (res) {
+        if (res.success) {
+            var isGolden = !!(res.data && res.data.golden);
+            var btn = document.getElementById('cs-s3h-golden-btn-' + keyE);
+            if (btn) {
+                btn.dataset.golden    = isGolden ? '1' : '0';
+                btn.title             = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+                btn.style.color       = isGolden ? '#f57f17' : '';
+                btn.style.borderColor = isGolden ? '#f57f17' : '';
+                btn.style.fontWeight  = isGolden ? '700' : '';
+            }
+            var row = document.getElementById('cs-s3h-row-' + keyE);
+            if (row) {
+                row.classList.toggle('cs-row-golden', isGolden);
+                
+                
+                var star = row.querySelector('.cs-s3h-golden-star');
+                if (star) star.style.display = isGolden ? '' : 'none';
+            }
+            csS3HUpdateGoldenCount();
+            csS3HMsg(isGolden ? '&#11088; Marked as golden image' : 'Golden image removed', true);
+        } else {
+            csS3HMsg('\u2717 ' + (res.data || 'Failed'), false);
+        }
+    });
+};
+
+window.csS3HistoryDelete = function (filename) {
+    if (!confirm('Delete from S3?\n\n' + filename + '\n\nThis cannot be undone.')) return;
+    var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    csS3HMsg('Deleting\u2026', true);
+    csS3HPost('cs_s3_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
+        if (res.success) {
+            csS3HMsg('\u2713 Deleted', true);
+            var row = document.getElementById('cs-s3h-row-' + keyE);
+            if (row) row.remove();
+            csS3HUpdateGoldenCount();
+            var cEl = document.getElementById('cs-s3-count-val');
+            if (cEl) { var m = cEl.innerHTML.match(/^(\d+)/); if (m) cEl.innerHTML = cEl.innerHTML.replace(/^\d+/, Math.max(0, parseInt(m[1], 10) - 1)); }
+        } else {
+            csS3HMsg('\u2717 ' + (res.data || 'Delete failed'), false);
+        }
+    });
+};
+
+window.csS3HistoryPull = function (filename) {
+    var keyE   = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    var actEl  = document.getElementById('cs-s3h-actions-' + keyE);
+    csS3HMsg('Pulling from S3\u2026', true);
+    csS3HPost('cs_s3_pull', 'filename=' + encodeURIComponent(filename), function (res) {
+        if (res.success) {
+            csS3HMsg('\u2713 Pulled — reload to see it in Backup History', true);
+            // Remove the Pull button and update Local column
+            var row = document.getElementById('cs-s3h-row-' + keyE);
+            if (row) {
+                row.classList.toggle('cs-row-golden', isGolden);
+                var localCell = row.querySelector('td:nth-child(5)');
+                if (localCell) localCell.innerHTML = '<span style="color:#2e7d32;font-weight:600;">&#10003;</span>';
+                var pullBtn = actEl ? actEl.querySelector('button[onclick*="csS3HistoryPull"]') : null;
+                if (pullBtn) pullBtn.remove();
+            }
+        } else {
+            csS3HMsg('\u2717 ' + (res.data || 'Pull failed'), false);
+        }
+    });
+};
+
+// ================================================================
+// Google Drive History functions
+// ================================================================
+
+function csGDriveHMsg(text, ok) {
+    var el = document.getElementById('cs-gd-msg');
+    if (!el) return;
+    el.textContent = text;
+    el.style.color = ok ? '#2e7d32' : '#c62828';
+}
+
+function csGDriveHPost(action, extra, onDone) {
+    csGDrivePost(action, extra, onDone); // reuse GDrive transport
+}
+
+function csGDriveHUpdateGoldenCount() {
+    var el = document.getElementById('cs-gd-golden-count');
+    if (!el) return;
+    var goldenCount = document.querySelectorAll('[id^="cs-gd-golden-btn-"][data-golden="1"]').length;
+    var totalRows   = document.querySelectorAll('#cs-gd-tbody tr').length;
+    var nonGolden   = totalRows - goldenCount;
+    var maxB        = (window.CS && CS.ami_max) ? parseInt(CS.ami_max, 10) : '?';
+    el.innerHTML = '&#11088; ' + goldenCount + ' / 4 golden\u2003' + nonGolden + ' of ' + maxB + ' max backups';
+}
+
+window.csGDriveHistoryRefresh = function () {
+    var $ = window.jQuery;
+    var btn = document.getElementById('cs-gd-refresh-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Querying Drive\u2026'; }
+    csGDriveHMsg('Refreshing\u2026', true);
+    csGDriveHPost('cs_gdrive_refresh_history', '', function (res) {
+        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Sync from Google Drive'; }
+        if (!res.success) {
+            csGDriveHMsg('\u2717 ' + (res.data || 'Refresh failed'), false);
+            return;
+        }
+        var files = (res.data && res.data.files) ? res.data.files : (res.data || []);
+        var count = (res.data && res.data.count != null) ? res.data.count : files.length;
+        var cEl   = document.getElementById('cs-gdrive-count-val');
+        if (cEl) cEl.innerHTML = count + ' in Drive &nbsp;&middot;&nbsp; ' + cEl.innerHTML.replace(/.*·\s*/, '');
+        var tbody = document.getElementById('cs-gd-tbody');
+        if (!tbody) {
+            csGDriveHMsg('\u2713 Done — reloading\u2026', true);
+            setTimeout(function () { location.reload(); }, 1200);
+            return;
+        }
+        tbody.innerHTML = '';
+        files.forEach(function (gf) {
+            var name      = gf.name || '';
+            var keyE      = name.replace(/[^a-zA-Z0-9_\-]/g, '_');
+            var nameJs    = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            var tag       = gf.tag || '';
+            var tagJs     = tag.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            var isGolden  = !!gf.golden;
+            var goldenD   = isGolden ? '1' : '0';
+            var goldenSt  = isGolden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '';
+            var goldenTit = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+            var dlUrl     = CS.admin_post_url + '?action=cs_gdrive_download&file=' + encodeURIComponent(name) + '&nonce=' + CS.nonce;
+            var tr = document.createElement('tr');
+            tr.id = 'cs-gd-row-' + keyE;
+            if (isGolden) tr.className = 'cs-row-golden';
+            if (isGolden) {
+                tr.style.background = 'linear-gradient(90deg,#fff8e1 0%,#fff 80%)';
+                tr.style.borderLeft = '3px solid #f9a825';
+            }
+            tr.innerHTML =
+                '<td>' + $('<span>').text(name).html() + '<span class="cs-gd-golden-star"' + (isGolden ? '' : ' style="display:none;"') + '> &#11088;</span></td>' +
+                '<td id="cs-gd-tag-cell-' + keyE + '" style="white-space:nowrap;">' +
+                    '<span class="cs-gd-tag-text">' + (tag ? $('<span>').text(tag).html() : '<span class="cs-muted-text">No tag</span>') + '</span> ' +
+                    '<button type="button" onclick="csGDriveHistoryTagEdit(\'' + nameJs + '\',\'' + tagJs + '\')" class="button button-small" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;">Edit</button>' +
+                '</td>' +
+                '<td>' + $('<span>').text(gf.size_fmt || '\u2014').html() + '</td>' +
+                '<td>' + $('<span>').text(gf.date_fmt || (gf.time ? new Date(gf.time * 1000).toLocaleDateString() : '\u2014')).html() + '</td>' +
+                '<td id="cs-gd-actions-' + keyE + '" style="white-space:nowrap;vertical-align:middle;">' +
+                    '<button type="button" onclick="csGDriveHistorySetGolden(\'' + nameJs + '\')" class="button button-small" id="cs-gd-golden-btn-' + keyE + '" data-golden="' + goldenD + '" title="' + goldenTit + '" style="min-width:0;padding:2px 6px;margin-bottom:3px;' + goldenSt + '">&#11088;</button> ' +
+                    '<a href="' + dlUrl + '" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; Download</a> ' +
+                    '<button type="button" onclick="csGDriveHistoryDelete(\'' + nameJs + '\')" class="button button-small" title="Delete from Google Drive" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>' +
+                '</td>';
+            tbody.appendChild(tr);
+        });
+        csGDriveHMsg('\u2713 ' + files.length + ' file' + (files.length !== 1 ? 's' : '') + ' found', true);
+        csGDriveHUpdateGoldenCount();
+    });
+};
+
+window.csGDriveHistoryTagEdit = function (filename, currentTag) {
+    var $ = window.jQuery;
+    var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    var cell = document.getElementById('cs-gd-tag-cell-' + keyE);
+    if (!cell) return;
+    var saved = cell.innerHTML;
+    cell.innerHTML =
+        '<input type="text" value="' + $('<span>').text(currentTag).html() + '" ' +
+        'style="width:90px;font-size:0.8rem;padding:1px 4px;vertical-align:middle;" maxlength="40"> ' +
+        '<button type="button" class="button button-small" style="padding:1px 6px;font-size:0.78rem;">Save</button> ' +
+        '<button type="button" class="button button-small" style="padding:1px 6px;font-size:0.78rem;">\u00d7</button>';
+    var btns      = cell.querySelectorAll('button');
+    var inp       = cell.querySelector('input');
+    var saveBtn   = btns[0];
+    var cancelBtn = btns[1];
+    if (inp) inp.focus();
+    cancelBtn.addEventListener('click', function () { cell.innerHTML = saved; });
+    var filenameJs = filename.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    var doSave = function () {
+        var tag = inp ? inp.value.trim().substring(0, 40) : '';
+        csGDriveHPost('cs_gdrive_set_tag', 'filename=' + encodeURIComponent(filename) + '&tag=' + encodeURIComponent(tag), function (res) {
+            if (res.success) {
+                var tagJs = tag.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                cell.innerHTML =
+                    '<span class="cs-gd-tag-text">' + (tag ? $('<span>').text(tag).html() : '<span class="cs-muted-text">No tag</span>') + '</span> ' +
+                    '<button type="button" onclick="csGDriveHistoryTagEdit(\'' + filenameJs + '\',\'' + tagJs + '\')" class="button button-small" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;">Edit</button>';
+                csGDriveHMsg('\u2713 Tag saved', true);
+            } else {
+                cell.innerHTML = saved;
+                csGDriveHMsg('\u2717 ' + (res.data || 'Save failed'), false);
+            }
+        });
+    };
+    saveBtn.addEventListener('click', doSave);
+    if (inp) {
+        inp.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter')  { doSave(); }
+            if (e.key === 'Escape') { cell.innerHTML = saved; }
+        });
+    }
+};
+
+window.csGDriveHistorySetGolden = function (filename) {
+    var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    csGDriveHPost('cs_gdrive_set_golden', 'filename=' + encodeURIComponent(filename), function (res) {
+        if (res.success) {
+            var isGolden = !!(res.data && res.data.golden);
+            var btn = document.getElementById('cs-gd-golden-btn-' + keyE);
+            if (btn) {
+                btn.dataset.golden    = isGolden ? '1' : '0';
+                btn.title             = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+                btn.style.color       = isGolden ? '#f57f17' : '';
+                btn.style.borderColor = isGolden ? '#f57f17' : '';
+                btn.style.fontWeight  = isGolden ? '700' : '';
+            }
+            var row = document.getElementById('cs-gd-row-' + keyE);
+            if (row) {
+                row.classList.toggle('cs-row-golden', isGolden);
+                
+                
+                var star = row.querySelector('.cs-gd-golden-star');
+                if (star) star.style.display = isGolden ? '' : 'none';
+            }
+            csGDriveHUpdateGoldenCount();
+            csGDriveHMsg(isGolden ? '&#11088; Marked as golden image' : 'Golden image removed', true);
+        } else {
+            csGDriveHMsg('\u2717 ' + (res.data || 'Failed'), false);
+        }
+    });
+};
+
+window.csGDriveHistoryDelete = function (filename) {
+    if (!confirm('Delete from Google Drive?\n\n' + filename + '\n\nThis cannot be undone.')) return;
+    var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    csGDriveHMsg('Deleting\u2026', true);
+    csGDriveHPost('cs_gdrive_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
+        if (res.success) {
+            csGDriveHMsg('\u2713 Deleted', true);
+            var row = document.getElementById('cs-gd-row-' + keyE);
+            if (row) row.remove();
+            csGDriveHUpdateGoldenCount();
+            var cEl = document.getElementById('cs-gdrive-count-val');
+            if (cEl) { var m = cEl.innerHTML.match(/^(\d+)/); if (m) cEl.innerHTML = cEl.innerHTML.replace(/^\d+/, Math.max(0, parseInt(m[1], 10) - 1)); }
+        } else {
+            csGDriveHMsg('\u2717 ' + (res.data || 'Delete failed'), false);
         }
     });
 };
