@@ -4,7 +4,7 @@ Tags: backup, restore, database, scheduled backup, maintenance mode
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 3.2.113
+Stable tag: 3.2.123
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -165,7 +165,7 @@ Yes. Run a full backup on the old site, install WordPress on the new host, insta
 
 == Changelog ==
 
-= 3.2.113 =
+= 3.2.123 =
 * FIX: JS syntax error (missing brace in updateRow) broke Cloud Backups tab click handler; null guards added to csAmiSave, csAmiCreate, csGDriveSave
 * NEW: AMI Tags, Golden Images (⭐), S3 and GDrive Backup History tables with Sync, Download, Delete, Tag, Golden Image actions
 * NEW: AMI snapshot Restore button (EC2 replace-root-volume-task with data-loss confirmation)

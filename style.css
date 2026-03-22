@@ -5,6 +5,7 @@
    ================================================================ */
 
 .cs-wrap { max-width: 1200px; padding-bottom: 60px; }
+.cs-wrap input::placeholder { font-style: italic; color: #aaa; }
 
 /* ================================================================
    TABS
@@ -21,8 +22,8 @@
     font-size: 0.92rem;
     font-weight: 600;
     cursor: pointer;
-    background: #eeeeee;
-    border: 1px solid #d0d0d0;
+    background: #d8d8d8;
+    border: 1px solid #bdbdbd;
     border-bottom: none;
     border-radius: 6px 6px 0 0;
     color: #555555;

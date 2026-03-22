@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.113
+ * Version:           3.2.123
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.113');
+define('CS_BACKUP_VERSION',    '3.2.123');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -902,7 +902,7 @@ function cs_admin_page(): void {
 
                 <div class="cs-field-row cs-mt">
                     <label for="cs-ami-region-override"><strong>Region override</strong></label>
-                    <input type="text" id="cs-ami-region-override" class="cs-input-sm" placeholder="e.g. af-south-1"
+                    <input type="text" id="cs-ami-region-override" class="cs-input-sm" placeholder="[Enter Region Override]"
                            value="<?php echo esc_attr($ami_region_override); ?>" style="width:calc(20em - 50px);min-width:140px;">
                     <p class="cs-help">Set this if the region shown above is wrong or Unknown. Bypasses IMDS detection entirely. Example: <code>af-south-1</code></p>
                 </div>
@@ -911,7 +911,7 @@ function cs_admin_page(): void {
                     <div style="display:flex;align-items:flex-start;gap:24px;flex-wrap:wrap;">
                         <div>
                             <label for="cs-ami-prefix"><strong>AMI name prefix</strong></label>
-                            <input type="text" id="cs-ami-prefix" placeholder="mysite-backup"
+                            <input type="text" id="cs-ami-prefix" placeholder="[Enter Name Prefix]"
                                    value="<?php echo esc_attr($ami_prefix); ?>"
                                    style="width:calc(20em - 50px);min-width:140px;">
                         </div>
@@ -1406,7 +1406,7 @@ function cs_admin_page(): void {
                             </label>
                             <label class="cs-option-label" style="margin:0;<?php echo ! $dropbox_configured ? 'opacity:0.55;' : ''; ?>">
                                 <input type="checkbox" id="cs-cloud-dropbox-enabled" <?php checked($dropbox_sync_enabled); ?> <?php echo ! $dropbox_configured ? 'disabled' : ''; ?>>
-                                &#128194; Dropbox Backup <span style="font-size:0.72rem;font-weight:600;background:#e3f2fd;color:#1565c0;padding:1px 6px;border-radius:8px;vertical-align:middle;">BETA</span>
+                                &#128194; Dropbox Backup
                                 <?php if ( ! $dropbox_configured ): ?><span style="font-size:0.72rem;color:#999;margin-left:6px;">— Not configured</span><?php endif; ?>
                             </label>
                         </div>
@@ -1442,14 +1442,14 @@ function cs_admin_page(): void {
 
                 <div class="cs-field-row cs-mt">
                     <label for="cs-gdrive-remote"><strong>rclone remote name</strong></label>
-                    <input type="text" id="cs-gdrive-remote" class="regular-text" placeholder="gdrive"
+                    <input type="text" id="cs-gdrive-remote" class="regular-text" placeholder="[Enter Remote Name]"
                            value="<?php echo esc_attr($gdrive_remote); ?>">
                     <p class="cs-help">The remote name you gave when running <code>rclone config</code>, e.g. <code>gdrive</code>.</p>
                 </div>
 
                 <div class="cs-field-row">
                     <label for="cs-gdrive-path"><strong>Destination folder</strong></label>
-                    <input type="text" id="cs-gdrive-path" class="regular-text" placeholder="cloudscale-backups/"
+                    <input type="text" id="cs-gdrive-path" class="regular-text" placeholder="[Enter Folder Path]"
                            value="<?php echo esc_attr($gdrive_path); ?>">
                     <p class="cs-help">Folder path inside the Drive. Trailing slash required. Leave blank to copy to the root.</p>
                 </div>
@@ -1482,20 +1482,20 @@ function cs_admin_page(): void {
             <!-- DROPBOX BACKUP CARD -->
             <div class="cs-card cs-card--dropbox">
                 <div class="cs-card-stripe" style="background:linear-gradient(135deg,#0032a0 0%,#0061ff 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
-                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128194; <?php echo esc_html__( 'Dropbox Backup', 'cloudscale-free-backup-and-restore' ); ?> <span style="font-size:0.7rem;font-weight:600;background:rgba(255,255,255,0.25);padding:1px 7px;border-radius:10px;letter-spacing:0.04em;vertical-align:middle;">BETA</span></h2>
+                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128194; <?php echo esc_html__( 'Dropbox Backup', 'cloudscale-free-backup-and-restore' ); ?></h2>
                     <button type="button" onclick="csDropboxExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;"><?php esc_html_e( 'Explain…', 'cloudscale-free-backup-and-restore' ); ?></button>
                 </div>
 
                 <div class="cs-field-row cs-mt">
                     <label for="cs-dropbox-remote"><strong><?php esc_html_e( 'rclone remote name', 'cloudscale-free-backup-and-restore' ); ?></strong></label>
-                    <input type="text" id="cs-dropbox-remote" class="regular-text" placeholder="dropbox"
+                    <input type="text" id="cs-dropbox-remote" class="regular-text" placeholder="[Enter Remote Name]"
                            value="<?php echo esc_attr( $dropbox_remote ); ?>">
                     <p class="cs-help"><?php esc_html_e( 'The remote name you gave when running', 'cloudscale-free-backup-and-restore' ); ?> <code>rclone config</code>, e.g. <code>dropbox</code>.</p>
                 </div>
 
                 <div class="cs-field-row">
                     <label for="cs-dropbox-path"><strong><?php esc_html_e( 'Destination folder', 'cloudscale-free-backup-and-restore' ); ?></strong></label>
-                    <input type="text" id="cs-dropbox-path" class="regular-text" placeholder="cloudscale-backups/"
+                    <input type="text" id="cs-dropbox-path" class="regular-text" placeholder="[Enter Folder Path]"
                            value="<?php echo esc_attr( $dropbox_path ); ?>">
                     <p class="cs-help"><?php esc_html_e( 'Folder path inside Dropbox. Trailing slash required. Leave blank to copy to the Dropbox root.', 'cloudscale-free-backup-and-restore' ); ?></p>
                 </div>
@@ -1533,14 +1533,14 @@ function cs_admin_page(): void {
 
                 <div class="cs-field-row cs-mt">
                     <label for="cs-s3-bucket"><strong>S3 Bucket name</strong></label>
-                    <input type="text" id="cs-s3-bucket" class="regular-text" placeholder="my-bucket-name"
+                    <input type="text" id="cs-s3-bucket" class="regular-text" placeholder="[Enter Bucket Name]"
                            value="<?php echo esc_attr($s3_bucket); ?>">
                     <p class="cs-help">Bucket name only &mdash; no <code>s3://</code> prefix.</p>
                 </div>
 
                 <div class="cs-field-row">
                     <label for="cs-s3-prefix"><strong>Key prefix (folder)</strong></label>
-                    <input type="text" id="cs-s3-prefix" class="regular-text" placeholder="backups/"
+                    <input type="text" id="cs-s3-prefix" class="regular-text" placeholder="[Enter Path Prefix]"
                            value="<?php echo esc_attr($s3_prefix); ?>">
                     <p class="cs-help">Trailing slash required. Leave as <code>backups/</code> or set to <code>/</code> for bucket root.</p>
                 </div>
@@ -1594,7 +1594,7 @@ function cs_admin_page(): void {
 
                 <div class="cs-field-row cs-mt">
                     <label for="cs-ami-region-override"><strong>Region override</strong></label>
-                    <input type="text" id="cs-ami-region-override" class="cs-input-sm" placeholder="e.g. af-south-1"
+                    <input type="text" id="cs-ami-region-override" class="cs-input-sm" placeholder="[Enter Region Override]"
                            value="<?php echo esc_attr($ami_region_override); ?>" style="width:calc(20em - 50px);min-width:140px;">
                     <p class="cs-help">Set this if the region shown above is wrong or Unknown. Bypasses IMDS detection entirely. Example: <code>af-south-1</code></p>
                 </div>
@@ -1603,7 +1603,7 @@ function cs_admin_page(): void {
                     <div style="display:flex;align-items:flex-start;gap:24px;flex-wrap:wrap;">
                         <div>
                             <label for="cs-ami-prefix"><strong>AMI name prefix</strong></label>
-                            <input type="text" id="cs-ami-prefix" placeholder="mysite-backup"
+                            <input type="text" id="cs-ami-prefix" placeholder="[Enter Name Prefix]"
                                    value="<?php echo esc_attr($ami_prefix); ?>"
                                    style="width:calc(20em - 50px);min-width:140px;">
                         </div>
@@ -2960,7 +2960,7 @@ add_action('wp_ajax_cs_ami_remove_failed', function (): void {
 /**
  * AJAX: initiate an EC2 replace-root-volume-task from an AMI snapshot.
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void Sends JSON success with task_id, or JSON error with message.
  */
 add_action('wp_ajax_cs_ami_restore', function (): void {
@@ -3014,7 +3014,7 @@ add_action('wp_ajax_cs_ami_restore', function (): void {
 /**
  * AJAX: set or clear a tag on an AMI log entry.
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void Sends JSON success with new tag value.
  */
 add_action('wp_ajax_cs_ami_set_tag', function (): void {
@@ -3050,7 +3050,7 @@ add_action('wp_ajax_cs_ami_set_tag', function (): void {
  * Enforces a maximum of 4 golden images across all AMI entries.
  * Golden images are exempt from auto-pruning in cs_ami_enforce_max().
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void Sends JSON success with new golden bool.
  */
 add_action('wp_ajax_cs_ami_set_golden', function (): void {
@@ -3088,7 +3088,7 @@ add_action('wp_ajax_cs_ami_set_golden', function (): void {
 /**
  * AJAX: refresh S3 history by querying the bucket via AWS CLI.
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void Sends JSON success with array of file entries.
  */
 // ============================================================
@@ -3098,7 +3098,7 @@ add_action('wp_ajax_cs_ami_set_golden', function (): void {
 /**
  * AJAX: refresh Google Drive history by querying the remote via rclone.
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void Sends JSON success with array of file entries.
  */
 add_action('wp_ajax_cs_gdrive_refresh_history', function (): void {
@@ -3117,7 +3117,7 @@ add_action('wp_ajax_cs_gdrive_refresh_history', function (): void {
 /**
  * AJAX: set or clear a tag on a GDrive history entry.
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void Sends JSON success with new tag value.
  */
 add_action('wp_ajax_cs_gdrive_set_tag', function (): void {
@@ -3142,7 +3142,7 @@ add_action('wp_ajax_cs_gdrive_set_tag', function (): void {
  *
  * Enforces a maximum of 4 golden images (separate pool from AMI and S3).
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void Sends JSON success with new golden bool.
  */
 add_action('wp_ajax_cs_gdrive_set_golden', function (): void {
@@ -3170,7 +3170,7 @@ add_action('wp_ajax_cs_gdrive_set_golden', function (): void {
 /**
  * AJAX: delete a file from Google Drive and remove it from the local history.
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void Sends JSON success or error.
  */
 add_action('wp_ajax_cs_gdrive_delete_remote', function (): void {
@@ -3218,7 +3218,7 @@ add_action('wp_ajax_cs_s3_refresh_history', function (): void {
 /**
  * AJAX: set or clear a tag on an S3 history entry.
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void Sends JSON success with new tag value.
  */
 add_action('wp_ajax_cs_s3_set_tag', function (): void {
@@ -3244,7 +3244,7 @@ add_action('wp_ajax_cs_s3_set_tag', function (): void {
  * Enforces a maximum of 4 golden images across all S3 history entries
  * (separate pool from AMI golden images).
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void Sends JSON success with new golden bool.
  */
 add_action('wp_ajax_cs_s3_set_golden', function (): void {
@@ -3272,7 +3272,7 @@ add_action('wp_ajax_cs_s3_set_golden', function (): void {
 /**
  * AJAX: delete a file from S3 and remove it from the local history.
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void Sends JSON success or error.
  */
 add_action('wp_ajax_cs_s3_delete_remote', function (): void {
@@ -3310,7 +3310,7 @@ add_action('wp_ajax_cs_s3_delete_remote', function (): void {
  * After a successful pull the file will appear in the Backup History table
  * on the next page load.
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void Sends JSON success or error.
  */
 add_action('wp_ajax_cs_s3_pull', function (): void {
@@ -3393,7 +3393,7 @@ add_action('admin_post_cs_download', function (): void {
  * Serves from CS_BACKUP_DIR if the file exists locally; otherwise pulls from S3
  * to a temporary path, streams it, then cleans up.
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void
  */
 add_action('admin_post_cs_s3_download', function (): void {
@@ -3444,7 +3444,7 @@ add_action('admin_post_cs_s3_download', function (): void {
  *
  * Uses rclone copyto to pull the file to a temp path, streams it, then cleans up.
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void
  */
 add_action('admin_post_cs_gdrive_download', function (): void {
@@ -3984,7 +3984,7 @@ function cs_get_instance_region(): string {
  *
  * Uses the same retention count as local backups (cs_retention option).
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void
  */
 function cs_enforce_s3_retention(): void {
@@ -4046,7 +4046,7 @@ function cs_enforce_s3_retention(): void {
  *
  * Uses the same retention count as local backups (cs_retention option).
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return void
  */
 function cs_enforce_gdrive_retention(): void {
@@ -4111,7 +4111,7 @@ function cs_enforce_gdrive_retention(): void {
  * the result with the existing cs_gdrive_history option (preserving tag and
  * golden fields). Entries no longer on Drive are dropped.
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return array Updated history keyed by filename, or empty array if not configured.
  */
 function cs_gdrive_refresh_history(): array {
@@ -4172,7 +4172,7 @@ function cs_find_rclone(): string {
 /**
  * Upload a local backup file to Google Drive using rclone.
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
@@ -4448,7 +4448,7 @@ function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
  * fields for files that still exist in S3). Entries for files no longer in
  * S3 are dropped.
  *
- * @since 3.2.113
+ * @since 3.2.123
  * @return array Updated history keyed by filename, or empty array if S3 not configured.
  */
 function cs_s3_refresh_history(): array {

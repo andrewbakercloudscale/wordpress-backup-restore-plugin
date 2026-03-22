@@ -541,6 +541,43 @@ function csShowExplain(title, body) {
     $('#cs-explain-body').css({'max-height': '65vh', 'overflow-y': 'auto', 'padding-right': '6px'});
     $('#cs-explain-title').text(title);
     $('#cs-explain-body').html(body);
+
+    // Inject copy buttons into every block <code> snippet
+    document.querySelectorAll('#cs-explain-body code').forEach(function (code) {
+        if (code.style.display !== 'block') return;
+        var wrap = document.createElement('div');
+        wrap.style.cssText = 'position:relative;';
+        code.parentNode.insertBefore(wrap, code);
+        wrap.appendChild(code);
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.textContent = 'Copy';
+        btn.style.cssText = 'position:absolute;top:6px;right:6px;padding:2px 8px;font-size:0.7rem;' +
+            'background:rgba(255,255,255,0.15);color:#ccc;border:1px solid rgba(255,255,255,0.3);' +
+            'border-radius:3px;cursor:pointer;font-family:inherit;line-height:1.4;';
+        btn.addEventListener('click', function () {
+            var text = code.textContent || code.innerText;
+            var self = this;
+            function done(ok) {
+                self.textContent = ok ? 'Copied!' : 'Failed';
+                self.style.color  = ok ? '#4caf50' : '#ef5350';
+                setTimeout(function () { self.textContent = 'Copy'; self.style.color = '#ccc'; }, 1500);
+            }
+            if (navigator.clipboard) {
+                navigator.clipboard.writeText(text).then(function () { done(true); }).catch(function () { done(false); });
+            } else {
+                var ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.cssText = 'position:fixed;opacity:0;';
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand('copy'); done(true); } catch (e) { done(false); }
+                document.body.removeChild(ta);
+            }
+        });
+        wrap.appendChild(btn);
+    });
+
     $('#cs-explain-overlay, #cs-explain-modal').show();
 }
 
@@ -585,7 +622,7 @@ window.csS3Explain = function () {
     setTimeout(function () { $('#cs-explain-modal').css('max-width', '620px'); }, 0);
     csShowExplain('AWS S3 Remote Backup',
         '<p>After every local backup, the most recent zip is automatically copied to your S3 bucket. Requires AWS CLI on the server with <code>s3:PutObject</code>, <code>s3:ListBucket</code>, and <code>s3:DeleteObject</code> permissions.</p>' +
-        '<p><strong>Bucket</strong> — bucket name only (no <code>s3://</code>). <strong>Path prefix</strong> — optional subfolder, e.g. <code>backups/prod/</code>. Leave blank for bucket root.</p>' +
+        '<p><strong>[Enter Bucket Name]</strong> — bucket name only (no <code>s3://</code>). <strong>[Enter Path Prefix]</strong> — optional subfolder, e.g. <code>backups/prod/</code>. Leave blank for bucket root.</p>' +
         '<hr style="margin:10px 0;border:none;border-top:1px solid #e0e0e0;">' +
         '<p><strong>Buttons:</strong></p>' +
         '<ul style="margin:4px 0 10px 18px;padding:0;">' +
@@ -751,8 +788,8 @@ window.csAmiExplain = function () {
         hr() +
         h('Step 3 — Configure this plugin') +
         '<ol style="margin:0 0 10px 18px;padding:0;font-size:0.88rem;">' +
-        '<li>Set an <strong>AMI name prefix</strong> (e.g. <code>prod-web01</code>)</li>' +
-        '<li>Set a <strong>Region override</strong> if the detected region is wrong (e.g. <code>af-south-1</code>)</li>' +
+        '<li>Enter an AMI name prefix in <strong>[Enter Name Prefix]</strong> (e.g. <code>prod-web01</code>)</li>' +
+        '<li>If the detected region is wrong, enter it in <strong>[Enter Region Override]</strong> (e.g. <code>af-south-1</code>)</li>' +
         '<li>Click <strong>Save AMI Settings</strong></li>' +
         '<li>Click <strong>Create AMI Now</strong> to test — status shows <em>pending</em> then <em>available</em> after 5–15 min</li>' +
         '</ol>' +
@@ -1087,7 +1124,7 @@ window.csGDriveExplain = function () {
 
         hr() +
         h('Step 8 — Save settings here') +
-        note('Enter <code>gdrive</code> as the remote name, <code>cloudscale-backups/</code> as the destination folder, click <em>Save Drive Settings</em>, then <em>Test Connection</em>.')
+        note('Enter your rclone remote name in the <em>[Enter Remote Name]</em> field (e.g. <code>gdrive</code>), enter a destination folder in <em>[Enter Folder Path]</em> (e.g. <code>cloudscale-backups/</code>), click <em>Save Drive Settings</em>, then <em>Test Connection</em>.')
     );
 };
 
@@ -1931,13 +1968,28 @@ window.csDropboxExplain = function () {
         hr() +
         h('Step 3 — Run the setup wizard as apache') +
         cmd('sudo -u apache rclone config') +
-        '<p style="margin:0 0 8px;">When prompted: choose <strong>n</strong> (New remote), enter a name (e.g. <code>dropbox</code>), choose <strong>Dropbox</strong> from the provider list.</p>' +
-        '<p style="margin:0 0 8px;">If the server has no browser, use a laptop to run:</p>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:6px 0 10px;">' +
+        '<thead><tr>' +
+        '<th style="text-align:left;padding:4px 8px;background:#f5f5f5;border:1px solid #e0e0e0;width:55%;">Prompt</th>' +
+        '<th style="text-align:left;padding:4px 8px;background:#f5f5f5;border:1px solid #e0e0e0;">Type this</th>' +
+        '</tr></thead><tbody>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">e/n/d/r/c/s/q&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>n</code> (New remote)</td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">name&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>dropbox</code></td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">Storage&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>15</code> (Dropbox)</td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">client_id&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;">Enter (leave blank)</td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">client_secret&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;">Enter (leave blank)</td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">Edit advanced config?</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>n</code></td></tr>' +
+        '<tr style="background:#fff8e1;"><td style="padding:4px 8px;border:1px solid #e0e0e0;">Use web browser to automatically authenticate? / Use auto config?</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>n</code> — server has no browser</td></tr>' +
+        '<tr style="background:#fff8e1;"><td style="padding:4px 8px;border:1px solid #e0e0e0;">config_token&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;">Paste token from laptop (see below)</td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">Keep this "dropbox" remote? y/e/d&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>y</code></td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">e/n/d/r/c/s/q&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>q</code> (Quit)</td></tr>' +
+        '</tbody></table>' +
+        '<p style="margin:0 0 6px;">For the highlighted <strong>config_token&gt;</strong> step, run this on your <strong>laptop</strong>:</p>' +
         cmd('rclone authorize "dropbox"') +
-        '<p style="margin:0 0 8px;">Then paste the token back into the server when prompted. Confirm with <strong>y</strong> when asked "Use auto config?" → <strong>n</strong>, then paste. Finish the wizard.</p>' +
+        '<p style="margin:0 0 8px;">A browser window opens — log in and authorise Dropbox. The browser shows <strong>"Success! All done. Please go back to rclone."</strong> Rclone prints a long token like <code>{"access_token":"..."}</code> — copy the entire thing and paste it at the <strong>config_token&gt;</strong> prompt on the server.</p>' +
         hr() +
         h('Step 4 — Enter remote name above and save') +
-        '<p style="margin:0 0 8px;">Set the rclone remote name (e.g. <code>dropbox</code>) and destination folder, then click <strong>Save Dropbox Settings</strong> and <strong>Test Connection</strong>.</p>' +
+        '<p style="margin:0 0 8px;">Enter your remote name in <strong>[Enter Remote Name]</strong> (e.g. <code>dropbox</code>) and a destination folder in <strong>[Enter Folder Path]</strong> (e.g. <code>cloudscale-backups/</code>), then click <strong>Save Dropbox Settings</strong> and <strong>Test Connection</strong>.</p>' +
         '<p style="margin:0;font-size:0.85rem;color:#555;">Full documentation: <a href="https://rclone.org/dropbox/" target="_blank" rel="noopener">rclone.org/dropbox</a></p>'
     );
 };
