@@ -560,12 +560,13 @@ window.csCloudScheduleExplain = function () {
         '<p><strong>Cloud Backup Delay</strong> — how many minutes after the local backup finishes before the cloud tasks run. Set this long enough for your local backup to complete (default 30 min).</p>' +
         '<p><strong>Include in cloud backup</strong> — choose which destinations are used on each scheduled run:</p>' +
         '<ul style="margin:6px 0 10px 18px;padding:0;">' +
-        '<li><strong>EC2 AMI Snapshot</strong> — creates a full disk-level image of this server in AWS.</li>' +
-        '<li><strong>S3 Remote Backup</strong> — copies the latest local backup zip to your S3 bucket.</li>' +
-        '<li><strong>Google Drive Backup</strong> — copies the latest local backup zip to Google Drive via rclone.</li>' +
+        '<li><strong>EC2 AMI Snapshot</strong> — creates a full disk-level image of this server in AWS. Requires AWS CLI and an IAM role (see EC2 AMI Explain for setup).</li>' +
+        '<li><strong>S3 Remote Backup</strong> — copies the latest local backup zip to your S3 bucket. Requires AWS CLI and a configured bucket.</li>' +
+        '<li><strong>Google Drive Backup</strong> — copies the latest local backup zip to Google Drive via rclone. Requires rclone and a configured Drive remote.</li>' +
+        '<li><strong>Dropbox Backup (Beta)</strong> — copies the latest local backup zip to Dropbox via rclone. Requires rclone and a configured Dropbox remote (see Dropbox Explain for setup).</li>' +
         '</ul>' +
-        '<p><strong>Max Cloud Backups to Keep</strong> — the maximum number of backups retained across S3 and Google Drive (and AMIs in AWS). Once the limit is reached the oldest is automatically deleted. <strong>Golden Images</strong> are excluded from this count and are never deleted automatically — they always survive regardless of this setting.</p>' +
-        '<p>Order of execution: AMI snapshot first, then S3 sync, then Google Drive sync. Runs via WP-Cron.</p>'
+        '<p><strong>Max Cloud Backups to Keep</strong> — the maximum number of backups retained across S3, Google Drive, Dropbox, and AMIs. Once the limit is reached the oldest is automatically deleted. <strong>Golden Images</strong> are excluded and never auto-deleted.</p>' +
+        '<p>Order of execution: AMI snapshot first, then S3, then Google Drive, then Dropbox. Runs via WP-Cron.</p>'
     );
 };
 
