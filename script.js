@@ -1,4 +1,4 @@
-/* CloudScale Free Backup & Restore — Admin Script v3.2.82 */
+/* CloudScale Free Backup & Restore — Admin Script v3.3.0 */
 jQuery(function ($) {
     'use strict';
 
@@ -68,25 +68,60 @@ jQuery(function ($) {
             $('.cs-tab-panel').hide();
             $('#cs-tab-' + tab).show();
             try { localStorage.setItem(STORAGE_KEY, tab); } catch(e) { /* localStorage unavailable — silently ignored */ }
-            // Auto-populate history tables the first time the Cloud tab is shown
-            if (tab === 'cloud' && !cloudAutoRefreshDone) {
-                cloudAutoRefreshDone = true;
-                setTimeout(function () {
-                    if (document.getElementById('cs-s3h-refresh-btn') &&
-                        document.querySelectorAll('#cs-s3h-tbody tr').length === 0) {
-                        if (window.csS3HistoryRefresh) csS3HistoryRefresh();
-                    }
-                    if (document.getElementById('cs-gd-refresh-btn') &&
-                        document.querySelectorAll('#cs-gd-tbody tr').length === 0) {
-                        if (window.csGDriveHistoryRefresh) csGDriveHistoryRefresh();
-                    }
-                }, 300);
-            }
+            // History panel is always visible (below tabs) — no auto-refresh here
         }
         var saved = 'local';
         try { saved = localStorage.getItem(STORAGE_KEY) || 'local'; } catch(e) { /* localStorage unavailable — silently ignored */ }
         switchTab(saved);
         $('.cs-tab').on('click', function () { switchTab($(this).data('tab')); });
+    })();
+
+    // ================================================================
+    // Unified Backup History panel — provider dropdown switcher
+    // ================================================================
+
+    (function () {
+        var HIST_KEY = 'cs_history_source';
+        var providers = ['s3', 'gdrive', 'dropbox', 'ami'];
+        var histAutoRefreshed = {};
+
+        function switchHistoryPane(src) {
+            providers.forEach(function (p) {
+                var pane = document.getElementById('cs-hist-pane-' + p);
+                var act  = document.getElementById('cs-hist-act-' + p);
+                if (pane) pane.style.display = (p === src) ? '' : 'none';
+                if (act)  act.style.display  = (p === src) ? 'flex' : 'none';
+            });
+            var sel = document.getElementById('cs-history-source');
+            if (sel && sel.value !== src) sel.value = src;
+            try { localStorage.setItem(HIST_KEY, src); } catch(e) { /* localStorage unavailable */ }
+
+            // Auto-populate cloud panes the first time they are shown (if empty)
+            if (!histAutoRefreshed[src]) {
+                histAutoRefreshed[src] = true;
+                setTimeout(function () {
+                    if (src === 's3' && document.querySelectorAll('#cs-s3h-tbody tr').length === 0) {
+                        if (window.csS3HistoryRefresh) csS3HistoryRefresh();
+                    }
+                    if (src === 'gdrive' && document.querySelectorAll('#cs-gd-tbody tr').length === 0) {
+                        if (window.csGDriveHistoryRefresh) csGDriveHistoryRefresh();
+                    }
+                    if (src === 'dropbox' && document.querySelectorAll('#cs-db-tbody tr').length === 0) {
+                        if (window.csDropboxHistoryRefresh) csDropboxHistoryRefresh();
+                    }
+                }, 300);
+            }
+        }
+
+        var savedSrc = 's3';
+        try { savedSrc = localStorage.getItem(HIST_KEY) || 's3'; } catch(e) { /* localStorage unavailable */ }
+        if (savedSrc === 'local') savedSrc = 's3'; // local option removed
+        switchHistoryPane(savedSrc);
+
+        var sel = document.getElementById('cs-history-source');
+        if (sel) {
+            sel.addEventListener('change', function () { switchHistoryPane(this.value); });
+        }
     })();
 
     // ================================================================
@@ -501,6 +536,9 @@ function csShowExplain(title, body) {
             $('#cs-explain-overlay, #cs-explain-modal').hide();
         });
     }
+    // Reset width and scroll on every open so each modal starts clean
+    $('#cs-explain-modal').css('max-width', '540px');
+    $('#cs-explain-body').css({'max-height': '65vh', 'overflow-y': 'auto', 'padding-right': '6px'});
     $('#cs-explain-title').text(title);
     $('#cs-explain-body').html(body);
     $('#cs-explain-overlay, #cs-explain-modal').show();
@@ -624,9 +662,10 @@ var $msg = $('#cs-cloud-schedule-msg');
             cloud_schedule_enabled: $('#cs-cloud-schedule-enabled').is(':checked') ? '1' : '0',
             ami_schedule_days:      daysStr,
             cloud_backup_delay:     delay,
-            ami_sync_enabled:       $('#cs-cloud-ami-enabled').is(':checked')    ? '1' : '0',
-            s3_sync_enabled:        $('#cs-cloud-s3-enabled').is(':checked')     ? '1' : '0',
-            gdrive_sync_enabled:    $('#cs-cloud-gdrive-enabled').is(':checked') ? '1' : '0',
+            ami_sync_enabled:       $('#cs-cloud-ami-enabled').is(':checked')      ? '1' : '0',
+            s3_sync_enabled:        $('#cs-cloud-s3-enabled').is(':checked')       ? '1' : '0',
+            gdrive_sync_enabled:    $('#cs-cloud-gdrive-enabled').is(':checked')   ? '1' : '0',
+            dropbox_sync_enabled:   $('#cs-cloud-dropbox-enabled').is(':checked')  ? '1' : '0',
             cloud_max:              parseInt($('#cs-ami-max').val() || '10', 10),
         },
         success: function (res) {
@@ -641,17 +680,61 @@ var $msg = $('#cs-cloud-schedule-msg');
 };
 
 window.csAmiExplain = function () {
-    csShowExplain('EC2 AMI Snapshot',
-        '<p>Creates a full Amazon Machine Image (AMI) of this EC2 instance — a disk-level snapshot of the entire server including OS, web server config, PHP, and all files. Unlike a file backup (database + uploads only), an AMI is the safest recovery option if the server itself becomes unrecoverable.</p>' +
-        '<p><strong>Requirements:</strong> AWS CLI with IAM permissions: <code>ec2:CreateImage</code>, <code>ec2:DescribeImages</code>, <code>ec2:DeregisterImage</code>, <code>ec2:CreateReplaceRootVolumeTask</code>, <code>ec2:RebootInstances</code>.</p>' +
-        '<p>Creation is asynchronous — the plugin polls AWS every 10 minutes and updates status. Old AMIs beyond the limit are deregistered automatically. ⚠ Creation reboots the instance by default — schedule during low-traffic hours.</p>' +
-        '<hr style="margin:12px 0;border:none;border-top:1px solid #e0e0e0;">' +
+    setTimeout(function () {
+        var $ = window.jQuery;
+        $('#cs-explain-modal').css('max-width', '680px');
+        $('#cs-explain-body').css({'max-height': '65vh', 'overflow-y': 'auto', 'padding-right': '6px'});
+    }, 10);
+
+    function cmd(text) {
+        return '<code style="display:block;background:#1e1e1e;color:#d4d4d4;padding:8px 12px;border-radius:4px;margin:4px 0 10px;font-size:0.82rem;white-space:pre;">' + text + '</code>';
+    }
+    function h(text) { return '<p style="margin:14px 0 4px;font-weight:700;font-size:0.93rem;">' + text + '</p>'; }
+    function hr() { return '<hr style="margin:12px 0;border:none;border-top:1px solid #e0e0e0;">'; }
+
+    csShowExplain('EC2 AMI Snapshot — Setup Guide',
+        '<p>Creates a full Amazon Machine Image (AMI) of this EC2 instance — a disk-level snapshot of the entire server including OS, web server config, PHP, and all files. Unlike a file backup, an AMI lets you recover an unbootable or completely broken server.</p>' +
+
+        hr() +
+        h('Step 1 — Install the AWS CLI on the server') +
+        '<p style="margin:0 0 6px;font-size:0.88rem;color:#555;">SSH into the server and run the appropriate command for your OS:</p>' +
+        '<p style="margin:0 0 2px;font-size:0.85rem;font-weight:600;">Amazon Linux 2023 / Amazon Linux 2:</p>' +
+        cmd('sudo dnf install -y awscli\n# or on older AL2:\nsudo yum install -y awscli') +
+        '<p style="margin:0 0 2px;font-size:0.85rem;font-weight:600;">Ubuntu / Debian:</p>' +
+        cmd('curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o awscliv2.zip\n# (use x86_64 if not ARM)\nunzip awscliv2.zip && sudo ./aws/install') +
+        '<p style="margin:0 0 2px;font-size:0.85rem;font-weight:600;">Verify installation:</p>' +
+        cmd('aws --version') +
+
+        hr() +
+        h('Step 2 — Grant the EC2 instance an IAM role') +
+        '<p style="margin:0 0 8px;font-size:0.88rem;color:#555;">The recommended approach is an <strong>IAM instance role</strong> — no credentials stored on disk.</p>' +
+        '<ol style="margin:0 0 10px 18px;padding:0;font-size:0.88rem;">' +
+        '<li>In the AWS console go to <strong>IAM → Roles → Create role</strong></li>' +
+        '<li>Trusted entity: <strong>AWS service → EC2</strong></li>' +
+        '<li>Create a new inline policy with these permissions:<br>' +
+        '<code style="font-size:0.8rem;">ec2:CreateImage, ec2:DescribeImages, ec2:DeregisterImage,<br>ec2:CreateReplaceRootVolumeTask, ec2:RebootInstances</code></li>' +
+        '<li>Attach the role to your EC2 instance: <strong>EC2 console → Instance → Actions → Security → Modify IAM role</strong></li>' +
+        '</ol>' +
+        '<p style="margin:0 0 8px;font-size:0.88rem;color:#555;">Verify the role is working:</p>' +
+        cmd('aws sts get-caller-identity') +
+
+        hr() +
+        h('Step 3 — Configure this plugin') +
+        '<p style="margin:0 0 8px;font-size:0.88rem;color:#555;">Back in the EC2 AMI Snapshot card:</p>' +
+        '<ol style="margin:0 0 10px 18px;padding:0;font-size:0.88rem;">' +
+        '<li>Set an <strong>AMI name prefix</strong> (e.g. <code>prod-web01</code>)</li>' +
+        '<li>Set a <strong>Region override</strong> if the auto-detected region is wrong</li>' +
+        '<li>Click <strong>Save AMI Settings</strong></li>' +
+        '<li>Click <strong>Create AMI Now</strong> to test — status will update to <em>available</em> after ~5-15 minutes</li>' +
+        '</ol>' +
+
+        hr() +
         '<p><strong>Snapshot table actions:</strong></p>' +
-        '<ul style="margin:4px 0 8px 18px;padding:0;">' +
-        '<li><strong>Tag (Edit)</strong> — attach a free-text label to any snapshot, e.g. "pre-upgrade".</li>' +
-        '<li><strong>&#11088; Golden Image</strong> — mark up to 4 AMIs as permanently protected. Golden images are never auto-deleted and do not count towards <em>Max Cloud Backups to Keep</em>.</li>' +
-        '<li><strong>Refresh (&#8635;)</strong> — re-queries AWS for the current state of that AMI (pending → available).</li>' +
-        '<li><strong>Restore</strong> — triggers an EC2 replace-root-volume-task. <strong>All changes since the snapshot will be permanently lost</strong> and the server will reboot. Requires explicit checkbox confirmation.</li>' +
+        '<ul style="margin:4px 0 8px 18px;padding:0;font-size:0.88rem;">' +
+        '<li><strong>Tag (Edit)</strong> — attach a free-text label, e.g. "pre-upgrade".</li>' +
+        '<li><strong>&#11088; Golden Image</strong> — permanently protected, never auto-deleted, does not count towards the max limit.</li>' +
+        '<li><strong>Refresh (&#8635;)</strong> — re-queries AWS for current state (pending → available).</li>' +
+        '<li><strong>Restore</strong> — replaces the root volume. <strong>All changes since snapshot are permanently lost.</strong> Server reboots.</li>' +
         '<li><strong>&#128465; Delete</strong> — deregisters the AMI from AWS.</li>' +
         '</ul>'
     );
@@ -1732,6 +1815,257 @@ window.csGDriveHistoryDelete = function (filename) {
             if (cEl) { var m = cEl.innerHTML.match(/^(\d+)/); if (m) cEl.innerHTML = cEl.innerHTML.replace(/^\d+/, Math.max(0, parseInt(m[1], 10) - 1)); }
         } else {
             csGDriveHMsg('\u2717 ' + (res.data || 'Delete failed'), false);
+        }
+    });
+};
+
+// ================================================================
+// Dropbox — settings card helpers
+// ================================================================
+
+function csDropboxMsg(text, ok) {
+    var el = document.getElementById('cs-dropbox-msg');
+    if (el) { el.textContent = text; el.style.color = ok ? '#2e7d32' : '#c62828'; }
+}
+
+function csDropboxPost(action, extra, onDone) {
+    csGDrivePost(action, extra, onDone); // reuse transport (same AJAX endpoint pattern)
+}
+
+window.csDropboxExplain = function () {
+    var $ = window.jQuery;
+    setTimeout(function () {
+        $('#cs-explain-modal').css('max-width', '640px');
+        $('#cs-explain-body').css({'max-height': '65vh', 'overflow-y': 'auto', 'padding-right': '6px'});
+    }, 10);
+    function cmd(text) {
+        return '<code style="display:block;background:#1e1e1e;color:#d4d4d4;padding:8px 12px;border-radius:4px;margin:4px 0 10px;font-size:0.82rem;white-space:pre;">' + text + '</code>';
+    }
+    function h(text) { return '<p style="margin:14px 0 4px;font-weight:700;font-size:0.93rem;">' + text + '</p>'; }
+    function hr() { return '<hr style="margin:12px 0;border:none;border-top:1px solid #e0e0e0;">'; }
+    csShowExplain('Dropbox Backup — Setup Guide',
+        '<p style="margin:0 0 8px;">After every local backup, the most recent backup zip is automatically copied to your Dropbox via <strong>rclone</strong>. This uses the same rclone tool as Google Drive — if you already have rclone installed you just need to add a Dropbox remote.</p>' +
+        hr() +
+        h('Step 1 — Install rclone (if not already installed)') +
+        cmd('curl -fsSL https://rclone.org/install.sh | sudo bash') +
+        hr() +
+        h('Step 2 — Fix apache home directory permissions') +
+        cmd('sudo mkdir -p /usr/share/httpd/.config/rclone\nsudo chown -R apache:apache /usr/share/httpd/.config\nsudo chmod 700 /usr/share/httpd/.config/rclone\nsudo chown apache:apache /usr/share/httpd\nsudo chmod 755 /usr/share/httpd') +
+        hr() +
+        h('Step 3 — Run the setup wizard as apache') +
+        cmd('sudo -u apache rclone config') +
+        '<p style="margin:0 0 8px;">When prompted: choose <strong>n</strong> (New remote), enter a name (e.g. <code>dropbox</code>), choose <strong>Dropbox</strong> from the provider list.</p>' +
+        '<p style="margin:0 0 8px;">If the server has no browser, use a laptop to run:</p>' +
+        cmd('rclone authorize "dropbox"') +
+        '<p style="margin:0 0 8px;">Then paste the token back into the server when prompted. Confirm with <strong>y</strong> when asked "Use auto config?" → <strong>n</strong>, then paste. Finish the wizard.</p>' +
+        hr() +
+        h('Step 4 — Enter remote name above and save') +
+        '<p style="margin:0 0 8px;">Set the rclone remote name (e.g. <code>dropbox</code>) and destination folder, then click <strong>Save Dropbox Settings</strong> and <strong>Test Connection</strong>.</p>' +
+        '<p style="margin:0;font-size:0.85rem;color:#555;">Full documentation: <a href="https://rclone.org/dropbox/" target="_blank" rel="noopener">rclone.org/dropbox</a></p>'
+    );
+};
+
+window.csDropboxSave = function () {
+    var remoteEl = document.getElementById('cs-dropbox-remote');
+    var pathEl   = document.getElementById('cs-dropbox-path');
+    if (!remoteEl || !pathEl) return;
+    var remote = remoteEl.value.trim();
+    var path   = pathEl.value.trim() || 'cloudscale-backups/';
+    csDropboxMsg('Saving\u2026', true);
+    csDropboxPost('cs_save_dropbox', 'remote=' + encodeURIComponent(remote) + '&path=' + encodeURIComponent(path),
+        function (res) { csDropboxMsg(res.success ? '\u2713 Saved' : '\u2717 ' + res.data, res.success); }
+    );
+};
+
+window.csDropboxTest = function () {
+    csDropboxMsg('Testing\u2026', true);
+    csDropboxPost('cs_test_dropbox', '', function (res) {
+        csDropboxMsg(res.success ? '\u2713 ' + res.data : '\u2717 ' + (res.data || 'Connection failed'), res.success);
+    });
+};
+
+window.csDropboxDiagnose = function () {
+    csShowExplain('Dropbox Diagnose',
+        '<p>Run <strong>Test Connection</strong> first. If it fails, check:</p>' +
+        '<ul style="margin:8px 0 0 18px;padding:0;">' +
+        '<li>rclone is installed: <code>which rclone</code></li>' +
+        '<li>A Dropbox remote exists: <code>sudo -u apache rclone listremotes</code></li>' +
+        '<li>The remote name matches what you entered above</li>' +
+        '<li>The apache user can write to the rclone config: <code>ls -la /usr/share/httpd/.config/rclone/</code></li>' +
+        '</ul>'
+    );
+};
+
+window.csDropboxSyncLatest = function () {
+    csDropboxMsg('Syncing latest local backup\u2026', true);
+    csDropboxPost('cs_sync_latest_dropbox', '', function (res) {
+        csDropboxMsg(res.success ? '\u2713 ' + res.data : '\u2717 ' + (res.data || 'Sync failed'), res.success);
+    });
+};
+
+// ================================================================
+// Dropbox — Backup History helpers
+// ================================================================
+
+function csDropboxHMsg(text, ok) {
+    var el = document.getElementById('cs-db-msg');
+    if (el) { el.textContent = text; el.style.color = ok ? '#2e7d32' : '#c62828'; }
+}
+
+function csDropboxHPost(action, extra, onDone) {
+    csGDrivePost(action, extra, onDone); // reuse transport
+}
+
+function csDropboxHUpdateGoldenCount() {
+    var el = document.getElementById('cs-db-golden-count');
+    if (!el) return;
+    var rows    = document.querySelectorAll('#cs-db-tbody tr');
+    var golden  = document.querySelectorAll('#cs-db-tbody tr.cs-row-golden').length;
+    var regular = rows.length - golden;
+    var m       = el.innerHTML.match(/\/\s*(\d+)\s*max/);
+    var max     = m ? m[1] : '?';
+    el.innerHTML = '\u2b50 ' + golden + ' / 4 golden&emsp;' + regular + ' / ' + max + ' max backups';
+}
+
+window.csDropboxHistoryRefresh = function () {
+    var $ = window.jQuery;
+    var btn = document.getElementById('cs-db-refresh-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Querying Dropbox\u2026'; }
+    csDropboxHMsg('Refreshing\u2026', true);
+    csDropboxHPost('cs_dropbox_refresh_history', '', function (res) {
+        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Sync from Dropbox'; }
+        if (!res.success) {
+            csDropboxHMsg('\u2717 ' + (res.data || 'Refresh failed'), false);
+            return;
+        }
+        var files = (res.data && res.data.files) ? res.data.files : (res.data || []);
+        var count = (res.data && res.data.count != null) ? res.data.count : files.length;
+        var cEl   = document.getElementById('cs-dropbox-count-val');
+        if (cEl) cEl.innerHTML = count + ' in Dropbox &nbsp;&middot;&nbsp; ' + cEl.innerHTML.replace(/.*·\s*/, '');
+        var tbody = document.getElementById('cs-db-tbody');
+        if (!tbody) {
+            csDropboxHMsg('\u2713 Done — reloading\u2026', true);
+            setTimeout(function () { location.reload(); }, 1200);
+            return;
+        }
+        tbody.innerHTML = '';
+        files.forEach(function (dbf) {
+            var name      = dbf.name || '';
+            var keyE      = name.replace(/[^a-zA-Z0-9_\-]/g, '_');
+            var nameJs    = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            var tag       = dbf.tag || '';
+            var tagJs     = tag.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            var isGolden  = !!dbf.golden;
+            var goldenD   = isGolden ? '1' : '0';
+            var goldenSt  = isGolden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '';
+            var goldenTit = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+            var dlUrl     = CS.admin_post_url + '?action=cs_dropbox_download&file=' + encodeURIComponent(name) + '&nonce=' + CS.nonce;
+            var tr = document.createElement('tr');
+            tr.id = 'cs-db-row-' + keyE;
+            if (isGolden) { tr.className = 'cs-row-golden'; tr.style.background = 'linear-gradient(90deg,#fff8e1 0%,#fff 80%)'; tr.style.borderLeft = '3px solid #f9a825'; }
+            tr.innerHTML =
+                '<td>' + $('<span>').text(name).html() + '<span class="cs-db-golden-star"' + (isGolden ? '' : ' style="display:none;"') + '> &#11088;</span></td>' +
+                '<td id="cs-db-tag-cell-' + keyE + '" style="white-space:nowrap;">' +
+                    '<span class="cs-db-tag-text">' + (tag ? $('<span>').text(tag).html() : '<span class="cs-muted-text">No tag</span>') + '</span> ' +
+                    '<button type="button" onclick="csDropboxHistoryTagEdit(\'' + nameJs + '\',\'' + tagJs + '\')" class="button button-small" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;">Edit</button>' +
+                '</td>' +
+                '<td>' + $('<span>').text(dbf.size_fmt || '\u2014').html() + '</td>' +
+                '<td>' + $('<span>').text(dbf.date_fmt || (dbf.time ? new Date(dbf.time * 1000).toLocaleDateString() : '\u2014')).html() + '</td>' +
+                '<td id="cs-db-actions-' + keyE + '" style="white-space:nowrap;vertical-align:middle;">' +
+                    '<button type="button" onclick="csDropboxHistorySetGolden(\'' + nameJs + '\')" class="button button-small" id="cs-db-golden-btn-' + keyE + '" data-golden="' + goldenD + '" title="' + goldenTit + '" style="min-width:0;padding:2px 6px;margin-bottom:3px;' + goldenSt + '">&#11088;</button> ' +
+                    '<a href="' + dlUrl + '" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; Download</a> ' +
+                    '<button type="button" onclick="csDropboxHistoryDelete(\'' + nameJs + '\')" class="button button-small" title="Delete from Dropbox" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>' +
+                '</td>';
+            tbody.appendChild(tr);
+        });
+        csDropboxHMsg('\u2713 ' + files.length + ' file' + (files.length !== 1 ? 's' : '') + ' found', true);
+        csDropboxHUpdateGoldenCount();
+    });
+};
+
+window.csDropboxHistoryTagEdit = function (filename, currentTag) {
+    var $ = window.jQuery;
+    var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    var cell = document.getElementById('cs-db-tag-cell-' + keyE);
+    if (!cell) return;
+    var saved = cell.innerHTML;
+    cell.innerHTML =
+        '<input type="text" value="' + $('<span>').text(currentTag).html() + '" ' +
+        'style="width:90px;font-size:0.8rem;padding:1px 4px;vertical-align:middle;" maxlength="40"> ' +
+        '<button type="button" class="button button-small" style="padding:1px 6px;font-size:0.78rem;">Save</button> ' +
+        '<button type="button" class="button button-small" style="padding:1px 6px;font-size:0.78rem;">\u00d7</button>';
+    var btns      = cell.querySelectorAll('button');
+    var inp       = cell.querySelector('input');
+    var saveBtn   = btns[0];
+    var cancelBtn = btns[1];
+    if (inp) inp.focus();
+    cancelBtn.addEventListener('click', function () { cell.innerHTML = saved; });
+    var filenameJs = filename.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    var doSave = function () {
+        var tag = inp ? inp.value.trim().substring(0, 40) : '';
+        csDropboxHPost('cs_dropbox_set_tag', 'filename=' + encodeURIComponent(filename) + '&tag=' + encodeURIComponent(tag), function (res) {
+            if (res.success) {
+                var tagJs = tag.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                cell.innerHTML =
+                    '<span class="cs-db-tag-text">' + (tag ? $('<span>').text(tag).html() : '<span class="cs-muted-text">No tag</span>') + '</span> ' +
+                    '<button type="button" onclick="csDropboxHistoryTagEdit(\'' + filenameJs + '\',\'' + tagJs + '\')" class="button button-small" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;">Edit</button>';
+                csDropboxHMsg('\u2713 Tag saved', true);
+            } else {
+                cell.innerHTML = saved;
+                csDropboxHMsg('\u2717 ' + (res.data || 'Save failed'), false);
+            }
+        });
+    };
+    saveBtn.addEventListener('click', doSave);
+    if (inp) {
+        inp.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter')  { doSave(); }
+            if (e.key === 'Escape') { cell.innerHTML = saved; }
+        });
+    }
+};
+
+window.csDropboxHistorySetGolden = function (filename) {
+    var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    csDropboxHPost('cs_dropbox_set_golden', 'filename=' + encodeURIComponent(filename), function (res) {
+        if (res.success) {
+            var isGolden = !!(res.data && res.data.golden);
+            var btn = document.getElementById('cs-db-golden-btn-' + keyE);
+            if (btn) {
+                btn.dataset.golden    = isGolden ? '1' : '0';
+                btn.title             = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+                btn.style.color       = isGolden ? '#f57f17' : '';
+                btn.style.borderColor = isGolden ? '#f57f17' : '';
+                btn.style.fontWeight  = isGolden ? '700' : '';
+            }
+            var row = document.getElementById('cs-db-row-' + keyE);
+            if (row) {
+                row.classList.toggle('cs-row-golden', isGolden);
+                var star = row.querySelector('.cs-db-golden-star');
+                if (star) star.style.display = isGolden ? '' : 'none';
+            }
+            csDropboxHUpdateGoldenCount();
+            csDropboxHMsg(isGolden ? '&#11088; Marked as golden image' : 'Golden image removed', true);
+        } else {
+            csDropboxHMsg('\u2717 ' + (res.data || 'Failed'), false);
+        }
+    });
+};
+
+window.csDropboxHistoryDelete = function (filename) {
+    if (!confirm('Delete from Dropbox?\n\n' + filename + '\n\nThis cannot be undone.')) return;
+    var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    csDropboxHMsg('Deleting\u2026', true);
+    csDropboxHPost('cs_dropbox_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
+        if (res.success) {
+            csDropboxHMsg('\u2713 Deleted', true);
+            var row = document.getElementById('cs-db-row-' + keyE);
+            if (row) row.remove();
+            csDropboxHUpdateGoldenCount();
+            var cEl = document.getElementById('cs-dropbox-count-val');
+            if (cEl) { var m = cEl.innerHTML.match(/^(\d+)/); if (m) cEl.innerHTML = cEl.innerHTML.replace(/^\d+/, Math.max(0, parseInt(m[1], 10) - 1)); }
+        } else {
+            csDropboxHMsg('\u2717 ' + (res.data || 'Delete failed'), false);
         }
     });
 };

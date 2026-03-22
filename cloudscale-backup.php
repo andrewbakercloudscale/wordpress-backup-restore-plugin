@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.82
+ * Version:           3.2.92
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.82');
+define('CS_BACKUP_VERSION',    '3.2.92');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -398,6 +398,15 @@ add_action('cs_scheduled_ami_backup', function () {
             cs_log('[CloudScale Backup] Scheduled GDrive sync: ' . basename($latest));
         }
     }
+
+    // 4. Dropbox sync of latest local backup zip
+    if (get_option('cs_dropbox_sync_enabled', false)) {
+        $latest = $latest ?? cs_get_latest_backup_path();
+        if ($latest) {
+            cs_sync_to_dropbox($latest);
+            cs_log('[CloudScale Backup] Scheduled Dropbox sync: ' . basename($latest));
+        }
+    }
 });
 
 // ============================================================
@@ -579,6 +588,50 @@ function cs_admin_page(): void {
         : null;
 
     $days_map = [1 => 'Mon', 2 => 'Tue', 3 => 'Wed', 4 => 'Thu', 5 => 'Fri', 6 => 'Sat', 7 => 'Sun'];
+    // Pre-compute cloud vars (needed by Run Backup section which now appears at the top of the page)
+    $aws_path = cs_find_aws();
+    $aws_ver  = $aws_path ? trim((string) shell_exec(escapeshellarg($aws_path) . ' --version 2>&1')) : '';
+    $s3_log    = (array) get_option('cs_s3_log', []);
+    $s3_synced = array_filter($s3_log, fn($e) => !empty($e['ok']));
+    $s3_last   = empty($s3_synced) ? null : max(array_column($s3_synced, 'time'));
+    $rclone_path = cs_find_rclone();
+    $rclone_ver  = $rclone_path ? trim((string) shell_exec(escapeshellarg($rclone_path) . ' version --no-check-update 2>&1 | head -1')) : '';
+    $gdrive_log    = (array) get_option('cs_gdrive_log', []);
+    $gdrive_synced = array_filter($gdrive_log, fn($e) => !empty($e['ok']));
+    $gdrive_last   = empty($gdrive_synced) ? null : max(array_column($gdrive_synced, 'time'));
+    $s3_remote_count     = get_option('cs_s3_remote_count', null);
+    $gdrive_remote_count = get_option('cs_gdrive_remote_count', null);
+    try {
+        $ami_instance_id = cs_get_instance_id();
+        $ami_region      = cs_get_instance_region();
+        $ami_log         = (array) get_option('cs_ami_log', []);
+        usort($ami_log, fn($a, $b) => ($b['time'] ?? 0) <=> ($a['time'] ?? 0));
+        $ami_log_recent  = $ami_log;
+    } catch (\Throwable $e) {
+        $ami_instance_id = '';
+        $ami_region      = '';
+        $ami_log         = [];
+        $ami_log_recent  = [];
+        cs_log('[CloudScale Backup] AMI panel init error: ' . $e->getMessage());
+    }
+    $ami_golden_count    = count( array_filter( $ami_log_recent, fn( $e ) => ! empty( $e['golden'] ) ) );
+    $ami_nongolden_count = count( array_filter( $ami_log_recent, fn( $e ) =>   empty( $e['golden'] ) ) );
+    $s3_history          = (array) get_option( 'cs_s3_history',     [] );
+    $s3_golden_count     = count( array_filter( $s3_history,     fn( $e ) => ! empty( $e['golden'] ) ) );
+    $s3_nongolden_count  = count( array_filter( $s3_history,     fn( $e ) =>   empty( $e['golden'] ) ) );
+    $gdrive_history      = (array) get_option( 'cs_gdrive_history', [] );
+    $gdrive_golden_count    = count( array_filter( $gdrive_history, fn( $e ) => ! empty( $e['golden'] ) ) );
+    $gdrive_nongolden_count = count( array_filter( $gdrive_history, fn( $e ) =>   empty( $e['golden'] ) ) );
+    $dropbox_remote          = get_option( 'cs_dropbox_remote', '' );
+    $dropbox_path            = get_option( 'cs_dropbox_path', 'cloudscale-backups/' );
+    $dropbox_sync_enabled    = (bool) get_option( 'cs_dropbox_sync_enabled', false );
+    $dropbox_log             = (array) get_option( 'cs_dropbox_log', [] );
+    $dropbox_synced          = array_filter( $dropbox_log, fn( $e ) => ! empty( $e['ok'] ) );
+    $dropbox_last            = empty( $dropbox_synced ) ? null : max( array_column( $dropbox_synced, 'time' ) );
+    $dropbox_remote_count    = get_option( 'cs_dropbox_remote_count', null );
+    $dropbox_history         = (array) get_option( 'cs_dropbox_history', [] );
+    $dropbox_golden_count    = count( array_filter( $dropbox_history, fn( $e ) => ! empty( $e['golden'] ) ) );
+    $dropbox_nongolden_count = count( array_filter( $dropbox_history, fn( $e ) =>   empty( $e['golden'] ) ) );
     ?>
     <div class="wrap cs-wrap">
 
@@ -586,17 +639,15 @@ function cs_admin_page(): void {
         <div class="cs-header">
             <div class="cs-header-title">
                 <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
-                    <h1 style="margin:0;">☁ <?php echo esc_html__( 'CloudScale Free Backup & Restore', 'cloudscale-free-backup-and-restore' ); ?></h1>
+                    <h1 style="margin:0;">&#9729; <?php echo esc_html__( 'CloudScale Free Backup &amp; Restore', 'cloudscale-free-backup-and-restore' ); ?></h1>
                     <span style="display:inline-block;background:#fff;color:#1565c0;font-size:0.95rem;font-weight:800;letter-spacing:0.04em;padding:3px 14px;border-radius:20px;font-family:monospace;line-height:1.6;flex-shrink:0;">v<?php echo esc_html( CS_BACKUP_VERSION ); ?></span>
                 </div>
                 <p class="cs-header-sub"><?php esc_html_e( 'Database · media · plugins · themes. No timeouts, no external services.', 'cloudscale-free-backup-and-restore' ); ?></p>
-                <p class="cs-header-free">✅ <?php esc_html_e( '100% free forever — no licence, no premium tier, no feature restrictions. Everything is included.', 'cloudscale-free-backup-and-restore' ); ?></p>
+                <p class="cs-header-free">&#9989; <?php esc_html_e( '100% free forever — no licence, no premium tier, no feature restrictions. Everything is included.', 'cloudscale-free-backup-and-restore' ); ?></p>
             </div>
             <div class="cs-header-status">
                 <?php if ($maint_active): ?>
-                    <span class="cs-badge cs-badge-warn">⚠ <?php esc_html_e( 'Maintenance Mode Active', 'cloudscale-free-backup-and-restore' ); ?></span>
-                <?php else: ?>
-                    <span class="cs-badge cs-badge-ok"><?php esc_html_e( 'Site Online', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    <span class="cs-badge cs-badge-warn">&#9888; <?php esc_html_e( 'Maintenance Mode Active', 'cloudscale-free-backup-and-restore' ); ?></span>
                 <?php endif; ?>
                 <a href="https://andrewbaker.ninja/wordpress-plugin-help/backup-restore-help/" target="_blank" rel="noopener" class="cs-header-help">? Help</a>
                 <a href="https://andrewbaker.ninja/2026/02/24/cloudscale-free-backup-and-restore-a-wordpress-backup-plugin-that-does-exactly-what-it-says/" target="_blank" rel="noopener" class="cs-header-blog"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ffcc80;box-shadow:0 0 5px #ffcc80;flex-shrink:0;"></span>andrewbaker.ninja</a>
@@ -619,45 +670,6 @@ function cs_admin_page(): void {
             <?php endif; ?>
         </div>
         <?php endif; ?>
-
-        <?php
-        // Pre-compute cloud vars (needed before CS_S3_DIAG/CS_GDRIVE_DIAG inline scripts in Manual Backup section)
-        $aws_path = cs_find_aws();
-        $aws_ver  = $aws_path ? trim((string) shell_exec(escapeshellarg($aws_path) . ' --version 2>&1')) : '';
-        $s3_log    = (array) get_option('cs_s3_log', []);
-        $s3_synced = array_filter($s3_log, fn($e) => !empty($e['ok']));
-        $s3_last   = empty($s3_synced) ? null : max(array_column($s3_synced, 'time'));
-        $rclone_path = cs_find_rclone();
-        $rclone_ver  = $rclone_path ? trim((string) shell_exec(escapeshellarg($rclone_path) . ' version --no-check-update 2>&1 | head -1')) : '';
-        $gdrive_log    = (array) get_option('cs_gdrive_log', []);
-        $gdrive_synced = array_filter($gdrive_log, fn($e) => !empty($e['ok']));
-        $gdrive_last   = empty($gdrive_synced) ? null : max(array_column($gdrive_synced, 'time'));
-        // Stored remote counts — updated by retention enforcement after each sync
-        $s3_remote_count     = get_option('cs_s3_remote_count', null);
-        $gdrive_remote_count = get_option('cs_gdrive_remote_count', null);
-        try {
-            $ami_instance_id = cs_get_instance_id();
-            $ami_region      = cs_get_instance_region();
-            $ami_log         = (array) get_option('cs_ami_log', []);
-            usort($ami_log, fn($a, $b) => ($b['time'] ?? 0) <=> ($a['time'] ?? 0));
-            $ami_log_recent  = $ami_log;
-        } catch (\Throwable $e) {
-            $ami_instance_id = '';
-            $ami_region      = '';
-            $ami_log         = [];
-            $ami_log_recent  = [];
-            cs_log('[CloudScale Backup] AMI panel init error: ' . $e->getMessage());
-        }
-        // Golden/non-golden counts feed the "⭐ X/4 golden  Y/max backups" counter spans.
-        $ami_golden_count    = count( array_filter( $ami_log_recent, fn( $e ) => ! empty( $e['golden'] ) ) );
-        $ami_nongolden_count = count( array_filter( $ami_log_recent, fn( $e ) =>   empty( $e['golden'] ) ) );
-        $s3_history          = (array) get_option( 'cs_s3_history',     [] );
-        $s3_golden_count     = count( array_filter( $s3_history,     fn( $e ) => ! empty( $e['golden'] ) ) );
-        $s3_nongolden_count  = count( array_filter( $s3_history,     fn( $e ) =>   empty( $e['golden'] ) ) );
-        $gdrive_history      = (array) get_option( 'cs_gdrive_history', [] );
-        $gdrive_golden_count    = count( array_filter( $gdrive_history, fn( $e ) => ! empty( $e['golden'] ) ) );
-        $gdrive_nongolden_count = count( array_filter( $gdrive_history, fn( $e ) =>   empty( $e['golden'] ) ) );
-        ?>
 
         <!-- ===================== TABS ===================== -->
         <div class="cs-tab-bar">
@@ -871,8 +883,6 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csAmiExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;"><?php esc_html_e( 'Explain…', 'cloudscale-free-backup-and-restore' ); ?></button>
                 </div>
 
-                <p class="cs-help">Create a full machine image (AMI) of this EC2 instance. The AMI name will be <code>{prefix}_yyyyMMdd_HHmm</code>. Requires AWS CLI with <code>ec2:CreateImage</code>, <code>ec2:DescribeImages</code>, <code>ec2:DeregisterImage</code> and <code>ec2:RebootInstances</code> permissions.</p>
-
                 <div class="cs-info-row">
                     <span>Instance ID</span>
                     <strong><?php
@@ -1066,7 +1076,7 @@ function cs_admin_page(): void {
         <!-- ===================== MANUAL BACKUP ===================== -->
         <div class="cs-section-ribbon"><span><?php esc_html_e( 'Manual Backup', 'cloudscale-free-backup-and-restore' ); ?></span></div>
         <div class="cs-card cs-card--orange cs-full">
-            <div class="cs-card-stripe cs-stripe--orange" style="background:linear-gradient(135deg,#e65100 0%,#f57c00 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">▶ <?php echo esc_html__( 'Run Backup Now', 'cloudscale-free-backup-and-restore' ); ?></h2><button type="button" onclick="csBackupExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;"><?php esc_html_e( 'Explain…', 'cloudscale-free-backup-and-restore' ); ?></button></div>
+            <div class="cs-card-stripe cs-stripe--orange" style="background:linear-gradient(135deg,#e65100 0%,#f57c00 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#9654; <?php echo esc_html__( 'Run Backup Now', 'cloudscale-free-backup-and-restore' ); ?></h2><button type="button" onclick="csBackupExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;"><?php esc_html_e( 'Explain…', 'cloudscale-free-backup-and-restore' ); ?></button></div>
             <?php
             // Pass sizes to JS for live total calculation
             $backup_sizes = [
@@ -1080,7 +1090,7 @@ function cs_admin_page(): void {
                 'wpconfig'  => $wpconfig_size,
                 'dropins'     => $dropins_size,
                 'free'        => $free_bytes !== false ? (int)$free_bytes : 0,
-                'latest'    => $latest_size,  // actual compressed size of last backup
+                'latest'    => $latest_size,
             ];
             wp_add_inline_script( 'cs-script', 'window.CS_BACKUP_SIZES = ' . wp_json_encode( $backup_sizes ) . ';', 'before' );
             $s3_diag = [
@@ -1109,7 +1119,6 @@ function cs_admin_page(): void {
                 <div class="cs-options-col">
                     <p class="cs-options-col-heading">Core</p>
                     <?php
-                    // Helper: checked if saved default exists for key, otherwise fall back to $fallback
                     $mc = function(string $key, bool $fallback) use ($md): string {
                         return ($md !== null ? in_array($key, $md, true) : $fallback) ? 'checked' : '';
                     };
@@ -1129,7 +1138,7 @@ function cs_admin_page(): void {
                     <label class="cs-option-label cs-option-sensitive">
                         <input type="checkbox" id="cs-include-wpconfig" <?php echo esc_attr( $mc('wpconfig', false) ); ?> data-size="<?php echo (int) $wpconfig_size; ?>">
                         wp-config.php <code><?php echo $wpconfig_size > 0 ? esc_html(cs_format_size($wpconfig_size)) : 'not found'; ?></code>
-                        <span class="cs-sensitive-badge">⚠ credentials</span>
+                        <span class="cs-sensitive-badge">&#9888; credentials</span>
                     </label>
                 </div>
                 <!-- Column 3: Summary + button + progress -->
@@ -1149,7 +1158,7 @@ function cs_admin_page(): void {
                             <span class="cs-summary-warn" id="cs-space-warn"></span>
                         </div>
                     </div>
-                    <button type="button" id="cs-run-backup" class="button button-primary cs-btn-lg">▶ <?php esc_html_e( 'Run Backup Now', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" id="cs-run-backup" class="button button-primary cs-btn-lg">&#9654; <?php esc_html_e( 'Run Backup Now', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <div style="margin-top:8px;">
                         <button type="button" id="cs-save-manual-defaults" class="button"><?php esc_html_e( 'Save as defaults', 'cloudscale-free-backup-and-restore' ); ?></button>
                         <span id="cs-manual-defaults-msg" style="margin-left:8px;font-size:0.82rem;font-weight:600;display:none;"></span>
@@ -1163,11 +1172,11 @@ function cs_admin_page(): void {
             </div>
         </div>
 
-        <!-- ===================== BACKUP HISTORY ===================== -->
+        <!-- ===================== LOCAL BACKUP HISTORY ===================== -->
         <div class="cs-section-ribbon"><span><?php esc_html_e( 'Backup History', 'cloudscale-free-backup-and-restore' ); ?></span></div>
         <div class="cs-card cs-card--teal cs-full">
-            <div class="cs-card-stripe cs-stripe--teal" style="background:linear-gradient(135deg,#004d40 0%,#00897b 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🕓 <?php echo esc_html__( 'Backup History', 'cloudscale-free-backup-and-restore' ); ?></h2><button type="button" onclick="csHistoryExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;"><?php esc_html_e( 'Explain…', 'cloudscale-free-backup-and-restore' ); ?></button></div>
-            <?php if (empty($backups)): ?>
+            <div class="cs-card-stripe cs-stripe--teal" style="background:linear-gradient(135deg,#004d40 0%,#00897b 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128339; <?php echo esc_html__( 'Local Backups', 'cloudscale-free-backup-and-restore' ); ?></h2><button type="button" onclick="csHistoryExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;"><?php esc_html_e( 'Explain…', 'cloudscale-free-backup-and-restore' ); ?></button></div>
+            <?php if ( empty( $backups ) ): ?>
                 <p class="cs-empty"><?php esc_html_e( 'No backups yet. Run your first backup above.', 'cloudscale-free-backup-and-restore' ); ?></p>
             <?php else: ?>
             <div class="cs-table-wrap">
@@ -1181,64 +1190,50 @@ function cs_admin_page(): void {
                         <th class="cs-col-meta"><?php esc_html_e( 'Created', 'cloudscale-free-backup-and-restore' ); ?></th>
                         <th class="cs-col-age"><?php esc_html_e( 'Age', 'cloudscale-free-backup-and-restore' ); ?></th>
                         <th class="cs-col-type"><?php esc_html_e( 'Type', 'cloudscale-free-backup-and-restore' ); ?></th>
-                        <?php if ($s3_bucket): ?><th class="cs-col-s3" style="width:36px!important;text-align:center;" title="<?php esc_attr_e( 'S3 sync status', 'cloudscale-free-backup-and-restore' ); ?>">S3</th><?php endif; ?>
+                        <?php if ( $s3_bucket ): ?><th class="cs-col-s3" style="width:36px!important;text-align:center;" title="<?php esc_attr_e( 'S3 sync status', 'cloudscale-free-backup-and-restore' ); ?>">S3</th><?php endif; ?>
                     </tr>
                 </thead>
                 <tbody>
                 <?php
-                $s3_log = (array) get_option('cs_s3_log', []);
-                foreach ($backups as $i => $b):
-                    $is_db  = str_contains($b['type'], 'DB') || $b['type'] === 'Full' || $b['type'] === 'Full+';
-                    $s3_entry = $s3_log[$b['name']] ?? null;
+                $s3_log = (array) get_option( 'cs_s3_log', [] );
+                foreach ( $backups as $i => $b ):
+                    $is_db    = str_contains( $b['type'], 'DB' ) || $b['type'] === 'Full' || $b['type'] === 'Full+';
+                    $s3_entry = $s3_log[ $b['name'] ] ?? null;
                 ?>
                     <tr class="<?php echo $i === 0 ? 'cs-row-latest' : ''; ?>" style="height:40px!important;max-height:40px!important;">
                         <td class="cs-col-actions cs-actions" style="width:72px!important;min-width:72px!important;max-width:72px!important;padding:4px 6px!important;vertical-align:middle!important;white-space:nowrap;">
-                            <a href="<?php echo esc_url(admin_url('admin-post.php?action=cs_download&file=' . urlencode($b['name']) . '&_wpnonce=' . wp_create_nonce('cs_download'))); ?>" class="cs-icon-btn cs-icon-btn--blue" title="Download">
+                            <a href="<?php echo esc_url( admin_url( 'admin-post.php?action=cs_download&file=' . urlencode( $b['name'] ) . '&_wpnonce=' . wp_create_nonce( 'cs_download' ) ) ); ?>" class="cs-icon-btn cs-icon-btn--blue" title="Download">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                             </a>
-                            <?php if ($is_db): ?>
-                            <button type="button" class="cs-icon-btn cs-icon-btn--green cs-restore-btn" data-file="<?php echo esc_attr($b['name']); ?>" data-date="<?php echo esc_attr($b['date']); ?>" title="Restore database">
+                            <?php if ( $is_db ): ?>
+                            <button type="button" class="cs-icon-btn cs-icon-btn--green cs-restore-btn" data-file="<?php echo esc_attr( $b['name'] ); ?>" data-date="<?php echo esc_attr( $b['date'] ); ?>" title="Restore database">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4"/></svg>
                             </button>
                             <?php endif; ?>
-                            <button type="button" class="cs-icon-btn cs-icon-btn--red cs-delete-btn" data-file="<?php echo esc_attr($b['name']); ?>" title="Delete backup">
+                            <button type="button" class="cs-icon-btn cs-icon-btn--red cs-delete-btn" data-file="<?php echo esc_attr( $b['name'] ); ?>" title="Delete backup">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
                             </button>
                         </td>
-                        <td class="cs-col-num cs-idx" style="padding:6px 8px!important;vertical-align:middle!important;white-space:nowrap;"><?php echo (int) ( $i + 1 ); ?><?php if ($i === 0) echo wp_kses( '&nbsp;<span class="cs-latest-badge">latest</span>', [ 'span' => [ 'class' => [] ] ] ); ?></td>
-                        <td class="cs-filename" style="padding:6px 8px!important;vertical-align:middle!important;" title="<?php echo esc_attr($b['name']); ?>"><?php echo esc_html($b['name']); ?></td>
-                        <td class="cs-col-size" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html(cs_format_size($b['size'])); ?></td>
-                        <td class="cs-col-meta cs-created" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html($b['date']); ?></td>
-                        <td class="cs-col-age cs-age" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html(cs_human_age($b['mtime'])); ?></td>
-                        <td class="cs-col-type" style="padding:6px 8px!important;vertical-align:middle!important;"><span class="cs-type-badge cs-type-<?php echo esc_attr(preg_replace('/[^a-z0-9]/', '', str_replace('+', 'plus', strtolower(explode(' ', $b['type'])[0])))); ?>"><?php echo esc_html($b['type']); ?></span></td>
-                        <?php if ($s3_bucket): ?>
+                        <td class="cs-col-num cs-idx" style="padding:6px 8px!important;vertical-align:middle!important;white-space:nowrap;"><?php echo (int) ( $i + 1 ); ?><?php if ( $i === 0 ) echo wp_kses( '&nbsp;<span class="cs-latest-badge">latest</span>', [ 'span' => [ 'class' => [] ] ] ); ?></td>
+                        <td class="cs-filename" style="padding:6px 8px!important;vertical-align:middle!important;" title="<?php echo esc_attr( $b['name'] ); ?>"><?php echo esc_html( $b['name'] ); ?></td>
+                        <td class="cs-col-size" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html( cs_format_size( $b['size'] ) ); ?></td>
+                        <td class="cs-col-meta cs-created" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html( $b['date'] ); ?></td>
+                        <td class="cs-col-age cs-age" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html( cs_human_age( $b['mtime'] ) ); ?></td>
+                        <td class="cs-col-type" style="padding:6px 8px!important;vertical-align:middle!important;"><span class="cs-type-badge cs-type-<?php echo esc_attr( preg_replace( '/[^a-z0-9]/', '', str_replace( '+', 'plus', strtolower( explode( ' ', $b['type'] )[0] ) ) ) ); ?>"><?php echo esc_html( $b['type'] ); ?></span></td>
+                        <?php if ( $s3_bucket ): ?>
                         <td style="text-align:center;padding:4px 6px!important;vertical-align:middle!important;min-width:48px;">
-                            <?php if (!$s3_entry): ?>
-                                <button type="button"
-                                        onclick="csS3SyncFile(this,'<?php echo esc_js($b['name']); ?>')"
-                                        class="button button-small"
-                                        style="font-size:10px;padding:1px 7px;height:auto;line-height:1.6;">
-                                    ↑ Sync
-                                </button>
-                            <?php elseif ($s3_entry['ok']): ?>
-                                <span title="Synced to S3 on <?php echo esc_attr(wp_date('j M Y H:i', $s3_entry['time'])); ?>" style="color:#2e7d32;font-size:16px;">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/></svg>
-                                </span>
-                            <?php elseif (!empty($s3_entry['retry_at']) && $s3_entry['retry_at'] > time()): ?>
-                                <?php $mins = max(1, (int) ceil(($s3_entry['retry_at'] - time()) / 60)); ?>
-                                <span style="color:#e65100;font-size:10px;" title="Sync failed — auto-retry in ~<?php echo (int) $mins; ?> min">
-                                    ⏱ ~<?php echo (int) $mins; ?>m
-                                </span>
+                            <?php if ( ! $s3_entry ): ?>
+                                <button type="button" onclick="csS3SyncFile(this,'<?php echo esc_js( $b['name'] ); ?>')" class="button button-small" style="font-size:10px;padding:1px 7px;height:auto;line-height:1.6;">&#8593; Sync</button>
+                            <?php elseif ( $s3_entry['ok'] ): ?>
+                                <span title="Synced to S3 on <?php echo esc_attr( wp_date( 'j M Y H:i', $s3_entry['time'] ) ); ?>" style="color:#2e7d32;font-size:16px;"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/></svg></span>
+                            <?php elseif ( ! empty( $s3_entry['retry_at'] ) && $s3_entry['retry_at'] > time() ): ?>
+                                <?php $mins = max( 1, (int) ceil( ( $s3_entry['retry_at'] - time() ) / 60 ) ); ?>
+                                <span style="color:#e65100;font-size:10px;" title="Sync failed — auto-retry in ~<?php echo (int) $mins; ?> min">&#8987; ~<?php echo (int) $mins; ?>m</span>
                             <?php else: ?>
                                 <div style="font-size:10px;color:#c62828;line-height:1.3;text-align:left;">
                                     <strong style="display:block;">&#10007; S3 failed</strong>
-                                    <span style="word-break:break-all;display:block;margin-bottom:3px;"><?php echo esc_html(substr($s3_entry['error'] ?? 'Unknown error', 0, 80)); ?></span>
-                                    <button type="button"
-                                            onclick="csS3SyncFile(this,'<?php echo esc_js($b['name']); ?>')"
-                                            class="button button-small"
-                                            style="font-size:10px;padding:1px 7px;height:auto;line-height:1.6;">
-                                        ↺ Retry
-                                    </button>
+                                    <span style="word-break:break-all;display:block;margin-bottom:3px;"><?php echo esc_html( substr( $s3_entry['error'] ?? 'Unknown error', 0, 80 ) ); ?></span>
+                                    <button type="button" onclick="csS3SyncFile(this,'<?php echo esc_js( $b['name'] ); ?>')" class="button button-small" style="font-size:10px;padding:1px 7px;height:auto;line-height:1.6;">&#8635; Retry</button>
                                 </div>
                             <?php endif; ?>
                         </td>
@@ -1247,10 +1242,10 @@ function cs_admin_page(): void {
                 <?php endforeach; ?>
                 </tbody>
             </table>
-            </div><!-- .cs-table-wrap -->
-            <p class="cs-help cs-mt">Showing <?php echo (int) count($backups); ?> backup(s). Retention limit: <?php echo (int) $retention; ?>. Oldest backups are removed automatically after each run.</p>
-            <?php endif; ?>
+            </div>
+            <p class="cs-help cs-mt">Showing <?php echo (int) count( $backups ); ?> backup(s). Retention limit: <?php echo (int) $retention; ?>. Oldest backups are removed automatically after each run.</p>
             <p class="cs-help" style="margin-top:6px;word-break:break-all;">&#128193; <?php esc_html_e( 'Stored at:', 'cloudscale-free-backup-and-restore' ); ?> <code id="cs-backup-path"><?php echo esc_html( CS_BACKUP_DIR ); ?></code> <button type="button" id="cs-copy-path" onclick="csCopyBackupPath()" style="margin-left:6px;padding:2px 8px;font-size:0.75rem;cursor:pointer;vertical-align:middle;" class="button button-small">Copy</button></p>
+            <?php endif; ?>
         </div>
 
         <!-- ===================== RESTORE FROM UPLOAD ===================== -->
@@ -1391,6 +1386,10 @@ function cs_admin_page(): void {
                                 <input type="checkbox" id="cs-cloud-gdrive-enabled" <?php checked($gdrive_sync_enabled); ?>>
                                 &#128196; Google Drive Backup
                             </label>
+                            <label class="cs-option-label" style="margin:0;">
+                                <input type="checkbox" id="cs-cloud-dropbox-enabled" <?php checked($dropbox_sync_enabled); ?>>
+                                &#128194; Dropbox Backup <span style="font-size:0.72rem;font-weight:600;background:#e3f2fd;color:#1565c0;padding:1px 6px;border-radius:8px;vertical-align:middle;">BETA</span>
+                            </label>
                         </div>
                         <p class="cs-help">Each destination must also be configured. AMI requires AWS CLI and a prefix in the EC2 settings below.</p>
                     </div>
@@ -1421,8 +1420,6 @@ function cs_admin_page(): void {
                     <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#9729; <?php echo esc_html__( 'S3 Remote Backup', 'cloudscale-free-backup-and-restore' ); ?></h2>
                     <button type="button" onclick="csS3Explain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;"><?php esc_html_e( 'Explain…', 'cloudscale-free-backup-and-restore' ); ?></button>
                 </div>
-
-                <p class="cs-help">After each local backup, the latest zip is automatically synced to your S3 bucket using the AWS CLI. You can also push the latest local backup to S3 manually at any time.</p>
 
                 <div class="cs-field-row cs-mt">
                     <label for="cs-s3-bucket"><strong>S3 Bucket name</strong></label>
@@ -1461,57 +1458,6 @@ function cs_admin_page(): void {
                 </div>
                 <?php endif; ?>
 
-                <hr style="border:none;border-top:1px solid #e0e0e0;margin:20px -20px 16px -20px;">
-                <p style="font-size:0.85rem;font-weight:700;margin:0 0 10px;color:#455a64;"><?php esc_html_e( 'Backup History', 'cloudscale-free-backup-and-restore' ); ?></p>
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-                    <button type="button" onclick="csS3HistoryRefresh()" class="button" id="cs-s3h-refresh-btn" style="background:#01579b!important;color:#fff!important;border-color:#01579b!important;">&#8635; <?php esc_html_e( 'Sync from S3', 'cloudscale-free-backup-and-restore' ); ?></button>
-                    <span id="cs-s3h-golden-count" style="font-size:0.82rem;color:#f57f17;font-weight:600;">&#11088; <?php echo (int) $s3_golden_count; ?> / 4 golden&emsp;<?php echo (int) $s3_nongolden_count; ?> / <?php echo (int) $ami_max; ?> <?php esc_html_e( 'max backups', 'cloudscale-free-backup-and-restore' ); ?></span>
-                    <span id="cs-s3h-msg" style="font-size:0.85rem;font-weight:600;"></span>
-                </div>
-                <p class="cs-help" style="margin:0 0 12px;"><?php esc_html_e( 'Queries S3 live — picks up all backups including ones made before this screen existed, and removes any you deleted directly in S3.', 'cloudscale-free-backup-and-restore' ); ?></p>
-                <?php if ( ! empty( $s3_history ) ): ?>
-                <div class="cs-table-wrap">
-                <table class="widefat cs-table" style="font-size:0.82rem;" id="cs-s3h-table">
-                    <thead>
-                        <tr>
-                            <th><?php esc_html_e( 'File Name', 'cloudscale-free-backup-and-restore' ); ?></th>
-                            <th style="width:120px;"><?php esc_html_e( 'Tag', 'cloudscale-free-backup-and-restore' ); ?></th>
-                            <th style="width:80px;"><?php esc_html_e( 'Size', 'cloudscale-free-backup-and-restore' ); ?></th>
-                            <th style="width:130px;"><?php esc_html_e( 'Created', 'cloudscale-free-backup-and-restore' ); ?></th>
-                            <th style="width:160px;"><?php esc_html_e( 'Actions', 'cloudscale-free-backup-and-restore' ); ?></th>
-                        </tr>
-                    </thead>
-                    <tbody id="cs-s3h-tbody">
-                    <?php foreach ( $s3_history as $sf_key => $sf ): ?>
-                        <?php
-                        $sf_name   = $sf['name'] ?? $sf_key;
-                        $sf_local  = file_exists( CS_BACKUP_DIR . $sf_name );
-                        $sf_golden = ! empty( $sf['golden'] );
-                        $sf_tag    = $sf['tag'] ?? '';
-                        $sf_key_e  = esc_attr( preg_replace( '/[^a-zA-Z0-9_\-]/', '_', $sf_name ) ); // dots stripped — must match JS keyE regex
-                        $sf_js     = esc_js( $sf_name );
-                        ?>
-                        <tr id="cs-s3h-row-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>"<?php if ( $sf_golden ): ?> class="cs-row-golden"<?php endif; ?>>
-                            <td><?php echo esc_html( $sf_name ); ?><span class="cs-s3h-golden-star"<?php if ( ! $sf_golden ): ?> style="display:none;"<?php endif; ?>> &#11088;</span></td>
-                            <td id="cs-s3h-tag-cell-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;">
-                                <span class="cs-s3h-tag-text"><?php if ( $sf_tag ): ?><?php echo esc_html( $sf_tag ); ?><?php else: ?><span class="cs-muted-text">No tag</span><?php endif; ?></span>
-                                <button type="button" onclick="csS3HistoryTagEdit('<?php echo $sf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>','<?php echo esc_js( $sf_tag ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Edit tag', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;"><?php esc_html_e( 'Edit', 'cloudscale-free-backup-and-restore' ); ?></button>
-                            </td>
-                            <td><?php echo esc_html( $sf['size_fmt'] ?? '—' ); ?></td>
-                            <td><?php echo esc_html( $sf['time'] ? wp_date( 'j M Y H:i', $sf['time'] ) : '—' ); ?></td>
-                            <td id="cs-s3h-actions-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
-                                <button type="button" onclick="csS3HistorySetGolden('<?php echo $sf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-s3h-golden-btn-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $sf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $sf_golden ? __( 'Remove Golden Image', 'cloudscale-free-backup-and-restore' ) : __( 'Mark as Golden Image', 'cloudscale-free-backup-and-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $sf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
-                                <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'cs_s3_download', 'file' => $sf_name, 'nonce' => wp_create_nonce( 'cs_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-free-backup-and-restore' ); ?></a>
-                                <button type="button" onclick="csS3HistoryDelete('<?php echo $sf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" title="<?php esc_attr_e( 'Delete from S3', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-free-backup-and-restore' ); ?></button>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                    </tbody>
-                </table>
-                </div>
-                <?php else: ?>
-                <p class="cs-empty"><?php esc_html_e( 'No S3 backups found. Click "Sync from S3" to query your bucket live.', 'cloudscale-free-backup-and-restore' ); ?></p>
-                <?php endif; ?>
             </div>
 
             <!-- GOOGLE DRIVE BACKUP CARD -->
@@ -1520,8 +1466,6 @@ function cs_admin_page(): void {
                     <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128196; <?php echo esc_html__( 'Google Drive Backup', 'cloudscale-free-backup-and-restore' ); ?></h2>
                     <button type="button" onclick="csGDriveExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;"><?php esc_html_e( 'Explain…', 'cloudscale-free-backup-and-restore' ); ?></button>
                 </div>
-
-                <p class="cs-help">After each local backup, the latest zip is automatically copied to Google Drive via <code>rclone</code>. You can also push the latest local backup manually at any time.</p>
 
                 <div class="cs-field-row cs-mt">
                     <label for="cs-gdrive-remote"><strong>rclone remote name</strong></label>
@@ -1560,58 +1504,52 @@ function cs_admin_page(): void {
                 </div>
                 <?php endif; ?>
 
-                <hr style="border:none;border-top:1px solid #e0e0e0;margin:20px -20px 16px -20px;">
-                <p style="font-size:0.85rem;font-weight:700;margin:0 0 10px;color:#455a64;"><?php esc_html_e( 'Backup History', 'cloudscale-free-backup-and-restore' ); ?></p>
-                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
-                    <button type="button" onclick="csGDriveHistoryRefresh()" class="button" id="cs-gd-refresh-btn" style="background:#1b5e20!important;color:#fff!important;border-color:#1b5e20!important;">&#8635; <?php esc_html_e( 'Sync from Google Drive', 'cloudscale-free-backup-and-restore' ); ?></button>
-                    <span id="cs-gd-golden-count" style="font-size:0.82rem;color:#f57f17;font-weight:600;">&#11088; <?php echo (int) $gdrive_golden_count; ?> / 4 golden&emsp;<?php echo (int) $gdrive_nongolden_count; ?> / <?php echo (int) $ami_max; ?> <?php esc_html_e( 'max backups', 'cloudscale-free-backup-and-restore' ); ?></span>
-                    <span id="cs-gd-msg" style="font-size:0.85rem;font-weight:600;"></span>
-                </div>
-                <p class="cs-help" style="margin:0 0 12px;"><?php esc_html_e( 'Queries Google Drive live — picks up all backups including ones made before this screen existed, and removes any you deleted directly in Drive.', 'cloudscale-free-backup-and-restore' ); ?></p>
-                <?php if ( ! empty( $gdrive_history ) ): ?>
-                <div class="cs-table-wrap">
-                <table class="widefat cs-table" style="font-size:0.82rem;" id="cs-gd-table">
-                    <thead>
-                        <tr>
-                            <th><?php esc_html_e( 'File Name', 'cloudscale-free-backup-and-restore' ); ?></th>
-                            <th style="width:120px;"><?php esc_html_e( 'Tag', 'cloudscale-free-backup-and-restore' ); ?></th>
-                            <th style="width:80px;"><?php esc_html_e( 'Size', 'cloudscale-free-backup-and-restore' ); ?></th>
-                            <th style="width:130px;"><?php esc_html_e( 'Created', 'cloudscale-free-backup-and-restore' ); ?></th>
-                            <th style="width:180px;"><?php esc_html_e( 'Actions', 'cloudscale-free-backup-and-restore' ); ?></th>
-                        </tr>
-                    </thead>
-                    <tbody id="cs-gd-tbody">
-                    <?php foreach ( $gdrive_history as $gf_key => $gf ): ?>
-                        <?php
-                        $gf_name   = $gf['name'] ?? $gf_key;
-                        $gf_golden = ! empty( $gf['golden'] );
-                        $gf_tag    = $gf['tag'] ?? '';
-                        $gf_key_e  = esc_attr( preg_replace( '/[^a-zA-Z0-9_\-]/', '_', $gf_name ) );
-                        $gf_js     = esc_js( $gf_name );
-                        ?>
-                        <tr id="cs-gd-row-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>"<?php if ( $gf_golden ): ?> class="cs-row-golden"<?php endif; ?>>
-                            <td><?php echo esc_html( $gf_name ); ?><span class="cs-gd-golden-star"<?php if ( ! $gf_golden ): ?> style="display:none;"<?php endif; ?>> &#11088;</span></td>
-                            <td id="cs-gd-tag-cell-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;">
-                                <span class="cs-gd-tag-text"><?php if ( $gf_tag ): ?><?php echo esc_html( $gf_tag ); ?><?php else: ?><span class="cs-muted-text">No tag</span><?php endif; ?></span>
-                                <button type="button" onclick="csGDriveHistoryTagEdit('<?php echo $gf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>','<?php echo esc_js( $gf_tag ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Edit tag', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;">Edit</button>
-                            </td>
-                            <td><?php echo esc_html( $gf['size_fmt'] ?? '—' ); ?></td>
-                            <td><?php echo esc_html( $gf['time'] ? wp_date( 'j M Y H:i', $gf['time'] ) : '—' ); ?></td>
-                            <td id="cs-gd-actions-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
-                                <button type="button" onclick="csGDriveHistorySetGolden('<?php echo $gf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-gd-golden-btn-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $gf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $gf_golden ? __( 'Remove Golden Image', 'cloudscale-free-backup-and-restore' ) : __( 'Mark as Golden Image', 'cloudscale-free-backup-and-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $gf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
-                                <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'cs_gdrive_download', 'file' => $gf_name, 'nonce' => wp_create_nonce( 'cs_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-free-backup-and-restore' ); ?></a>
-                                <button type="button" onclick="csGDriveHistoryDelete('<?php echo $gf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" title="<?php esc_attr_e( 'Delete from Google Drive', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-free-backup-and-restore' ); ?></button>
-                            </td>
-                        </tr>
-                    <?php endforeach; ?>
-                    </tbody>
-                </table>
-                </div>
-                <?php else: ?>
-                <p class="cs-empty"><?php esc_html_e( 'No Google Drive backups found. Click "Sync from Google Drive" to query your Drive live.', 'cloudscale-free-backup-and-restore' ); ?></p>
-                <?php endif; ?>
             </div>
 
+            <!-- DROPBOX BACKUP CARD -->
+            <div class="cs-card cs-card--dropbox">
+                <div class="cs-card-stripe" style="background:linear-gradient(135deg,#0032a0 0%,#0061ff 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
+                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128194; <?php echo esc_html__( 'Dropbox Backup', 'cloudscale-free-backup-and-restore' ); ?> <span style="font-size:0.7rem;font-weight:600;background:rgba(255,255,255,0.25);padding:1px 7px;border-radius:10px;letter-spacing:0.04em;vertical-align:middle;">BETA</span></h2>
+                    <button type="button" onclick="csDropboxExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;"><?php esc_html_e( 'Explain…', 'cloudscale-free-backup-and-restore' ); ?></button>
+                </div>
+
+                <div class="cs-field-row cs-mt">
+                    <label for="cs-dropbox-remote"><strong><?php esc_html_e( 'rclone remote name', 'cloudscale-free-backup-and-restore' ); ?></strong></label>
+                    <input type="text" id="cs-dropbox-remote" class="regular-text" placeholder="dropbox"
+                           value="<?php echo esc_attr( $dropbox_remote ); ?>">
+                    <p class="cs-help"><?php esc_html_e( 'The remote name you gave when running', 'cloudscale-free-backup-and-restore' ); ?> <code>rclone config</code>, e.g. <code>dropbox</code>.</p>
+                </div>
+
+                <div class="cs-field-row">
+                    <label for="cs-dropbox-path"><strong><?php esc_html_e( 'Destination folder', 'cloudscale-free-backup-and-restore' ); ?></strong></label>
+                    <input type="text" id="cs-dropbox-path" class="regular-text" placeholder="cloudscale-backups/"
+                           value="<?php echo esc_attr( $dropbox_path ); ?>">
+                    <p class="cs-help"><?php esc_html_e( 'Folder path inside Dropbox. Trailing slash required. Leave blank to copy to the Dropbox root.', 'cloudscale-free-backup-and-restore' ); ?></p>
+                </div>
+
+                <div style="margin-top:12px;">
+                    <button type="button" onclick="csDropboxSave()" class="button button-primary"><?php esc_html_e( 'Save Dropbox Settings', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" onclick="csDropboxTest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Test Connection', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" onclick="csDropboxDiagnose()" class="button" style="margin-left:8px;background:#e65100!important;color:#fff!important;border-color:#bf360c!important;"><?php esc_html_e( 'Diagnose', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" onclick="csDropboxSyncLatest()" class="button" style="margin-left:8px;background:#6a1b9a!important;color:#fff!important;border-color:#4a148c!important;"><?php esc_html_e( 'Sync Local Backup Now', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <span id="cs-dropbox-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
+                </div>
+
+                <?php if ( $dropbox_remote ): ?>
+                <div class="cs-info-row cs-mt">
+                    <span><?php esc_html_e( 'Destination', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    <strong><code><?php echo esc_html( rtrim( $dropbox_remote, ':' ) . ':' . ltrim( $dropbox_path, '/' ) ); ?></code></strong>
+                </div>
+                <div class="cs-info-row">
+                    <span><?php esc_html_e( 'Backups in Dropbox', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    <strong id="cs-dropbox-count-val"><?php echo $dropbox_remote_count !== null ? (int) $dropbox_remote_count : (int) count( $dropbox_synced ); ?> in Dropbox &nbsp;&middot;&nbsp; <?php echo (int) count( $backups ); ?> local</strong>
+                </div>
+                <div class="cs-info-row">
+                    <span><?php esc_html_e( 'Last sync', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    <strong><?php echo $dropbox_last ? esc_html( cs_human_age( $dropbox_last ) . ' ago (' . wp_date( 'j M Y H:i', $dropbox_last ) . ')' ) : 'Never'; ?></strong>
+                </div>
+                <?php endif; ?>
+            </div>
 
             <!-- AMI SNAPSHOT CARD -->
             <div class="cs-card cs-card--indigo">
@@ -1619,8 +1557,6 @@ function cs_admin_page(): void {
                     <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128247; <?php echo esc_html__( 'EC2 AMI Snapshot', 'cloudscale-free-backup-and-restore' ); ?></h2>
                     <button type="button" onclick="csAmiExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;"><?php esc_html_e( 'Explain…', 'cloudscale-free-backup-and-restore' ); ?></button>
                 </div>
-
-                <p class="cs-help">Create a full machine image (AMI) of this EC2 instance. The AMI name will be <code>{prefix}_yyyyMMdd_HHmm</code>. Requires AWS CLI with <code>ec2:CreateImage</code>, <code>ec2:DescribeImages</code>, <code>ec2:DeregisterImage</code> and <code>ec2:RebootInstances</code> permissions.</p>
 
                 <div class="cs-info-row">
                     <span>Instance ID</span>
@@ -1672,77 +1608,251 @@ function cs_admin_page(): void {
                     <span id="cs-ami-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
                 </div>
 
-                <?php if (!empty($ami_log_recent)): ?>
-                <div class="cs-mt" style="margin-top:16px;">
-                    <p class="cs-field-label" style="margin-bottom:6px;"><?php esc_html_e( 'Recent AMI snapshots', 'cloudscale-free-backup-and-restore' ); ?></p>
-                    <div class="cs-table-wrap">
-                    <table class="widefat cs-table" style="font-size:0.82rem;">
-                        <thead>
-                            <tr>
-                                <th><?php esc_html_e( 'AMI Name', 'cloudscale-free-backup-and-restore' ); ?></th>
-                                <th style="width:120px;"><?php esc_html_e( 'Tag', 'cloudscale-free-backup-and-restore' ); ?></th>
-                                <th style="width:130px;"><?php esc_html_e( 'AMI ID', 'cloudscale-free-backup-and-restore' ); ?></th>
-                                <th style="width:110px;"><?php esc_html_e( 'Created', 'cloudscale-free-backup-and-restore' ); ?></th>
-                                <th style="width:80px;"><?php esc_html_e( 'Status', 'cloudscale-free-backup-and-restore' ); ?></th>
-                                <th style="width:220px;"><?php esc_html_e( 'Actions', 'cloudscale-free-backup-and-restore' ); ?></th>
-                            </tr>
-                        </thead>
-                        <tbody id="cs-ami-tbody">
-                        <?php foreach ($ami_log_recent as $entry): ?>
-                            <?php
-                            $row_ami_id  = esc_attr($entry['ami_id'] ?? '');
-                            $entry_state = $entry['state'] ?? '';
-                            $is_deleted  = ($entry_state === 'deleted in AWS');
-                            $is_ok       = !empty($entry['ok']);
-                            ?>
-                            <?php $is_golden = ! empty( $entry['golden'] ); ?>
-                            <tr id="cs-ami-row-<?php echo esc_attr( $row_ami_id ); ?>"<?php if ( $is_golden ): ?> class="cs-row-golden"<?php endif; ?>>
-                                <?php $faded = $is_deleted ? 'style="opacity:0.45;"' : ''; ?>
-                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><?php echo esc_html($entry['name'] ?? '—'); ?><span class="cs-ami-golden-star"<?php if ( ! $is_golden ): ?> style="display:none;"<?php endif; ?>> &#11088;</span></td>
-                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?> id="cs-ami-tag-cell-<?php echo esc_attr( $row_ami_id ); ?>" style="white-space:nowrap;"><span class="cs-ami-tag-text"><?php if ( $entry['tag'] ?? '' ): ?><?php echo esc_html( $entry['tag'] ); ?><?php else: ?><span class="cs-muted-text">No tag</span><?php endif; ?></span> <button type="button" onclick="csAmiTagEdit('<?php echo esc_js( $row_ami_id ); ?>','<?php echo esc_js( $entry['tag'] ?? '' ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Edit tag', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;"><?php esc_html_e( 'Edit', 'cloudscale-free-backup-and-restore' ); ?></button></td>
-                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><code style="font-size:0.78rem;"><?php echo esc_html($entry['ami_id'] ?? '—'); ?></code></td>
-                                <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><?php echo esc_html(isset($entry['time']) ? wp_date('j M Y H:i', $entry['time']) : '—'); ?></td>
-                                <td id="cs-ami-state-<?php echo esc_attr( $row_ami_id ); ?>" <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>>
-                                    <?php if ($is_deleted): ?>
-                                        <span style="color:#999;font-weight:600;">&#128465; deleted in AWS</span>
-                                    <?php elseif ($is_ok): ?>
-                                        <?php
-                                        $sc = $entry_state === 'available' ? '#2e7d32' : ($entry_state === 'pending' ? '#e65100' : '#757575');
-                                        $si = $entry_state === 'available' ? '&#10003;' : ($entry_state === 'pending' ? '&#9203;' : '&#10007;');
-                                        ?>
-                                        <span style="color:<?php echo esc_attr( $sc ); ?>;font-weight:600;"><?php echo $si; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded HTML entity ?> <?php echo esc_html($entry_state ?: 'Created'); ?></span>
-                                    <?php else: ?>
-                                        <?php $err_raw = substr($entry['error'] ?? '', 0, 120); ?>
-                                        <span style="color:#c62828;font-weight:600;" title="<?php echo esc_attr($err_raw ?: 'No error detail recorded'); ?>">&#10007; Failed</span>
-                                        <?php if ($err_raw): ?>
-                                        <br><span style="color:#c62828;font-size:0.72rem;word-break:break-word;display:block;max-width:180px;line-height:1.3;margin-top:2px;"><?php echo esc_html($err_raw); ?></span>
-                                        <?php endif; ?>
-                                    <?php endif; ?>
-                                </td>
-                                <td id="cs-ami-actions-<?php echo esc_attr( $row_ami_id ); ?>" style="white-space:nowrap;vertical-align:middle;">
-                                    <?php if (!empty($entry['ami_id'])): ?>
-                                    <?php if (!$is_deleted): ?>
-                                    <button type="button" onclick="csAmiRefreshOne('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Refresh this AMI state from AWS', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
-                                    <button type="button" onclick="csAmiSetGolden('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" id="cs-ami-golden-btn-<?php echo esc_attr( $row_ami_id ); ?>" data-golden="<?php echo esc_attr( $is_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $is_golden ? __( 'Remove Golden Image', 'cloudscale-free-backup-and-restore' ) : __( 'Mark as Golden Image', 'cloudscale-free-backup-and-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $is_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
-                                    <?php if ( $entry_state === 'available' ): ?>
-                                    <button type="button" onclick="csAmiRestore('<?php echo esc_js( $row_ami_id ); ?>', '<?php echo esc_js( $entry['name'] ?? '' ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Restore server to this AMI snapshot', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#1a237e;border-color:#1a237e;margin-bottom:3px;">&#8617; <?php esc_html_e( 'Restore', 'cloudscale-free-backup-and-restore' ); ?></button>
-                                    <?php endif; // available ?>
-                                    <?php endif; // !$is_deleted ?>
-                                    <button type="button" onclick="csAmiDelete('<?php echo esc_js( $row_ami_id ); ?>', '<?php echo esc_js($entry['name'] ?? ''); ?>', <?php echo esc_attr( $is_deleted ? 'true' : 'false' ); ?>)" class="button button-small" title="<?php echo $is_deleted ? esc_attr__( 'Remove record', 'cloudscale-free-backup-and-restore' ) : esc_attr__( 'Deregister AMI', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? esc_html__( 'Remove', 'cloudscale-free-backup-and-restore' ) : esc_html__( 'Delete', 'cloudscale-free-backup-and-restore' ); ?></button>
-                                    <?php else: ?>
-                                    <button type="button" onclick="csAmiRemoveFailed('<?php echo esc_js($entry['name'] ?? ''); ?>')" class="button button-small" title="<?php esc_attr_e( 'Remove failed record', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Remove', 'cloudscale-free-backup-and-restore' ); ?></button>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                    </div>
-                </div>
-                <?php endif; ?>
             </div>
 
             </div><!-- /cs-grid-1 cloud -->
+
+        <!-- ===================== UNIFIED BACKUP HISTORY PANEL ===================== -->
+        <div class="cs-section-ribbon"><span><?php esc_html_e( 'Backup History', 'cloudscale-free-backup-and-restore' ); ?></span></div>
+        <div class="cs-card cs-card--teal cs-full" id="cs-history-panel">
+            <div class="cs-card-stripe cs-stripe--teal" style="background:linear-gradient(135deg,#004d40 0%,#00897b 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128339; <?php echo esc_html__( 'Backup History', 'cloudscale-free-backup-and-restore' ); ?></h2><button type="button" onclick="csHistoryExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;"><?php esc_html_e( 'Explain…', 'cloudscale-free-backup-and-restore' ); ?></button></div>
+
+            <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid #e0e0e0;">
+                <label for="cs-history-source" style="font-weight:600;font-size:0.9rem;white-space:nowrap;margin:0;"><?php esc_html_e( 'View history for:', 'cloudscale-free-backup-and-restore' ); ?></label>
+                <select id="cs-history-source" style="padding:5px 10px;font-size:0.88rem;border:1px solid #ccc;border-radius:4px;min-width:180px;">
+                    <option value="s3">&#9729; S3</option>
+                    <option value="gdrive">&#128196; <?php esc_html_e( 'Google Drive', 'cloudscale-free-backup-and-restore' ); ?></option>
+                    <option value="dropbox">&#128194; Dropbox (Beta)</option>
+                    <option value="ami">&#128247; <?php esc_html_e( 'EC2 AMI Snapshots', 'cloudscale-free-backup-and-restore' ); ?></option>
+                </select>
+                <!-- Per-provider action bars — shown/hidden by JS -->
+                <div id="cs-hist-act-s3" class="cs-hist-act" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <button type="button" onclick="csS3HistoryRefresh()" class="button" id="cs-s3h-refresh-btn" style="background:#01579b!important;color:#fff!important;border-color:#01579b!important;">&#8635; <?php esc_html_e( 'Sync from S3', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <span id="cs-s3h-golden-count" style="font-size:0.82rem;color:#f57f17;font-weight:600;">&#11088; <?php echo (int) $s3_golden_count; ?> / 4 golden&emsp;<?php echo (int) $s3_nongolden_count; ?> / <?php echo (int) $ami_max; ?> <?php esc_html_e( 'max backups', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    <span id="cs-s3h-msg" style="font-size:0.85rem;font-weight:600;"></span>
+                </div>
+                <div id="cs-hist-act-gdrive" class="cs-hist-act" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <button type="button" onclick="csGDriveHistoryRefresh()" class="button" id="cs-gd-refresh-btn" style="background:#1b5e20!important;color:#fff!important;border-color:#1b5e20!important;">&#8635; <?php esc_html_e( 'Sync from Google Drive', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <span id="cs-gd-golden-count" style="font-size:0.82rem;color:#f57f17;font-weight:600;">&#11088; <?php echo (int) $gdrive_golden_count; ?> / 4 golden&emsp;<?php echo (int) $gdrive_nongolden_count; ?> / <?php echo (int) $ami_max; ?> <?php esc_html_e( 'max backups', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    <span id="cs-gd-msg" style="font-size:0.85rem;font-weight:600;"></span>
+                </div>
+                <div id="cs-hist-act-dropbox" class="cs-hist-act" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <button type="button" onclick="csDropboxHistoryRefresh()" class="button" id="cs-db-refresh-btn" style="background:#0061ff!important;color:#fff!important;border-color:#0061ff!important;">&#8635; <?php esc_html_e( 'Sync from Dropbox', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <span id="cs-db-golden-count" style="font-size:0.82rem;color:#f57f17;font-weight:600;">&#11088; <?php echo (int) $dropbox_golden_count; ?> / 4 golden&emsp;<?php echo (int) $dropbox_nongolden_count; ?> / <?php echo (int) $ami_max; ?> <?php esc_html_e( 'max backups', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    <span id="cs-db-msg" style="font-size:0.85rem;font-weight:600;"></span>
+                </div>
+                <div id="cs-hist-act-ami" class="cs-hist-act" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <button type="button" onclick="csAmiResetAndRefresh()" class="button" id="cs-ami-refresh-all" style="background:#c2185b!important;color:#fff!important;border-color:#880e4f!important;">&#8635; <?php esc_html_e( 'Refresh All AMIs', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <span id="cs-ami-golden-count" style="font-size:0.82rem;color:#f57f17;font-weight:600;">&#11088; <?php echo (int) $ami_golden_count; ?> / 4 golden&emsp;<?php echo (int) $ami_nongolden_count; ?> / <?php echo (int) $ami_max; ?> <?php esc_html_e( 'max backups', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    <span id="cs-ami-msg" style="font-size:0.85rem;font-weight:600;"></span>
+                </div>
+            </div>
+
+            <!-- S3 PANE -->
+            <div id="cs-hist-pane-s3" class="cs-hist-pane" style="display:none">
+                <p class="cs-help" style="margin:0 0 12px;"><?php esc_html_e( 'Queries S3 live — picks up all backups including ones made before this screen existed, and removes any you deleted directly in S3.', 'cloudscale-free-backup-and-restore' ); ?></p>
+                <?php if ( ! empty( $s3_history ) ): ?>
+                <div class="cs-table-wrap">
+                <table class="widefat cs-table" style="font-size:0.82rem;" id="cs-s3h-table">
+                    <thead><tr>
+                        <th><?php esc_html_e( 'File Name', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:120px;"><?php esc_html_e( 'Tag', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:80px;"><?php esc_html_e( 'Size', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:130px;"><?php esc_html_e( 'Created', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:160px;"><?php esc_html_e( 'Actions', 'cloudscale-free-backup-and-restore' ); ?></th>
+                    </tr></thead>
+                    <tbody id="cs-s3h-tbody">
+                    <?php foreach ( $s3_history as $sf_key => $sf ): ?>
+                        <?php
+                        $sf_name   = $sf['name'] ?? $sf_key;
+                        $sf_golden = ! empty( $sf['golden'] );
+                        $sf_tag    = $sf['tag'] ?? '';
+                        $sf_key_e  = esc_attr( preg_replace( '/[^a-zA-Z0-9_\-]/', '_', $sf_name ) );
+                        $sf_js     = esc_js( $sf_name );
+                        ?>
+                        <tr id="cs-s3h-row-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>"<?php if ( $sf_golden ): ?> class="cs-row-golden"<?php endif; ?>>
+                            <td><?php echo esc_html( $sf_name ); ?><span class="cs-s3h-golden-star"<?php if ( ! $sf_golden ): ?> style="display:none;"<?php endif; ?>> &#11088;</span></td>
+                            <td id="cs-s3h-tag-cell-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;">
+                                <span class="cs-s3h-tag-text"><?php if ( $sf_tag ): ?><?php echo esc_html( $sf_tag ); ?><?php else: ?><span class="cs-muted-text">No tag</span><?php endif; ?></span>
+                                <button type="button" onclick="csS3HistoryTagEdit('<?php echo $sf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>','<?php echo esc_js( $sf_tag ); ?>')" class="button button-small" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;"><?php esc_html_e( 'Edit', 'cloudscale-free-backup-and-restore' ); ?></button>
+                            </td>
+                            <td><?php echo esc_html( $sf['size_fmt'] ?? '—' ); ?></td>
+                            <td><?php echo esc_html( $sf['time'] ? wp_date( 'j M Y H:i', $sf['time'] ) : '—' ); ?></td>
+                            <td id="cs-s3h-actions-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
+                                <button type="button" onclick="csS3HistorySetGolden('<?php echo $sf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-s3h-golden-btn-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $sf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $sf_golden ? __( 'Remove Golden Image', 'cloudscale-free-backup-and-restore' ) : __( 'Mark as Golden Image', 'cloudscale-free-backup-and-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $sf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
+                                <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'cs_s3_download', 'file' => $sf_name, 'nonce' => wp_create_nonce( 'cs_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-free-backup-and-restore' ); ?></a>
+                                <button type="button" onclick="csS3HistoryDelete('<?php echo $sf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-free-backup-and-restore' ); ?></button>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <?php else: ?>
+                <p class="cs-empty"><?php esc_html_e( 'No S3 backups found. Click "Sync from S3" to query your bucket live.', 'cloudscale-free-backup-and-restore' ); ?></p>
+                <?php endif; ?>
+            </div>
+
+            <!-- GOOGLE DRIVE PANE -->
+            <div id="cs-hist-pane-gdrive" class="cs-hist-pane" style="display:none">
+                <p class="cs-help" style="margin:0 0 12px;"><?php esc_html_e( 'Queries Google Drive live — picks up all backups including ones made before this screen existed, and removes any you deleted directly in Drive.', 'cloudscale-free-backup-and-restore' ); ?></p>
+                <?php if ( ! empty( $gdrive_history ) ): ?>
+                <div class="cs-table-wrap">
+                <table class="widefat cs-table" style="font-size:0.82rem;" id="cs-gd-table">
+                    <thead><tr>
+                        <th><?php esc_html_e( 'File Name', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:120px;"><?php esc_html_e( 'Tag', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:80px;"><?php esc_html_e( 'Size', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:130px;"><?php esc_html_e( 'Created', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:180px;"><?php esc_html_e( 'Actions', 'cloudscale-free-backup-and-restore' ); ?></th>
+                    </tr></thead>
+                    <tbody id="cs-gd-tbody">
+                    <?php foreach ( $gdrive_history as $gf_key => $gf ): ?>
+                        <?php
+                        $gf_name   = $gf['name'] ?? $gf_key;
+                        $gf_golden = ! empty( $gf['golden'] );
+                        $gf_tag    = $gf['tag'] ?? '';
+                        $gf_key_e  = esc_attr( preg_replace( '/[^a-zA-Z0-9_\-]/', '_', $gf_name ) );
+                        $gf_js     = esc_js( $gf_name );
+                        ?>
+                        <tr id="cs-gd-row-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>"<?php if ( $gf_golden ): ?> class="cs-row-golden"<?php endif; ?>>
+                            <td><?php echo esc_html( $gf_name ); ?><span class="cs-gd-golden-star"<?php if ( ! $gf_golden ): ?> style="display:none;"<?php endif; ?>> &#11088;</span></td>
+                            <td id="cs-gd-tag-cell-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;">
+                                <span class="cs-gd-tag-text"><?php if ( $gf_tag ): ?><?php echo esc_html( $gf_tag ); ?><?php else: ?><span class="cs-muted-text">No tag</span><?php endif; ?></span>
+                                <button type="button" onclick="csGDriveHistoryTagEdit('<?php echo $gf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>','<?php echo esc_js( $gf_tag ); ?>')" class="button button-small" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;">Edit</button>
+                            </td>
+                            <td><?php echo esc_html( $gf['size_fmt'] ?? '—' ); ?></td>
+                            <td><?php echo esc_html( $gf['time'] ? wp_date( 'j M Y H:i', $gf['time'] ) : '—' ); ?></td>
+                            <td id="cs-gd-actions-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
+                                <button type="button" onclick="csGDriveHistorySetGolden('<?php echo $gf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-gd-golden-btn-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $gf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $gf_golden ? __( 'Remove Golden Image', 'cloudscale-free-backup-and-restore' ) : __( 'Mark as Golden Image', 'cloudscale-free-backup-and-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $gf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
+                                <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'cs_gdrive_download', 'file' => $gf_name, 'nonce' => wp_create_nonce( 'cs_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-free-backup-and-restore' ); ?></a>
+                                <button type="button" onclick="csGDriveHistoryDelete('<?php echo $gf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-free-backup-and-restore' ); ?></button>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <?php else: ?>
+                <p class="cs-empty"><?php esc_html_e( 'No Google Drive backups found. Click "Sync from Google Drive" to query your Drive live.', 'cloudscale-free-backup-and-restore' ); ?></p>
+                <?php endif; ?>
+            </div>
+
+            <!-- DROPBOX PANE -->
+            <div id="cs-hist-pane-dropbox" class="cs-hist-pane" style="display:none">
+                <p class="cs-help" style="margin:0 0 12px;"><?php esc_html_e( 'Queries Dropbox live via rclone — picks up all backups including ones made before this screen existed, and removes any you deleted directly in Dropbox.', 'cloudscale-free-backup-and-restore' ); ?></p>
+                <?php if ( ! empty( $dropbox_history ) ): ?>
+                <div class="cs-table-wrap">
+                <table class="widefat cs-table" style="font-size:0.82rem;" id="cs-db-table">
+                    <thead><tr>
+                        <th><?php esc_html_e( 'File Name', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:120px;"><?php esc_html_e( 'Tag', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:80px;"><?php esc_html_e( 'Size', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:130px;"><?php esc_html_e( 'Created', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:180px;"><?php esc_html_e( 'Actions', 'cloudscale-free-backup-and-restore' ); ?></th>
+                    </tr></thead>
+                    <tbody id="cs-db-tbody">
+                    <?php foreach ( $dropbox_history as $dbf_key => $dbf ): ?>
+                        <?php
+                        $dbf_name   = $dbf['name'] ?? $dbf_key;
+                        $dbf_golden = ! empty( $dbf['golden'] );
+                        $dbf_tag    = $dbf['tag'] ?? '';
+                        $dbf_key_e  = esc_attr( preg_replace( '/[^a-zA-Z0-9_\-]/', '_', $dbf_name ) );
+                        $dbf_js     = esc_js( $dbf_name );
+                        ?>
+                        <tr id="cs-db-row-<?php echo $dbf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>"<?php if ( $dbf_golden ): ?> class="cs-row-golden"<?php endif; ?>>
+                            <td><?php echo esc_html( $dbf_name ); ?><span class="cs-db-golden-star"<?php if ( ! $dbf_golden ): ?> style="display:none;"<?php endif; ?>> &#11088;</span></td>
+                            <td id="cs-db-tag-cell-<?php echo $dbf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;">
+                                <span class="cs-db-tag-text"><?php if ( $dbf_tag ): ?><?php echo esc_html( $dbf_tag ); ?><?php else: ?><span class="cs-muted-text">No tag</span><?php endif; ?></span>
+                                <button type="button" onclick="csDropboxHistoryTagEdit('<?php echo $dbf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>','<?php echo esc_js( $dbf_tag ); ?>')" class="button button-small" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;">Edit</button>
+                            </td>
+                            <td><?php echo esc_html( $dbf['size_fmt'] ?? '—' ); ?></td>
+                            <td><?php echo esc_html( $dbf['time'] ? wp_date( 'j M Y H:i', $dbf['time'] ) : '—' ); ?></td>
+                            <td id="cs-db-actions-<?php echo $dbf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
+                                <button type="button" onclick="csDropboxHistorySetGolden('<?php echo $dbf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-db-golden-btn-<?php echo $dbf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $dbf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $dbf_golden ? __( 'Remove Golden Image', 'cloudscale-free-backup-and-restore' ) : __( 'Mark as Golden Image', 'cloudscale-free-backup-and-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $dbf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
+                                <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'cs_dropbox_download', 'file' => $dbf_name, 'nonce' => wp_create_nonce( 'cs_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-free-backup-and-restore' ); ?></a>
+                                <button type="button" onclick="csDropboxHistoryDelete('<?php echo $dbf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-free-backup-and-restore' ); ?></button>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <?php else: ?>
+                <p class="cs-empty"><?php esc_html_e( 'No Dropbox backups found. Click "Sync from Dropbox" to query your Dropbox live.', 'cloudscale-free-backup-and-restore' ); ?></p>
+                <?php endif; ?>
+            </div>
+
+            <!-- AMI PANE -->
+            <div id="cs-hist-pane-ami" class="cs-hist-pane" style="display:none">
+                <?php if ( ! empty( $ami_log_recent ) ): ?>
+                <div class="cs-table-wrap">
+                <table class="widefat cs-table" style="font-size:0.82rem;">
+                    <thead><tr>
+                        <th><?php esc_html_e( 'AMI Name', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:120px;"><?php esc_html_e( 'Tag', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:130px;"><?php esc_html_e( 'AMI ID', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:110px;"><?php esc_html_e( 'Created', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:80px;"><?php esc_html_e( 'Status', 'cloudscale-free-backup-and-restore' ); ?></th>
+                        <th style="width:220px;"><?php esc_html_e( 'Actions', 'cloudscale-free-backup-and-restore' ); ?></th>
+                    </tr></thead>
+                    <tbody id="cs-ami-tbody">
+                    <?php foreach ( $ami_log_recent as $entry ): ?>
+                        <?php
+                        $row_ami_id  = esc_attr( $entry['ami_id'] ?? '' );
+                        $entry_state = $entry['state'] ?? '';
+                        $is_deleted  = ( $entry_state === 'deleted in AWS' );
+                        $is_ok       = ! empty( $entry['ok'] );
+                        $is_golden   = ! empty( $entry['golden'] );
+                        ?>
+                        <tr id="cs-ami-row-<?php echo esc_attr( $row_ami_id ); ?>"<?php if ( $is_golden ): ?> class="cs-row-golden"<?php endif; ?>>
+                            <?php $faded = $is_deleted ? 'style="opacity:0.45;"' : ''; ?>
+                            <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><?php echo esc_html( $entry['name'] ?? '—' ); ?><span class="cs-ami-golden-star"<?php if ( ! $is_golden ): ?> style="display:none;"<?php endif; ?>> &#11088;</span></td>
+                            <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?> id="cs-ami-tag-cell-<?php echo esc_attr( $row_ami_id ); ?>" style="white-space:nowrap;"><span class="cs-ami-tag-text"><?php if ( $entry['tag'] ?? '' ): ?><?php echo esc_html( $entry['tag'] ); ?><?php else: ?><span class="cs-muted-text">No tag</span><?php endif; ?></span> <button type="button" onclick="csAmiTagEdit('<?php echo esc_js( $row_ami_id ); ?>','<?php echo esc_js( $entry['tag'] ?? '' ); ?>')" class="button button-small" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;"><?php esc_html_e( 'Edit', 'cloudscale-free-backup-and-restore' ); ?></button></td>
+                            <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><code style="font-size:0.78rem;"><?php echo esc_html( $entry['ami_id'] ?? '—' ); ?></code></td>
+                            <td <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>><?php echo esc_html( isset( $entry['time'] ) ? wp_date( 'j M Y H:i', $entry['time'] ) : '—' ); ?></td>
+                            <td id="cs-ami-state-<?php echo esc_attr( $row_ami_id ); ?>" <?php echo $faded; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML attribute string ?>>
+                                <?php if ( $is_deleted ): ?>
+                                    <span style="color:#999;font-weight:600;">&#128465; deleted in AWS</span>
+                                <?php elseif ( $is_ok ): ?>
+                                    <?php
+                                    $sc = $entry_state === 'available' ? '#2e7d32' : ( $entry_state === 'pending' ? '#e65100' : '#757575' );
+                                    $si = $entry_state === 'available' ? '&#10003;' : ( $entry_state === 'pending' ? '&#9203;' : '&#10007;' );
+                                    ?>
+                                    <span style="color:<?php echo esc_attr( $sc ); ?>;font-weight:600;"><?php echo $si; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded HTML entity ?> <?php echo esc_html( $entry_state ?: 'Created' ); ?></span>
+                                <?php else: ?>
+                                    <?php $err_raw = substr( $entry['error'] ?? '', 0, 120 ); ?>
+                                    <span style="color:#c62828;font-weight:600;" title="<?php echo esc_attr( $err_raw ?: 'No error detail recorded' ); ?>">&#10007; Failed</span>
+                                    <?php if ( $err_raw ): ?>
+                                    <br><span style="color:#c62828;font-size:0.72rem;word-break:break-word;display:block;max-width:180px;line-height:1.3;margin-top:2px;"><?php echo esc_html( $err_raw ); ?></span>
+                                    <?php endif; ?>
+                                <?php endif; ?>
+                            </td>
+                            <td id="cs-ami-actions-<?php echo esc_attr( $row_ami_id ); ?>" style="white-space:nowrap;vertical-align:middle;">
+                                <?php if ( ! empty( $entry['ami_id'] ) ): ?>
+                                <?php if ( ! $is_deleted ): ?>
+                                <button type="button" onclick="csAmiRefreshOne('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Refresh this AMI state from AWS', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+                                <button type="button" onclick="csAmiSetGolden('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" id="cs-ami-golden-btn-<?php echo esc_attr( $row_ami_id ); ?>" data-golden="<?php echo esc_attr( $is_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $is_golden ? __( 'Remove Golden Image', 'cloudscale-free-backup-and-restore' ) : __( 'Mark as Golden Image', 'cloudscale-free-backup-and-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $is_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
+                                <?php if ( $entry_state === 'available' ): ?>
+                                <button type="button" onclick="csAmiRestore('<?php echo esc_js( $row_ami_id ); ?>','<?php echo esc_js( $entry['name'] ?? '' ); ?>')" class="button button-small" style="min-width:0;padding:2px 8px;color:#1a237e;border-color:#1a237e;margin-bottom:3px;">&#8617; <?php esc_html_e( 'Restore', 'cloudscale-free-backup-and-restore' ); ?></button>
+                                <?php endif; ?>
+                                <?php endif; ?>
+                                <button type="button" onclick="csAmiDelete('<?php echo esc_js( $row_ami_id ); ?>','<?php echo esc_js( $entry['name'] ?? '' ); ?>',<?php echo esc_attr( $is_deleted ? 'true' : 'false' ); ?>)" class="button button-small" title="<?php echo $is_deleted ? esc_attr__( 'Remove record', 'cloudscale-free-backup-and-restore' ) : esc_attr__( 'Deregister AMI', 'cloudscale-free-backup-and-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php echo $is_deleted ? esc_html__( 'Remove', 'cloudscale-free-backup-and-restore' ) : esc_html__( 'Delete', 'cloudscale-free-backup-and-restore' ); ?></button>
+                                <?php else: ?>
+                                <button type="button" onclick="csAmiRemoveFailed('<?php echo esc_js( $entry['name'] ?? '' ); ?>')" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Remove', 'cloudscale-free-backup-and-restore' ); ?></button>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <?php else: ?>
+                <p class="cs-empty"><?php esc_html_e( 'No AMI snapshots recorded yet. Create an AMI from the Cloud Backups tab.', 'cloudscale-free-backup-and-restore' ); ?></p>
+                <?php endif; ?>
+            </div>
+
+        </div><!-- /cs-history-panel -->
 
         </div><!-- /cs-tab-cloud -->
 
@@ -1788,13 +1898,20 @@ add_action('wp_ajax_cs_run_backup', function (): void {
             $include_mu, $include_languages, $include_dropins, $include_htaccess, $include_wpconfig
         );
         cs_enforce_retention();
-        $s3     = $GLOBALS['cs_last_s3_result']     ?? ['skipped' => true];
-        $gdrive = $GLOBALS['cs_last_gdrive_result'] ?? ['skipped' => true];
+        $s3      = $GLOBALS['cs_last_s3_result']      ?? ['skipped' => true];
+        $gdrive  = $GLOBALS['cs_last_gdrive_result']  ?? ['skipped' => true];
+        $dropbox = $GLOBALS['cs_last_dropbox_result'] ?? ['skipped' => true];
         $s3_msg = '';
         if (!isset($s3['skipped'])) {
             $s3_msg = $s3['ok']
                 ? '✓ Synced to ' . $s3['dest']
                 : '⚠ S3 sync failed: ' . $s3['error'];
+        }
+        $dropbox_msg = '';
+        if (!isset($dropbox['skipped'])) {
+            $dropbox_msg = $dropbox['ok']
+                ? '✓ Synced to Dropbox: ' . $dropbox['dest']
+                : '⚠ Dropbox sync failed: ' . $dropbox['error'];
         }
         $gdrive_msg = '';
         if (!isset($gdrive['skipped'])) {
@@ -1803,12 +1920,14 @@ add_action('wp_ajax_cs_run_backup', function (): void {
                 : '⚠ Drive sync failed: ' . $gdrive['error'];
         }
         wp_send_json_success([
-            'message'    => 'Backup complete: ' . $filename,
-            'filename'   => $filename,
-            's3_ok'      => $s3['ok'] ?? null,
-            's3_msg'     => $s3_msg,
-            'gdrive_ok'  => $gdrive['ok'] ?? null,
-            'gdrive_msg' => $gdrive_msg,
+            'message'      => 'Backup complete: ' . $filename,
+            'filename'     => $filename,
+            's3_ok'        => $s3['ok'] ?? null,
+            's3_msg'       => $s3_msg,
+            'gdrive_ok'    => $gdrive['ok'] ?? null,
+            'gdrive_msg'   => $gdrive_msg,
+            'dropbox_ok'   => $dropbox['ok'] ?? null,
+            'dropbox_msg'  => $dropbox_msg,
         ]);
     } catch (Exception $e) {
         wp_send_json_error($e->getMessage());
@@ -2048,15 +2167,17 @@ add_action('wp_ajax_cs_save_cloud_schedule', function (): void {
     update_option('cs_ami_max',             max(1, min(999, intval( $_POST['cloud_max'] ?? 10 ))));
     update_option('cs_s3_sync_enabled',        !empty($_POST['s3_sync_enabled']));
     update_option('cs_gdrive_sync_enabled',    !empty($_POST['gdrive_sync_enabled']));
+    update_option('cs_dropbox_sync_enabled',   !empty($_POST['dropbox_sync_enabled']));
     update_option('cs_ami_sync_enabled',       !empty($_POST['ami_sync_enabled']));
     update_option('cs_cloud_schedule_enabled', !empty($_POST['cloud_schedule_enabled']));
-    wp_cache_delete('cs_ami_schedule_days',      'options');
-    wp_cache_delete('cs_cloud_backup_delay',     'options');
-    wp_cache_delete('cs_ami_max',                'options');
-    wp_cache_delete('cs_s3_sync_enabled',        'options');
-    wp_cache_delete('cs_gdrive_sync_enabled',    'options');
-    wp_cache_delete('cs_ami_sync_enabled',       'options');
-    wp_cache_delete('cs_cloud_schedule_enabled', 'options');
+    wp_cache_delete('cs_ami_schedule_days',       'options');
+    wp_cache_delete('cs_cloud_backup_delay',      'options');
+    wp_cache_delete('cs_ami_max',                 'options');
+    wp_cache_delete('cs_s3_sync_enabled',         'options');
+    wp_cache_delete('cs_gdrive_sync_enabled',     'options');
+    wp_cache_delete('cs_dropbox_sync_enabled',    'options');
+    wp_cache_delete('cs_ami_sync_enabled',        'options');
+    wp_cache_delete('cs_cloud_schedule_enabled',  'options');
     wp_cache_delete('alloptions',                'options');
     // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
     cs_reschedule();
@@ -2112,6 +2233,142 @@ add_action('wp_ajax_cs_sync_latest_gdrive', function (): void {
     if (isset($result['skipped'])) { wp_send_json_error('Google Drive not configured — save remote settings first.'); }
     $result['ok'] ? wp_send_json_success('Synced: ' . basename($latest)) : wp_send_json_error($result['error'] ?? 'Sync failed.');
 });
+
+// ============================================================
+// AJAX — Dropbox handlers
+// ============================================================
+
+add_action( 'wp_ajax_cs_save_dropbox', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    cs_verify_nonce();
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $remote = sanitize_text_field( wp_unslash( $_POST['remote'] ?? '' ) );
+    $path   = sanitize_text_field( wp_unslash( $_POST['path']   ?? 'cloudscale-backups/' ) );
+    // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
+    if ( $remote && ! preg_match( '/^[a-zA-Z0-9_\-]+$/', $remote ) ) {
+        wp_send_json_error( 'Invalid remote name. Use only letters, numbers, hyphens and underscores.' );
+    }
+    update_option( 'cs_dropbox_remote', $remote );
+    update_option( 'cs_dropbox_path',   $path );
+    wp_send_json_success( [ 'remote' => $remote, 'path' => $path ] );
+} );
+
+add_action( 'wp_ajax_cs_test_dropbox', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    cs_verify_nonce();
+    $remote = get_option( 'cs_dropbox_remote', '' );
+    if ( ! $remote ) { wp_send_json_error( 'No remote configured — save settings first.' ); }
+    $rclone = cs_find_rclone();
+    if ( ! $rclone ) { wp_send_json_error( 'rclone not found on server.' ); }
+    $cmd = escapeshellarg( $rclone ) . ' lsd ' . escapeshellarg( $remote . ':' ) . ' --max-depth 1 2>&1';
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out = trim( (string) shell_exec( $cmd ) );
+    if ( $out && preg_match( '/error|failed|denied|invalid/i', $out ) ) {
+        wp_send_json_error( 'Connection failed: ' . substr( $out, 0, 200 ) );
+    }
+    wp_send_json_success( 'Connected to ' . esc_html( $remote ) );
+} );
+
+add_action( 'wp_ajax_cs_sync_latest_dropbox', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    cs_verify_nonce();
+    $latest = cs_get_latest_backup_path();
+    if ( ! $latest ) { wp_send_json_error( 'No local backups found.' ); }
+    $result = cs_sync_to_dropbox( $latest );
+    if ( isset( $result['skipped'] ) ) { wp_send_json_error( 'Dropbox not configured — save remote settings first.' ); }
+    $result['ok'] ? wp_send_json_success( 'Synced: ' . basename( $latest ) ) : wp_send_json_error( $result['error'] ?? 'Sync failed.' );
+} );
+
+add_action( 'wp_ajax_cs_dropbox_refresh_history', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    cs_verify_nonce();
+    if ( ! get_option( 'cs_dropbox_remote', '' ) ) { wp_send_json_error( 'Dropbox not configured.' ); }
+    $hist = cs_dropbox_refresh_history();
+    update_option( 'cs_dropbox_remote_count', count( $hist ), false );
+    wp_send_json_success( [ 'files' => array_values( $hist ), 'count' => count( $hist ) ] );
+} );
+
+add_action( 'wp_ajax_cs_dropbox_set_golden', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    cs_verify_nonce();
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
+    $history  = (array) get_option( 'cs_dropbox_history', [] );
+    if ( ! isset( $history[$filename] ) ) { wp_send_json_error( 'File not found in history.' ); }
+    $history[$filename]['golden'] = empty( $history[$filename]['golden'] );
+    update_option( 'cs_dropbox_history', $history, false );
+    wp_send_json_success( [ 'golden' => $history[$filename]['golden'] ] );
+} );
+
+add_action( 'wp_ajax_cs_dropbox_set_tag', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    cs_verify_nonce();
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
+    $tag      = substr( sanitize_text_field( wp_unslash( $_POST['tag'] ?? '' ) ), 0, 40 );
+    // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
+    $history = (array) get_option( 'cs_dropbox_history', [] );
+    if ( ! isset( $history[$filename] ) ) { wp_send_json_error( 'File not found in history.' ); }
+    $history[$filename]['tag'] = $tag;
+    update_option( 'cs_dropbox_history', $history, false );
+    wp_send_json_success( [ 'tag' => $tag ] );
+} );
+
+add_action( 'wp_ajax_cs_dropbox_delete_remote', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    cs_verify_nonce();
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
+    $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
+    if ( ! $filename ) { wp_send_json_error( 'Invalid filename.' ); }
+    $remote = get_option( 'cs_dropbox_remote', '' );
+    if ( ! $remote ) { wp_send_json_error( 'Dropbox not configured.' ); }
+    $rclone = cs_find_rclone();
+    if ( ! $rclone ) { wp_send_json_error( 'rclone not found.' ); }
+    $dest_path = ltrim( get_option( 'cs_dropbox_path', 'cloudscale-backups/' ), '/' );
+    $rpath     = rtrim( $remote, ':' ) . ':' . rtrim( $dest_path, '/' ) . '/' . $filename;
+    $cmd       = escapeshellarg( $rclone ) . ' deletefile ' . escapeshellarg( $rpath ) . ' 2>&1';
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out = trim( (string) shell_exec( $cmd ) );
+    if ( $out && preg_match( '/error|failed|no such/i', $out ) ) {
+        wp_send_json_error( 'Delete failed: ' . substr( $out, 0, 200 ) );
+    }
+    $history = (array) get_option( 'cs_dropbox_history', [] );
+    unset( $history[$filename] );
+    update_option( 'cs_dropbox_history', $history, false );
+    update_option( 'cs_dropbox_remote_count', count( $history ), false );
+    wp_send_json_success( 'Deleted.' );
+} );
+
+add_action( 'admin_post_cs_dropbox_download', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_die( 'Forbidden', 403 ); }
+    // phpcs:disable WordPress.Security.NonceVerification.Recommended, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified below
+    $nonce    = sanitize_text_field( wp_unslash( $_GET['nonce']   ?? '' ) );
+    $filename = sanitize_file_name( wp_unslash( $_GET['file']    ?? '' ) );
+    // phpcs:enable WordPress.Security.NonceVerification.Recommended, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+    if ( ! wp_verify_nonce( $nonce, 'cs_nonce' ) ) { wp_die( 'Invalid nonce', 403 ); }
+    if ( ! $filename || ! str_ends_with( $filename, '.zip' ) ) { wp_die( 'Invalid filename', 400 ); }
+    $remote = get_option( 'cs_dropbox_remote', '' );
+    if ( ! $remote ) { wp_die( 'Dropbox not configured.' ); }
+    $rclone    = cs_find_rclone();
+    if ( ! $rclone ) { wp_die( 'rclone not found.' ); }
+    $dest_path = ltrim( get_option( 'cs_dropbox_path', 'cloudscale-backups/' ), '/' );
+    $rpath     = rtrim( $remote, ':' ) . ':' . rtrim( $dest_path, '/' ) . '/' . $filename;
+    $tmp       = wp_tempnam( $filename );
+    $cmd       = escapeshellarg( $rclone ) . ' copyto ' . escapeshellarg( $rpath ) . ' ' . escapeshellarg( $tmp ) . ' 2>&1';
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out = trim( (string) shell_exec( $cmd ) );
+    if ( $out || ! file_exists( $tmp ) || filesize( $tmp ) === 0 ) {
+        wp_delete_file( $tmp );
+        wp_die( 'Download failed: ' . esc_html( $out ) );
+    }
+    header( 'Content-Type: application/zip' );
+    header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
+    header( 'Content-Length: ' . filesize( $tmp ) );
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- streaming binary download
+    readfile( $tmp );
+    wp_delete_file( $tmp );
+    exit;
+} );
 
 add_action('wp_ajax_cs_create_ami', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
@@ -2686,7 +2943,7 @@ add_action('wp_ajax_cs_ami_remove_failed', function (): void {
 /**
  * AJAX: initiate an EC2 replace-root-volume-task from an AMI snapshot.
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void Sends JSON success with task_id, or JSON error with message.
  */
 add_action('wp_ajax_cs_ami_restore', function (): void {
@@ -2740,7 +2997,7 @@ add_action('wp_ajax_cs_ami_restore', function (): void {
 /**
  * AJAX: set or clear a tag on an AMI log entry.
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void Sends JSON success with new tag value.
  */
 add_action('wp_ajax_cs_ami_set_tag', function (): void {
@@ -2776,7 +3033,7 @@ add_action('wp_ajax_cs_ami_set_tag', function (): void {
  * Enforces a maximum of 4 golden images across all AMI entries.
  * Golden images are exempt from auto-pruning in cs_ami_enforce_max().
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void Sends JSON success with new golden bool.
  */
 add_action('wp_ajax_cs_ami_set_golden', function (): void {
@@ -2814,7 +3071,7 @@ add_action('wp_ajax_cs_ami_set_golden', function (): void {
 /**
  * AJAX: refresh S3 history by querying the bucket via AWS CLI.
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void Sends JSON success with array of file entries.
  */
 // ============================================================
@@ -2824,7 +3081,7 @@ add_action('wp_ajax_cs_ami_set_golden', function (): void {
 /**
  * AJAX: refresh Google Drive history by querying the remote via rclone.
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void Sends JSON success with array of file entries.
  */
 add_action('wp_ajax_cs_gdrive_refresh_history', function (): void {
@@ -2843,7 +3100,7 @@ add_action('wp_ajax_cs_gdrive_refresh_history', function (): void {
 /**
  * AJAX: set or clear a tag on a GDrive history entry.
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void Sends JSON success with new tag value.
  */
 add_action('wp_ajax_cs_gdrive_set_tag', function (): void {
@@ -2868,7 +3125,7 @@ add_action('wp_ajax_cs_gdrive_set_tag', function (): void {
  *
  * Enforces a maximum of 4 golden images (separate pool from AMI and S3).
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void Sends JSON success with new golden bool.
  */
 add_action('wp_ajax_cs_gdrive_set_golden', function (): void {
@@ -2896,7 +3153,7 @@ add_action('wp_ajax_cs_gdrive_set_golden', function (): void {
 /**
  * AJAX: delete a file from Google Drive and remove it from the local history.
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void Sends JSON success or error.
  */
 add_action('wp_ajax_cs_gdrive_delete_remote', function (): void {
@@ -2944,7 +3201,7 @@ add_action('wp_ajax_cs_s3_refresh_history', function (): void {
 /**
  * AJAX: set or clear a tag on an S3 history entry.
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void Sends JSON success with new tag value.
  */
 add_action('wp_ajax_cs_s3_set_tag', function (): void {
@@ -2970,7 +3227,7 @@ add_action('wp_ajax_cs_s3_set_tag', function (): void {
  * Enforces a maximum of 4 golden images across all S3 history entries
  * (separate pool from AMI golden images).
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void Sends JSON success with new golden bool.
  */
 add_action('wp_ajax_cs_s3_set_golden', function (): void {
@@ -2998,7 +3255,7 @@ add_action('wp_ajax_cs_s3_set_golden', function (): void {
 /**
  * AJAX: delete a file from S3 and remove it from the local history.
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void Sends JSON success or error.
  */
 add_action('wp_ajax_cs_s3_delete_remote', function (): void {
@@ -3036,7 +3293,7 @@ add_action('wp_ajax_cs_s3_delete_remote', function (): void {
  * After a successful pull the file will appear in the Backup History table
  * on the next page load.
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void Sends JSON success or error.
  */
 add_action('wp_ajax_cs_s3_pull', function (): void {
@@ -3119,7 +3376,7 @@ add_action('admin_post_cs_download', function (): void {
  * Serves from CS_BACKUP_DIR if the file exists locally; otherwise pulls from S3
  * to a temporary path, streams it, then cleans up.
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void
  */
 add_action('admin_post_cs_s3_download', function (): void {
@@ -3170,7 +3427,7 @@ add_action('admin_post_cs_s3_download', function (): void {
  *
  * Uses rclone copyto to pull the file to a temp path, streams it, then cleans up.
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void
  */
 add_action('admin_post_cs_gdrive_download', function (): void {
@@ -3293,6 +3550,52 @@ function cs_render_dashboard_widget(): void {
         $age_color = '#c62828';
     }
 
+    // Cloud sync age rows — only for configured providers
+    $cs_age = function( int $ts ): array {
+        if ( $ts <= 0 ) return [ 'Never', '#c62828' ];
+        $secs = time() - $ts;
+        if ( $secs < 3600 ) {
+            $label = round( $secs / 60 ) . ' min ago';
+        } elseif ( $secs < 86400 ) {
+            $h = floor( $secs / 3600 );
+            $label = $h . ' hour' . ( $h === 1 ? '' : 's' ) . ' ago';
+        } else {
+            $d = floor( $secs / 86400 );
+            $label = $d . ' day' . ( $d === 1 ? '' : 's' ) . ' ago';
+        }
+        $color = $secs < 86400 ? '#2e7d32' : ( $secs < 86400 * 3 ? '#e65100' : '#c62828' );
+        return [ $label, $color ];
+    };
+
+    $cloud_rows = [];
+
+    if ( get_option( 'cs_s3_bucket', '' ) ) {
+        $s3_log    = (array) get_option( 'cs_s3_log', [] );
+        $s3_ok     = array_filter( $s3_log, fn( $e ) => ! empty( $e['ok'] ) );
+        $s3_last   = $s3_ok ? max( array_column( $s3_ok, 'time' ) ) : 0;
+        $cloud_rows[] = [ '&#9729; S3 last sync', ...$cs_age( (int) $s3_last ) ];
+    }
+    if ( get_option( 'cs_gdrive_remote', '' ) ) {
+        $gd_log   = (array) get_option( 'cs_gdrive_log', [] );
+        $gd_ok    = array_filter( $gd_log, fn( $e ) => ! empty( $e['ok'] ) );
+        $gd_last  = $gd_ok ? max( array_column( $gd_ok, 'time' ) ) : 0;
+        $cloud_rows[] = [ '&#128196; Drive last sync', ...$cs_age( (int) $gd_last ) ];
+    }
+    if ( get_option( 'cs_dropbox_remote', '' ) ) {
+        $db_log   = (array) get_option( 'cs_dropbox_log', [] );
+        $db_ok    = array_filter( $db_log, fn( $e ) => ! empty( $e['ok'] ) );
+        $db_last  = $db_ok ? max( array_column( $db_ok, 'time' ) ) : 0;
+        $cloud_rows[] = [ '&#128194; Dropbox last sync', ...$cs_age( (int) $db_last ) ];
+    } else {
+        $cloud_rows[] = [ '&#128194; Dropbox', 'Not configured', '#999' ];
+    }
+    if ( get_option( 'cs_ami_prefix', '' ) ) {
+        $ami_log  = (array) get_option( 'cs_ami_log', [] );
+        $ami_ok   = array_filter( $ami_log, fn( $e ) => ! empty( $e['ok'] ) && ! empty( $e['ami_id'] ) );
+        $ami_last = $ami_ok ? max( array_column( $ami_ok, 'time' ) ) : 0;
+        $cloud_rows[] = [ '&#128247; AMI last snapshot', ...$cs_age( (int) $ami_last ) ];
+    }
+
     $widget_style = 'margin: -12px -12px 0 -12px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;';
     $stats_style  = 'padding: 14px 16px 6px 16px;';
     $row_style    = 'display:flex; justify-content:space-between; align-items:center; padding: 7px 0; border-bottom: 1px solid #f0f0f0;';
@@ -3327,26 +3630,42 @@ function cs_render_dashboard_widget(): void {
                 </span>
             </div>
 
-            <div style="<?php echo esc_attr( $row_style . ' border-bottom:none;' ); ?>">
+            <div style="<?php echo esc_attr( $row_style . ( empty( $cloud_rows ) ? ' border-bottom:none;' : '' ) ); ?>">
                 <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Free disk space', 'cloudscale-free-backup-and-restore' ); ?></span>
                 <span style="<?php echo esc_attr( $value_style ); ?>">
                     <?php echo $free_bytes !== false ? esc_html(cs_format_size((int)$free_bytes)) : '—'; ?>
                 </span>
             </div>
 
+            <?php
+            $cloud_pairs = array_chunk( $cloud_rows, 2 );
+            $last_pair   = count( $cloud_pairs ) - 1;
+            foreach ( $cloud_pairs as $pi => $pair ):
+                $is_last = ( $pi === $last_pair );
+            ?>
+            <div style="display:flex; gap:8px; padding:7px 0; <?php echo $is_last ? 'border-bottom:none;' : 'border-bottom:1px solid #f0f0f0;'; ?>">
+                <?php foreach ( $pair as $cr ): ?>
+                <div style="flex:1; min-width:0;">
+                    <span style="<?php echo esc_attr( $label_style ); ?> display:block; margin-bottom:1px;"><?php echo wp_kses( $cr[0], [] ); ?></span>
+                    <span style="<?php echo esc_attr( $value_style ); ?> font-size:13px; color:<?php echo esc_attr( $cr[2] ); ?>;"><?php echo esc_html( $cr[1] ); ?></span>
+                </div>
+                <?php endforeach; ?>
+            </div>
+            <?php endforeach; ?>
+
         </div>
 
-        <a href="<?php echo esc_url($settings_url); ?>"
-           style="<?php echo esc_attr( $btn_base . ' background: linear-gradient(90deg, #e65100 0%, #b71c1c 100%); margin-top:8px;' ); ?>">
-            &#128736; <?php esc_html_e( 'CloudScale Backup & Restore', 'cloudscale-free-backup-and-restore' ); ?>
-        </a>
         <form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0;padding:0;">
             <?php wp_nonce_field( 'cs_quick_backup', '_cs_quick_nonce' ); ?>
             <input type="hidden" name="action" value="cs_quick_backup">
-            <button type="submit" style="<?php echo esc_attr( $btn_base ); ?> background: linear-gradient(90deg, #00897b 0%, #1b5e20 100%); margin-top:2px; border-radius: 0 0 3px 3px; width:100%; border:none; cursor:pointer;">
+            <button type="submit" style="<?php echo esc_attr( $btn_base ); ?> background: linear-gradient(90deg, #00897b 0%, #1b5e20 100%); margin-top:8px; width:100%; border:none; cursor:pointer;">
                 &#9654; <?php esc_html_e( 'Run Backup Now', 'cloudscale-free-backup-and-restore' ); ?>
             </button>
         </form>
+        <a href="<?php echo esc_url($settings_url); ?>"
+           style="<?php echo esc_attr( $btn_base . ' background: linear-gradient(90deg, #e65100 0%, #b71c1c 100%); margin-top:2px; border-radius: 0 0 3px 3px;' ); ?>">
+            &#128736; <?php esc_html_e( 'CloudScale Backup & Restore', 'cloudscale-free-backup-and-restore' ); ?>
+        </a>
     </div>
     <?php
 }
@@ -3502,8 +3821,9 @@ function cs_create_backup(
     $zip->close();
 
     // S3 sync — result stored in global for AJAX handler to include in response
-    $GLOBALS['cs_last_s3_result']     = cs_sync_to_s3(CS_BACKUP_DIR . $filename);
-    $GLOBALS['cs_last_gdrive_result'] = cs_sync_to_gdrive(CS_BACKUP_DIR . $filename);
+    $GLOBALS['cs_last_s3_result']       = cs_sync_to_s3( CS_BACKUP_DIR . $filename );
+    $GLOBALS['cs_last_gdrive_result']   = cs_sync_to_gdrive( CS_BACKUP_DIR . $filename );
+    $GLOBALS['cs_last_dropbox_result']  = cs_sync_to_dropbox( CS_BACKUP_DIR . $filename );
 
     return $filename;
 }
@@ -3647,7 +3967,7 @@ function cs_get_instance_region(): string {
  *
  * Uses the same retention count as local backups (cs_retention option).
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void
  */
 function cs_enforce_s3_retention(): void {
@@ -3709,7 +4029,7 @@ function cs_enforce_s3_retention(): void {
  *
  * Uses the same retention count as local backups (cs_retention option).
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return void
  */
 function cs_enforce_gdrive_retention(): void {
@@ -3774,7 +4094,7 @@ function cs_enforce_gdrive_retention(): void {
  * the result with the existing cs_gdrive_history option (preserving tag and
  * golden fields). Entries no longer on Drive are dropped.
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return array Updated history keyed by filename, or empty array if not configured.
  */
 function cs_gdrive_refresh_history(): array {
@@ -3835,7 +4155,7 @@ function cs_find_rclone(): string {
 /**
  * Upload a local backup file to Google Drive using rclone.
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
@@ -3879,6 +4199,140 @@ function cs_sync_to_gdrive(string $local_path): array {
     update_option('cs_gdrive_log', $log, false);
 
     return $result;
+}
+
+/**
+ * Upload a local backup file to Dropbox using rclone.
+ *
+ * @since 3.3.0
+ * @param string $local_path Absolute filesystem path to the backup zip.
+ * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
+ */
+function cs_sync_to_dropbox( string $local_path ): array {
+    if ( ! get_option( 'cs_dropbox_sync_enabled', false ) ) return [ 'skipped' => true ];
+    $remote = get_option( 'cs_dropbox_remote', '' );
+    if ( ! $remote ) return [ 'skipped' => true ];
+
+    $rclone = cs_find_rclone();
+    if ( ! $rclone ) {
+        return [ 'ok' => false, 'error' => 'rclone not found. Install rclone and configure a Dropbox remote.' ];
+    }
+
+    $dest_path = ltrim( get_option( 'cs_dropbox_path', 'cloudscale-backups/' ), '/' );
+    $dest      = rtrim( $remote, ':' ) . ':' . $dest_path;
+    $escaped   = escapeshellarg( $local_path );
+    $edest     = escapeshellarg( $dest );
+
+    $cmd = escapeshellarg( $rclone ) . " copy {$escaped} {$edest} 2>&1";
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out = trim( (string) shell_exec( $cmd ) );
+
+    $filename = basename( $local_path );
+    $log      = (array) get_option( 'cs_dropbox_log', [] );
+
+    if ( $out ) {
+        cs_log( '[CloudScale Backup] Dropbox sync error: ' . $out );
+        $result         = [ 'ok' => false, 'dest' => $dest, 'error' => $out ];
+        $log[$filename] = [ 'ok' => false, 'time' => time(), 'dest' => $dest, 'error' => $out ];
+    } else {
+        cs_log( '[CloudScale Backup] Dropbox sync OK: ' . $dest );
+        $result         = [ 'ok' => true, 'dest' => $dest ];
+        $log[$filename] = [ 'ok' => true, 'time' => time(), 'dest' => $dest ];
+        cs_enforce_dropbox_retention();
+    }
+
+    $existing = array_map( 'basename', glob( CS_BACKUP_DIR . '*.zip' ) ?: [] );
+    foreach ( array_keys( $log ) as $k ) {
+        if ( ! in_array( $k, $existing, true ) ) unset( $log[$k] );
+    }
+    update_option( 'cs_dropbox_log', $log, false );
+
+    return $result;
+}
+
+/**
+ * Refresh the Dropbox backup history by querying via rclone lsjson.
+ *
+ * @since 3.3.0
+ * @return array Updated history keyed by filename, or empty array if not configured.
+ */
+function cs_dropbox_refresh_history(): array {
+    $remote = get_option( 'cs_dropbox_remote', '' );
+    if ( ! $remote ) return [];
+    $rclone = cs_find_rclone();
+    if ( ! $rclone ) return [];
+
+    $dest_path   = ltrim( get_option( 'cs_dropbox_path', 'cloudscale-backups/' ), '/' );
+    $remote_path = rtrim( $remote, ':' ) . ':' . $dest_path;
+    $cmd         = escapeshellarg( $rclone ) . ' lsjson ' . escapeshellarg( $remote_path ) . ' --files-only 2>&1';
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out  = trim( (string) shell_exec( $cmd ) );
+    $data = json_decode( $out ?: '[]', true );
+    if ( ! is_array( $data ) ) return [];
+
+    $existing = (array) get_option( 'cs_dropbox_history', [] );
+    $found    = [];
+
+    foreach ( $data as $f ) {
+        $name = $f['Name'] ?? '';
+        if ( ! str_ends_with( $name, '.zip' ) ) continue;
+        $size = (int) ( $f['Size']    ?? 0 );
+        $mod  = $f['ModTime'] ?? '';
+        $ts   = $mod ? (int) strtotime( $mod ) : 0;
+        $found[$name] = [
+            'name'       => $name,
+            'size_bytes' => $size,
+            'size_fmt'   => cs_format_size( $size ),
+            'time'       => $ts,
+            'tag'        => $existing[$name]['tag']    ?? '',
+            'golden'     => $existing[$name]['golden'] ?? false,
+            'date_fmt'   => $ts ? wp_date( 'j M Y H:i', $ts ) : '—',
+        ];
+    }
+
+    uasort( $found, fn( $a, $b ) => ( $b['time'] ?? 0 ) <=> ( $a['time'] ?? 0 ) );
+    update_option( 'cs_dropbox_history', $found, false );
+    return $found;
+}
+
+/**
+ * Delete old Dropbox backups beyond cs_ami_max retention limit.
+ *
+ * @since 3.3.0
+ * @return void
+ */
+function cs_enforce_dropbox_retention(): void {
+    $max    = max( 1, intval( get_option( 'cs_ami_max', 10 ) ) );
+    $remote = get_option( 'cs_dropbox_remote', '' );
+    if ( ! $remote ) return;
+    $rclone = cs_find_rclone();
+    if ( ! $rclone ) return;
+
+    $history = (array) get_option( 'cs_dropbox_history', [] );
+    if ( empty( $history ) ) return;
+
+    $golden  = array_values( array_filter( $history, fn( $e ) => ! empty( $e['golden'] ) ) );
+    $regular = array_values( array_filter( $history, fn( $e ) =>   empty( $e['golden'] ) ) );
+
+    if ( count( $regular ) <= $max ) return;
+
+    usort( $regular, fn( $a, $b ) => ( $a['time'] ?? 0 ) <=> ( $b['time'] ?? 0 ) );
+    $to_prune = array_slice( $regular, 0, count( $regular ) - $max );
+    $dest_path = ltrim( get_option( 'cs_dropbox_path', 'cloudscale-backups/' ), '/' );
+
+    foreach ( $to_prune as $old ) {
+        $name  = $old['name'] ?? '';
+        if ( ! $name ) continue;
+        $rpath = rtrim( $remote, ':' ) . ':' . rtrim( $dest_path, '/' ) . '/' . $name;
+        $cmd   = escapeshellarg( $rclone ) . ' deletefile ' . escapeshellarg( $rpath ) . ' 2>&1';
+        // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+        shell_exec( $cmd );
+        unset( $history[$name] );
+        cs_log( '[CloudScale Backup] Dropbox retention: deleted ' . $name );
+    }
+
+    update_option( 'cs_dropbox_history', $history, false );
+    update_option( 'cs_dropbox_remote_count', count( array_merge( $golden, array_slice( $regular, -$max ) ) ), false );
 }
 
 function cs_find_aws(): string {
@@ -3977,7 +4431,7 @@ function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
  * fields for files that still exist in S3). Entries for files no longer in
  * S3 are dropped.
  *
- * @since 3.2.82
+ * @since 3.2.92
  * @return array Updated history keyed by filename, or empty array if S3 not configured.
  */
 function cs_s3_refresh_history(): array {
