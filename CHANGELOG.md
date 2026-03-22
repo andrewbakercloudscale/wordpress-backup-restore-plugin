@@ -3,6 +3,56 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.125] - 2026-03-22
+- FIX: PCP compliance — added `wp_unslash()` to `intval($_POST['run_hour'])` and `intval($_POST['run_minute'])` in schedule form handler
+- FIX: PCP compliance — added `phpcs:ignore EscapeOutput.OutputNotEscaped` to hardcoded static string echoes (off-notice, cloud-off-notice, colspan, row class, inline style)
+- FIX: PCP compliance — `'Never'` in last-sync ternaries changed to `esc_html__('Never', ...)` for all three providers (GDrive, Dropbox, S3)
+- FIX: PCP compliance — hardcoded HTML false branch in `$ami_region` ternary (×2) annotated with `phpcs:ignore`
+- FIX: PCP compliance — `readfile($tmp)` in Dropbox download handler now has inline `phpcs:ignore` (was on preceding line only)
+- FIX: `uninstall.php` — added missing Dropbox options to cleanup list (`cs_dropbox_remote`, `cs_dropbox_path`, `cs_dropbox_log`, `cs_dropbox_sync_enabled`, `cs_dropbox_remote_count`, `cs_dropbox_history`)
+
+## [3.2.124] - 2026-03-22
+- FIX: Dropbox history refresh loop — `#cs-db-tbody` now always rendered; JS no longer triggers `location.reload()` when table is empty
+- FIX: "Dropbox (Beta)" label removed from history source dropdown
+
+## [3.2.123] - 2026-03-22
+- CHANGE: BETA label removed from Dropbox card heading and "Include in cloud backup" checkbox
+
+## [3.2.122] - 2026-03-22
+- UX: All cloud provider input placeholders changed to `[Enter Remote Name]`, `[Enter Folder Path]`, `[Enter Bucket Name]`, `[Enter Path Prefix]`, `[Enter Region Override]`, `[Enter Name Prefix]` format
+- UX: Placeholder text now rendered italic via `::placeholder` CSS rule
+- UX: Explain modals (Dropbox, GDrive, S3, AMI Step 3) updated to reference new placeholder labels
+
+## [3.2.121] - 2026-03-22
+- UX: Inactive tab background darkened to `#d8d8d8` / border `#bdbdbd` for clearer active/inactive distinction
+
+## [3.2.120] - 2026-03-22
+- UX: Dropbox Explain Step 3 rewritten as a full prompt/answer table covering every rclone config wizard step in sequence
+
+## [3.2.119] - 2026-03-22
+- UX: Dropbox Explain — "Keep this remote? y/e/d>" step added with answer `y` then `q`
+
+## [3.2.118] - 2026-03-22
+- UX: Dropbox Explain — browser success message "Success! All done. Please go back to rclone." added to config_token guidance
+
+## [3.2.117] - 2026-03-22
+- UX: Dropbox Explain — `config_token>` prompt guidance added; explains running `rclone authorize "dropbox"` on laptop and pasting token back
+
+## [3.2.116] - 2026-03-22
+- UX: Dropbox Explain — "Use web browser to automatically authenticate?" prompt added; clarifies always choose `n` on a server
+
+## [3.2.115] - 2026-03-22
+- UX: Dropbox Explain Step 3 — numbered prompt list added covering `n`, name, storage `15`, blank client_id/secret, no advanced config, `n` for browser auth
+
+## [3.2.114] - 2026-03-22
+- FIX: Dropbox history pane triggered infinite `location.reload()` loop when `$dropbox_history` was empty (table not rendered, JS couldn't find `#cs-db-tbody`)
+- FIX: "Dropbox (Beta)" label in history source `<select>` removed
+
+## [3.2.113] - 2026-03-22
+- FIX: `csAmiMsg()` — feedback from Save/Create AMI buttons was written to hidden `#cs-ami-msg` (inside inactive history action bar); now writes to both `#cs-ami-settings-msg` and `#cs-ami-msg` so message is always visible
+- UX: Copy-to-clipboard buttons added to all block `<code>` snippets in every Explain modal
+- BUILD: WordPress Plugin Standards Review removed from `build.sh` (manual process)
+
 ## [3.2.94] - 2026-03-22
 - FIX: `wp_die()` calls in Dropbox download handler now use `esc_html__()` — resolves PCP `EscapeOutput.OutputNotEscaped` critical violations
 - FIX: `@since` tags on Dropbox functions corrected to 3.2.83

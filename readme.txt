@@ -4,7 +4,7 @@ Tags: backup, restore, database, scheduled backup, maintenance mode
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 3.2.123
+Stable tag: 3.2.129
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -165,12 +165,12 @@ Yes. Run a full backup on the old site, install WordPress on the new host, insta
 
 == Changelog ==
 
-= 3.2.123 =
-* FIX: JS syntax error (missing brace in updateRow) broke Cloud Backups tab click handler; null guards added to csAmiSave, csAmiCreate, csGDriveSave
-* NEW: AMI Tags, Golden Images (⭐), S3 and GDrive Backup History tables with Sync, Download, Delete, Tag, Golden Image actions
-* NEW: AMI snapshot Restore button (EC2 replace-root-volume-task with data-loss confirmation)
-* CHANGE: Local column removed from S3 history; table rows uniform height; header hover effects
-* FIX: WordPress.org PCP compliance — escaped output, i18n wrappers, wp_add_inline_style, uninstall.php cleanup
+= 3.2.129 =
+* FIX: PCP compliance — unescaped static string echoes, missing `wp_unslash()` on intval, `phpcs:ignore` annotations
+* FIX: `uninstall.php` — Dropbox options now cleaned up on plugin delete
+* FIX: Dropbox history pane infinite reload loop resolved
+* FIX: AMI Save/Create buttons now show feedback message correctly
+* UX: Copy buttons on all Explain modal code blocks; Dropbox setup wizard guide; italic placeholders
 
 = 3.2.1 =
 * Renamed internal constants with CS_BACKUP_ prefix to avoid collisions with other plugins
