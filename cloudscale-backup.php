@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.92
+ * Version:           3.2.93
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.92');
+define('CS_BACKUP_VERSION',    '3.2.93');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -1076,7 +1076,7 @@ function cs_admin_page(): void {
         <!-- ===================== MANUAL BACKUP ===================== -->
         <div class="cs-section-ribbon"><span><?php esc_html_e( 'Manual Backup', 'cloudscale-free-backup-and-restore' ); ?></span></div>
         <div class="cs-card cs-card--orange cs-full">
-            <div class="cs-card-stripe cs-stripe--orange" style="background:linear-gradient(135deg,#e65100 0%,#f57c00 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#9654; <?php echo esc_html__( 'Run Backup Now', 'cloudscale-free-backup-and-restore' ); ?></h2><button type="button" onclick="csBackupExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;"><?php esc_html_e( 'Explain…', 'cloudscale-free-backup-and-restore' ); ?></button></div>
+            <div class="cs-card-stripe cs-stripe--orange" style="background:linear-gradient(135deg,#e65100 0%,#f57c00 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#9654; <?php echo esc_html__( 'Create Local Backup Now', 'cloudscale-free-backup-and-restore' ); ?></h2><button type="button" onclick="csBackupExplain()" style="background:transparent;border:1.5px solid rgba(255,255,255,0.7);color:#fff;border-radius:6px;padding:4px 12px;font-size:0.78rem;font-weight:600;cursor:pointer;"><?php esc_html_e( 'Explain…', 'cloudscale-free-backup-and-restore' ); ?></button></div>
             <?php
             // Pass sizes to JS for live total calculation
             $backup_sizes = [
@@ -1158,7 +1158,7 @@ function cs_admin_page(): void {
                             <span class="cs-summary-warn" id="cs-space-warn"></span>
                         </div>
                     </div>
-                    <button type="button" id="cs-run-backup" class="button button-primary cs-btn-lg">&#9654; <?php esc_html_e( 'Run Backup Now', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" id="cs-run-backup" class="button button-primary cs-btn-lg">&#9654; <?php esc_html_e( 'Create Local Backup Now', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <div style="margin-top:8px;">
                         <button type="button" id="cs-save-manual-defaults" class="button"><?php esc_html_e( 'Save as defaults', 'cloudscale-free-backup-and-restore' ); ?></button>
                         <span id="cs-manual-defaults-msg" style="margin-left:8px;font-size:0.82rem;font-weight:600;display:none;"></span>
@@ -2943,7 +2943,7 @@ add_action('wp_ajax_cs_ami_remove_failed', function (): void {
 /**
  * AJAX: initiate an EC2 replace-root-volume-task from an AMI snapshot.
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void Sends JSON success with task_id, or JSON error with message.
  */
 add_action('wp_ajax_cs_ami_restore', function (): void {
@@ -2997,7 +2997,7 @@ add_action('wp_ajax_cs_ami_restore', function (): void {
 /**
  * AJAX: set or clear a tag on an AMI log entry.
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void Sends JSON success with new tag value.
  */
 add_action('wp_ajax_cs_ami_set_tag', function (): void {
@@ -3033,7 +3033,7 @@ add_action('wp_ajax_cs_ami_set_tag', function (): void {
  * Enforces a maximum of 4 golden images across all AMI entries.
  * Golden images are exempt from auto-pruning in cs_ami_enforce_max().
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void Sends JSON success with new golden bool.
  */
 add_action('wp_ajax_cs_ami_set_golden', function (): void {
@@ -3071,7 +3071,7 @@ add_action('wp_ajax_cs_ami_set_golden', function (): void {
 /**
  * AJAX: refresh S3 history by querying the bucket via AWS CLI.
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void Sends JSON success with array of file entries.
  */
 // ============================================================
@@ -3081,7 +3081,7 @@ add_action('wp_ajax_cs_ami_set_golden', function (): void {
 /**
  * AJAX: refresh Google Drive history by querying the remote via rclone.
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void Sends JSON success with array of file entries.
  */
 add_action('wp_ajax_cs_gdrive_refresh_history', function (): void {
@@ -3100,7 +3100,7 @@ add_action('wp_ajax_cs_gdrive_refresh_history', function (): void {
 /**
  * AJAX: set or clear a tag on a GDrive history entry.
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void Sends JSON success with new tag value.
  */
 add_action('wp_ajax_cs_gdrive_set_tag', function (): void {
@@ -3125,7 +3125,7 @@ add_action('wp_ajax_cs_gdrive_set_tag', function (): void {
  *
  * Enforces a maximum of 4 golden images (separate pool from AMI and S3).
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void Sends JSON success with new golden bool.
  */
 add_action('wp_ajax_cs_gdrive_set_golden', function (): void {
@@ -3153,7 +3153,7 @@ add_action('wp_ajax_cs_gdrive_set_golden', function (): void {
 /**
  * AJAX: delete a file from Google Drive and remove it from the local history.
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void Sends JSON success or error.
  */
 add_action('wp_ajax_cs_gdrive_delete_remote', function (): void {
@@ -3201,7 +3201,7 @@ add_action('wp_ajax_cs_s3_refresh_history', function (): void {
 /**
  * AJAX: set or clear a tag on an S3 history entry.
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void Sends JSON success with new tag value.
  */
 add_action('wp_ajax_cs_s3_set_tag', function (): void {
@@ -3227,7 +3227,7 @@ add_action('wp_ajax_cs_s3_set_tag', function (): void {
  * Enforces a maximum of 4 golden images across all S3 history entries
  * (separate pool from AMI golden images).
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void Sends JSON success with new golden bool.
  */
 add_action('wp_ajax_cs_s3_set_golden', function (): void {
@@ -3255,7 +3255,7 @@ add_action('wp_ajax_cs_s3_set_golden', function (): void {
 /**
  * AJAX: delete a file from S3 and remove it from the local history.
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void Sends JSON success or error.
  */
 add_action('wp_ajax_cs_s3_delete_remote', function (): void {
@@ -3293,7 +3293,7 @@ add_action('wp_ajax_cs_s3_delete_remote', function (): void {
  * After a successful pull the file will appear in the Backup History table
  * on the next page load.
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void Sends JSON success or error.
  */
 add_action('wp_ajax_cs_s3_pull', function (): void {
@@ -3376,7 +3376,7 @@ add_action('admin_post_cs_download', function (): void {
  * Serves from CS_BACKUP_DIR if the file exists locally; otherwise pulls from S3
  * to a temporary path, streams it, then cleans up.
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void
  */
 add_action('admin_post_cs_s3_download', function (): void {
@@ -3427,7 +3427,7 @@ add_action('admin_post_cs_s3_download', function (): void {
  *
  * Uses rclone copyto to pull the file to a temp path, streams it, then cleans up.
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void
  */
 add_action('admin_post_cs_gdrive_download', function (): void {
@@ -3470,7 +3470,7 @@ add_action('admin_post_cs_gdrive_download', function (): void {
 // ============================================================
 
 /**
- * Handle the dashboard widget "Run Backup Now" form POST.
+ * Handle the dashboard widget "Create Local Backup Now" form POST.
  *
  * Runs a full backup (db + media + plugins + themes) and redirects
  * to the plugin admin page. Uses admin-post.php for correct POST handling.
@@ -3659,11 +3659,11 @@ function cs_render_dashboard_widget(): void {
             <?php wp_nonce_field( 'cs_quick_backup', '_cs_quick_nonce' ); ?>
             <input type="hidden" name="action" value="cs_quick_backup">
             <button type="submit" style="<?php echo esc_attr( $btn_base ); ?> background: linear-gradient(90deg, #00897b 0%, #1b5e20 100%); margin-top:8px; width:100%; border:none; cursor:pointer;">
-                &#9654; <?php esc_html_e( 'Run Backup Now', 'cloudscale-free-backup-and-restore' ); ?>
+                &#9654; <?php esc_html_e( 'Create Local Backup Now', 'cloudscale-free-backup-and-restore' ); ?>
             </button>
         </form>
         <a href="<?php echo esc_url($settings_url); ?>"
-           style="<?php echo esc_attr( $btn_base . ' background: linear-gradient(90deg, #e65100 0%, #b71c1c 100%); margin-top:2px; border-radius: 0 0 3px 3px;' ); ?>">
+           style="<?php echo esc_attr( $btn_base . ' background: linear-gradient(90deg, #1565c0 0%, #0d47a1 100%); margin-top:2px; border-radius: 0 0 3px 3px;' ); ?>">
             &#128736; <?php esc_html_e( 'CloudScale Backup & Restore', 'cloudscale-free-backup-and-restore' ); ?>
         </a>
     </div>
@@ -3967,7 +3967,7 @@ function cs_get_instance_region(): string {
  *
  * Uses the same retention count as local backups (cs_retention option).
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void
  */
 function cs_enforce_s3_retention(): void {
@@ -4029,7 +4029,7 @@ function cs_enforce_s3_retention(): void {
  *
  * Uses the same retention count as local backups (cs_retention option).
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return void
  */
 function cs_enforce_gdrive_retention(): void {
@@ -4094,7 +4094,7 @@ function cs_enforce_gdrive_retention(): void {
  * the result with the existing cs_gdrive_history option (preserving tag and
  * golden fields). Entries no longer on Drive are dropped.
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return array Updated history keyed by filename, or empty array if not configured.
  */
 function cs_gdrive_refresh_history(): array {
@@ -4155,7 +4155,7 @@ function cs_find_rclone(): string {
 /**
  * Upload a local backup file to Google Drive using rclone.
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
@@ -4431,7 +4431,7 @@ function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
  * fields for files that still exist in S3). Entries for files no longer in
  * S3 are dropped.
  *
- * @since 3.2.92
+ * @since 3.2.93
  * @return array Updated history keyed by filename, or empty array if S3 not configured.
  */
 function cs_s3_refresh_history(): array {

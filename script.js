@@ -254,12 +254,12 @@ jQuery(function ($) {
                     setTimeout(function () { location.reload(); }, delay);
                 } else {
                     progress('cs-backup-fill', 'cs-backup-msg', '✗ Error: ' + res.data, 'error');
-                    $btn.prop('disabled', false).text('▶ Run Backup Now');
+                    $btn.prop('disabled', false).text('▶ Create Local Backup Now');
                 }
             },
             error: function (xhr, status) {
                 progress('cs-backup-fill', 'cs-backup-msg', '✗ Request failed (' + status + '). Check server error log.', 'error');
-                $btn.prop('disabled', false).text('▶ Run Backup Now');
+                $btn.prop('disabled', false).text('▶ Create Local Backup Now');
             }
         });
     });
@@ -753,7 +753,7 @@ window.csSystemExplain = function () {
 };
 
 window.csBackupExplain = function () {
-    csShowExplain('Run Backup Now',
+    csShowExplain('Create Local Backup Now',
         '<p>Creates a backup zip immediately with the components you select. Sizes shown are uncompressed estimates — the final zip is typically smaller.</p>' +
         '<ul style="margin:8px 0 8px 18px;padding:0;">' +
         '<li><strong>Database</strong> — full SQL dump of all MySQL tables via <code>mysqldump</code>. Required for a restorable backup.</li>' +
