@@ -76,12 +76,12 @@
 
 .cs-header-help {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 6px 16px; background: #fff; color: #0d47a1;
+    padding: 6px 16px; background: rgba(255,255,255,0.15); color: #fff;
     font-size: 0.8rem; font-weight: 700; border-radius: 20px;
-    text-decoration: none; border: none;
-    transition: background 0.12s, color 0.12s, transform 0.12s, box-shadow 0.12s;
+    text-decoration: none; border: 1.5px solid rgba(255,255,255,0.6);
+    transition: background 0.12s, transform 0.12s, box-shadow 0.12s;
 }
-.cs-header-help:hover { background: #e3f0ff !important; color: #0a3370 !important; transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0,0,0,0.15); text-decoration: none !important; }
+.cs-header-help:hover { background: rgba(255,255,255,0.28) !important; color: #fff !important; transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0,0,0,0.2); text-decoration: none !important; }
 
 .cs-header-blog {
     display: inline-flex; align-items: center; gap: 6px;
