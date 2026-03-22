@@ -1584,7 +1584,7 @@ window.csS3HistoryRefresh = function () {
     if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Querying S3\u2026'; }
     csS3HMsg('Refreshing\u2026', true);
     csS3HPost('cs_s3_refresh_history', '', function (res) {
-        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Sync from S3'; }
+        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh'; }
         if (!res.success) {
             csS3HMsg('\u2717 ' + (res.data || 'Refresh failed'), false);
             return;
@@ -1783,7 +1783,7 @@ window.csGDriveHistoryRefresh = function () {
     if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Querying Drive\u2026'; }
     csGDriveHMsg('Refreshing\u2026', true);
     csGDriveHPost('cs_gdrive_refresh_history', '', function (res) {
-        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Sync from Google Drive'; }
+        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh'; }
         if (!res.success) {
             csGDriveHMsg('\u2717 ' + (res.data || 'Refresh failed'), false);
             return;
@@ -2066,7 +2066,7 @@ window.csDropboxHistoryRefresh = function () {
     if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Querying Dropbox\u2026'; }
     csDropboxHMsg('Refreshing\u2026', true);
     csDropboxHPost('cs_dropbox_refresh_history', '', function (res) {
-        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Sync from Dropbox'; }
+        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh'; }
         if (!res.success) {
             csDropboxHMsg('\u2717 ' + (res.data || 'Refresh failed'), false);
             return;
@@ -2076,12 +2076,12 @@ window.csDropboxHistoryRefresh = function () {
         var cEl   = document.getElementById('cs-dropbox-count-val');
         if (cEl) cEl.innerHTML = count + ' in Dropbox &nbsp;&middot;&nbsp; ' + cEl.innerHTML.replace(/.*·\s*/, '');
         var tbody = document.getElementById('cs-db-tbody');
-        if (!tbody) {
-            csDropboxHMsg('\u2713 Done — reloading\u2026', true);
-            setTimeout(function () { location.reload(); }, 1200);
-            return;
-        }
+        var wrap  = document.getElementById('cs-db-table-wrap');
+        var empty = document.getElementById('cs-db-empty');
+        if (!tbody) { csDropboxHMsg('\u2717 Table element missing — reload page', false); return; }
         tbody.innerHTML = '';
+        if (wrap)  wrap.style.display  = files.length ? '' : 'none';
+        if (empty) empty.style.display = files.length ? 'none' : '';
         files.forEach(function (dbf) {
             var name      = dbf.name || '';
             var keyE      = name.replace(/[^a-zA-Z0-9_\-]/g, '_');
