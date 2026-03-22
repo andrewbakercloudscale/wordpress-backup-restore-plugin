@@ -3,6 +3,54 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.94] - 2026-03-22
+- FIX: `wp_die()` calls in Dropbox download handler now use `esc_html__()` — resolves PCP `EscapeOutput.OutputNotEscaped` critical violations
+- FIX: `@since` tags on Dropbox functions corrected to 3.2.83
+
+## [3.2.93] - 2026-03-22
+- CHANGE: Renamed "Run Backup Now" → "Create Local Backup Now" throughout plugin and JS
+- UX: Dashboard widget "CloudScale Backup & Restore" button changed from red to blue
+- FIX: Cloud Schedule Explain modal updated to include Dropbox and correct execution order
+
+## [3.2.92] - 2026-03-22
+- FIX: Dropbox widget row now always shown; "Not configured" in grey when rclone remote not set
+
+## [3.2.91] - 2026-03-22
+- UX: Dashboard widget cloud sync rows now displayed two-per-line
+
+## [3.2.90] - 2026-03-22
+- NEW: Dashboard widget shows last-sync age for each configured cloud provider with traffic-light colouring
+
+## [3.2.89] - 2026-03-22
+- UX: AMI Explain modal rewritten with full AWS CLI install + IAM role setup guide
+
+## [3.2.88] - 2026-03-22
+- FIX: All Explain modals now scroll — `max-height: 65vh; overflow-y: auto` applied globally in `csShowExplain()`
+
+## [3.2.87] - 2026-03-22
+- UX: Cloud backup history panel moved inside Cloud Backups tab only
+- UX: Dropbox labelled BETA in card, schedule checkboxes, and history dropdown
+
+## [3.2.86] - 2026-03-22
+- UX: Dashboard widget buttons swapped — "Create Local Backup Now" first, "CloudScale Backup & Restore" second
+
+## [3.2.85] - 2026-03-22
+- FIX: "Create Local Backup Now" card correctly placed as first section inside Local Backups tab; CloudScale header restored to top of page
+
+## [3.2.84] - 2026-03-22
+- UX: CloudScale header restored to top of page; "Create Local Backup Now" first in Local tab
+- UX: "Site Online" badge removed; Help button changed to transparent pill with white border
+
+## [3.2.83] - 2026-03-22
+- NEW: Dropbox backup support via rclone (save, test, diagnose, sync, history, golden image, tags, delete, download)
+- NEW: Dropbox card in Cloud tab with rclone setup instructions in Explain modal (BETA)
+- NEW: Unified cloud backup history panel in Cloud tab — dropdown for S3, Google Drive, Dropbox, AMI
+- NEW: Local backup history restored to Local Backups tab
+- CHANGE: Provider inline setup instructions removed from cards — behind Explain button only
+- CHANGE: cs_sync_to_dropbox(), cs_dropbox_refresh_history(), cs_enforce_dropbox_retention() added
+- CHANGE: Scheduled cloud backup and cs_create_backup() now include Dropbox sync
+- CHANGE: cs_save_cloud_schedule saves cs_dropbox_sync_enabled
+
 ## [3.2.78] - 2026-03-21
 - UX: Hover effects added to all header status items (Site Online, Help, andrewbaker.ninja) — lift + colour shift on hover; links moved from inline styles to CSS classes for hover support
 
