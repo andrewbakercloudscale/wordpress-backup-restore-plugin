@@ -82,7 +82,7 @@ jQuery(function ($) {
 
     (function () {
         var HIST_KEY = 'cs_history_source';
-        var providers = ['s3', 'gdrive', 'dropbox', 'ami'];
+        var providers = ['s3', 'ami', 'gdrive', 'dropbox'];
         var histAutoRefreshed = {};
 
         function switchHistoryPane(src) {
@@ -556,17 +556,19 @@ window.csScheduleExplain = function () {
 
 window.csCloudScheduleExplain = function () {
     csShowExplain('Cloud Backup Settings',
-        '<p>Runs cloud backup tasks on the days and time you choose, <strong>independently</strong> of the local backup schedule.</p>' +
-        '<p><strong>Cloud Backup Delay</strong> — how many minutes after the local backup finishes before the cloud tasks run. Set this long enough for your local backup to complete (default 30 min).</p>' +
-        '<p><strong>Include in cloud backup</strong> — choose which destinations are used on each scheduled run:</p>' +
+        '<p><strong>What is being backed up?</strong> S3, Google Drive, and Dropbox each copy the <strong>most recent local backup zip</strong> off-site. The cloud backup does not run a new backup — it takes whatever zip was produced by your last local backup run and uploads it. This means <strong>cloud backup days should match (or follow) your local backup days</strong> so there is always a fresh zip to upload.</p>' +
+        '<p>The <strong>Cloud Backup Delay</strong> adds a buffer after the local backup time before the cloud tasks fire — set it long enough for your local backup to finish (default 30 min). Example: local backup at 03:00, delay 30 min → cloud tasks fire at 03:30.</p>' +
+        '<hr style="margin:10px 0;border:none;border-top:1px solid #e0e0e0;">' +
+        '<p><strong>Include in cloud backup</strong> — choose which destinations run on each scheduled day:</p>' +
         '<ul style="margin:6px 0 10px 18px;padding:0;">' +
-        '<li><strong>EC2 AMI Snapshot</strong> — creates a full disk-level image of this server in AWS. Requires AWS CLI and an IAM role (see EC2 AMI Explain for setup).</li>' +
-        '<li><strong>S3 Remote Backup</strong> — copies the latest local backup zip to your S3 bucket. Requires AWS CLI and a configured bucket.</li>' +
-        '<li><strong>Google Drive Backup</strong> — copies the latest local backup zip to Google Drive via rclone. Requires rclone and a configured Drive remote.</li>' +
-        '<li><strong>Dropbox Backup (Beta)</strong> — copies the latest local backup zip to Dropbox via rclone. Requires rclone and a configured Dropbox remote (see Dropbox Explain for setup).</li>' +
+        '<li><strong>AWS EC2 AMI Snapshot</strong> — creates a full disk-level image of this entire server in AWS (OS, files, database). Not dependent on a local zip. Requires AWS CLI and an IAM role (see AMI Explain).</li>' +
+        '<li><strong>AWS S3 Remote Backup</strong> — uploads the most recent local backup zip to your S3 bucket. Requires AWS CLI and a configured bucket.</li>' +
+        '<li><strong>Google Drive Backup</strong> — uploads the most recent local backup zip to Google Drive via rclone. Requires rclone and a configured Drive remote.</li>' +
+        '<li><strong>Dropbox Backup (Beta)</strong> — uploads the most recent local backup zip to Dropbox via rclone. Requires rclone and a configured Dropbox remote (see Dropbox Explain).</li>' +
         '</ul>' +
-        '<p><strong>Max Cloud Backups to Keep</strong> — the maximum number of backups retained across S3, Google Drive, Dropbox, and AMIs. Once the limit is reached the oldest is automatically deleted. <strong>Golden Images</strong> are excluded and never auto-deleted.</p>' +
-        '<p>Order of execution: AMI snapshot first, then S3, then Google Drive, then Dropbox. Runs via WP-Cron.</p>'
+        '<p><strong>Tip:</strong> Set cloud backup days to the same days as your local backup, or the day after. If cloud runs on a day with no new local backup, it will re-upload the previous zip.</p>' +
+        '<p><strong>Max Cloud Backups to Keep</strong> — applies to S3, Google Drive, Dropbox, and AMIs independently. Once the limit is reached the oldest is deleted automatically. <strong>Golden Images</strong> are excluded and never auto-deleted.</p>' +
+        '<p style="margin:0;color:#555;font-size:0.87rem;">Execution order: AMI snapshot → S3 → Google Drive → Dropbox. Runs via WP-Cron.</p>'
     );
 };
 
@@ -581,17 +583,25 @@ window.csRetentionExplain = function () {
 window.csS3Explain = function () {
     var $ = window.jQuery;
     setTimeout(function () { $('#cs-explain-modal').css('max-width', '620px'); }, 0);
-    csShowExplain('S3 Remote Backup',
-        '<p>After every local backup, the most recent zip is automatically copied to your S3 bucket. Use <strong>Sync Local Backup Now</strong> to push manually at any time.</p>' +
-        '<p><strong>Requirements:</strong> AWS CLI on the server with <code>s3:PutObject</code>, <code>s3:ListBucket</code>, and <code>s3:DeleteObject</code>. Use <em>Test Connection</em> to verify, or <em>Diagnose</em> to see detailed AWS CLI info.</p>' +
-        '<p><strong>Bucket</strong> — bucket name only (no <code>s3://</code>). <strong>Path prefix</strong> — optional subfolder, e.g. <code>backups/prod/</code>. Leave blank for bucket root. If a sync fails, the plugin retries automatically after 5 minutes.</p>' +
-        '<hr style="margin:12px 0;border:none;border-top:1px solid #e0e0e0;">' +
-        '<p><strong>Backup History</strong> — lists every zip currently in your bucket. Actions:</p>' +
+    csShowExplain('AWS S3 Remote Backup',
+        '<p>After every local backup, the most recent zip is automatically copied to your S3 bucket. Requires AWS CLI on the server with <code>s3:PutObject</code>, <code>s3:ListBucket</code>, and <code>s3:DeleteObject</code> permissions.</p>' +
+        '<p><strong>Bucket</strong> — bucket name only (no <code>s3://</code>). <strong>Path prefix</strong> — optional subfolder, e.g. <code>backups/prod/</code>. Leave blank for bucket root.</p>' +
+        '<hr style="margin:10px 0;border:none;border-top:1px solid #e0e0e0;">' +
+        '<p><strong>Buttons:</strong></p>' +
+        '<ul style="margin:4px 0 10px 18px;padding:0;">' +
+        '<li><strong>Save AWS S3 Settings</strong> — saves the bucket name and prefix.</li>' +
+        '<li><strong>Test Connection</strong> — writes a small test file to S3 and verifies it succeeds. Confirms credentials and permissions are correct.</li>' +
+        '<li><strong>Diagnose</strong> — shows detailed AWS CLI version, bucket, and last-sync info to help debug connection problems.</li>' +
+        '<li><strong>Copy Last Backup to Cloud</strong> — immediately uploads the <em>most recent local backup zip</em> to S3. Use this after running a manual backup, or to push a backup on demand without waiting for the schedule. Does not create a new backup — it copies whatever zip is already on the server.</li>' +
+        '</ul>' +
+        '<p>If an automatic sync fails, the plugin retries once after 5 minutes.</p>' +
+        '<hr style="margin:10px 0;border:none;border-top:1px solid #e0e0e0;">' +
+        '<p><strong>Cloud Backup History</strong> — lists every zip currently in your bucket:</p>' +
         '<ul style="margin:4px 0 8px 18px;padding:0;">' +
-        '<li><strong>Sync from S3</strong> — queries S3 live. Picks up backups made before this screen existed and removes anything deleted directly in S3.</li>' +
-        '<li><strong>Tag (Edit)</strong> — attach a free-text label to any file, e.g. "pre-upgrade". Persists across syncs.</li>' +
-        '<li><strong>&#11088; Golden Image</strong> — mark up to 4 files as permanently protected. Golden images are never auto-deleted and do not count towards <em>Max Cloud Backups to Keep</em>.</li>' +
-        '<li><strong>&#8659; Download</strong> — streams the zip directly to your browser. If the file is not cached locally it is pulled from S3 first.</li>' +
+        '<li><strong>Sync from S3</strong> — queries AWS S3 live. Picks up backups made before this screen existed and removes anything deleted directly in S3.</li>' +
+        '<li><strong>Tag (Edit)</strong> — attach a free-text label, e.g. "pre-upgrade". Persists across syncs.</li>' +
+        '<li><strong>&#11088; Golden Image</strong> — permanently protected, never auto-deleted, does not count towards the max limit.</li>' +
+        '<li><strong>&#8659; Download</strong> — streams the zip directly to your browser from S3.</li>' +
         '<li><strong>&#128465; Delete</strong> — permanently removes the file from S3. Cannot be undone.</li>' +
         '</ul>'
     );
@@ -632,7 +642,7 @@ window.csS3Diagnose = function () {
         rows += row(err, 'AWS CLI', 'Not found', 'AWS CLI is not installed or not in a standard path on the server. Required for S3 sync and EC2 AMI creation.');
     }
 
-    csShowExplain('S3 Diagnostics', '<table style="width:100%;border-collapse:collapse;">' + rows + '</table>');
+    csShowExplain('AWS S3 Diagnostics', '<table style="width:100%;border-collapse:collapse;">' + rows + '</table>');
 };
 
 window.csCloudScheduleSave = function () {
@@ -693,40 +703,58 @@ window.csAmiExplain = function () {
     function h(text) { return '<p style="margin:14px 0 4px;font-weight:700;font-size:0.93rem;">' + text + '</p>'; }
     function hr() { return '<hr style="margin:12px 0;border:none;border-top:1px solid #e0e0e0;">'; }
 
-    csShowExplain('EC2 AMI Snapshot — Setup Guide',
+    csShowExplain('AWS EC2 AMI Snapshot — Setup Guide',
         '<p>Creates a full Amazon Machine Image (AMI) of this EC2 instance — a disk-level snapshot of the entire server including OS, web server config, PHP, and all files. Unlike a file backup, an AMI lets you recover an unbootable or completely broken server.</p>' +
 
         hr() +
         h('Step 1 — Install the AWS CLI on the server') +
-        '<p style="margin:0 0 6px;font-size:0.88rem;color:#555;">SSH into the server and run the appropriate command for your OS:</p>' +
-        '<p style="margin:0 0 2px;font-size:0.85rem;font-weight:600;">Amazon Linux 2023 / Amazon Linux 2:</p>' +
+        '<p style="margin:0 0 4px;font-size:0.85rem;font-weight:600;">Amazon Linux 2023 / Amazon Linux 2:</p>' +
         cmd('sudo dnf install -y awscli\n# or on older AL2:\nsudo yum install -y awscli') +
-        '<p style="margin:0 0 2px;font-size:0.85rem;font-weight:600;">Ubuntu / Debian:</p>' +
-        cmd('curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o awscliv2.zip\n# (use x86_64 if not ARM)\nunzip awscliv2.zip && sudo ./aws/install') +
-        '<p style="margin:0 0 2px;font-size:0.85rem;font-weight:600;">Verify installation:</p>' +
+        '<p style="margin:0 0 4px;font-size:0.85rem;font-weight:600;">Ubuntu / Debian (ARM):</p>' +
+        cmd('curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o awscliv2.zip\nunzip awscliv2.zip && sudo ./aws/install') +
+        '<p style="margin:0 0 4px;font-size:0.85rem;font-weight:600;">Ubuntu / Debian (x86_64):</p>' +
+        cmd('curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip\nunzip awscliv2.zip && sudo ./aws/install') +
+        '<p style="margin:0 0 4px;font-size:0.85rem;font-weight:600;">Verify:</p>' +
         cmd('aws --version') +
 
         hr() +
-        h('Step 2 — Grant the EC2 instance an IAM role') +
-        '<p style="margin:0 0 8px;font-size:0.88rem;color:#555;">The recommended approach is an <strong>IAM instance role</strong> — no credentials stored on disk.</p>' +
+        h('Step 2 — Grant AWS credentials (choose one method)') +
+
+        '<p style="margin:8px 0 8px;font-size:0.88rem;font-weight:700;background:#c62828;color:#fff;padding:6px 12px;border-radius:4px;">Option A — IAM Instance Role (recommended, no keys on disk)</p>' +
         '<ol style="margin:0 0 10px 18px;padding:0;font-size:0.88rem;">' +
-        '<li>In the AWS console go to <strong>IAM → Roles → Create role</strong></li>' +
-        '<li>Trusted entity: <strong>AWS service → EC2</strong></li>' +
-        '<li>Create a new inline policy with these permissions:<br>' +
-        '<code style="font-size:0.8rem;">ec2:CreateImage, ec2:DescribeImages, ec2:DeregisterImage,<br>ec2:CreateReplaceRootVolumeTask, ec2:RebootInstances</code></li>' +
-        '<li>Attach the role to your EC2 instance: <strong>EC2 console → Instance → Actions → Security → Modify IAM role</strong></li>' +
+        '<li>AWS Console → <strong>IAM → Roles → Create role</strong></li>' +
+        '<li>Trusted entity: <strong>AWS service → EC2</strong> → Next</li>' +
+        '<li>Skip managed policies → <strong>Create role</strong> with a name (e.g. <code>ec2-ami-backup</code>)</li>' +
+        '<li>Open the new role → <strong>Add permissions → Create inline policy</strong> → JSON tab → paste:</li>' +
         '</ol>' +
-        '<p style="margin:0 0 8px;font-size:0.88rem;color:#555;">Verify the role is working:</p>' +
+        cmd('{\n  "Version": "2012-10-17",\n  "Statement": [{\n    "Effect": "Allow",\n    "Action": [\n      "ec2:CreateImage",\n      "ec2:DescribeImages",\n      "ec2:DeregisterImage",\n      "ec2:CreateReplaceRootVolumeTask",\n      "ec2:DescribeReplaceRootVolumeTasks",\n      "ec2:RebootInstances"\n    ],\n    "Resource": "*"\n  }]\n}') +
+        '<ol style="margin:0 0 10px 18px;padding:0;font-size:0.88rem;" start="5">' +
+        '<li>Name the policy (e.g. <code>ec2-ami-backup-policy</code>) → <strong>Create policy</strong></li>' +
+        '<li>EC2 Console → select your instance → <strong>Actions → Security → Modify IAM role</strong> → select the role → <strong>Update IAM role</strong></li>' +
+        '<li>Verify (no keys needed):</li>' +
+        '</ol>' +
         cmd('aws sts get-caller-identity') +
+
+        '<p style="margin:14px 0 8px;font-size:0.88rem;font-weight:700;background:#c62828;color:#fff;padding:6px 12px;border-radius:4px;">Option B — IAM User with access keys (if not on EC2 or role not available)</p>' +
+        '<ol style="margin:0 0 10px 18px;padding:0;font-size:0.88rem;">' +
+        '<li>AWS Console → <strong>IAM → Users → Create user</strong> (e.g. <code>cloudscale-ami</code>)</li>' +
+        '<li>Attach the same inline policy as Option A</li>' +
+        '<li>Open the user → <strong>Security credentials → Create access key</strong> → choose <em>Application running on AWS compute</em> or <em>Other</em></li>' +
+        '<li>Copy the <strong>Access Key ID</strong> and <strong>Secret Access Key</strong> — shown once only</li>' +
+        '<li>SSH into the server and configure as the web server user:</li>' +
+        '</ol>' +
+        cmd('# Run as the user PHP executes under (apache or www-data)\nsudo -u apache aws configure\n\n# Enter when prompted:\nAWS Access Key ID:     AKIA...\nAWS Secret Access Key: your-secret-key\nDefault region name:   af-south-1   ← your region\nDefault output format: json') +
+        '<p style="margin:0 0 4px;font-size:0.85rem;color:#555;">Credentials are stored in <code>/usr/share/httpd/.aws/credentials</code> (apache) or <code>/var/www/.aws/credentials</code> (www-data). Ensure the file is readable only by the web user (<code>chmod 600</code>).</p>' +
+        '<p style="margin:4px 0 4px;font-size:0.85rem;font-weight:600;">Verify:</p>' +
+        cmd('sudo -u apache aws sts get-caller-identity') +
 
         hr() +
         h('Step 3 — Configure this plugin') +
-        '<p style="margin:0 0 8px;font-size:0.88rem;color:#555;">Back in the EC2 AMI Snapshot card:</p>' +
         '<ol style="margin:0 0 10px 18px;padding:0;font-size:0.88rem;">' +
         '<li>Set an <strong>AMI name prefix</strong> (e.g. <code>prod-web01</code>)</li>' +
-        '<li>Set a <strong>Region override</strong> if the auto-detected region is wrong</li>' +
+        '<li>Set a <strong>Region override</strong> if the detected region is wrong (e.g. <code>af-south-1</code>)</li>' +
         '<li>Click <strong>Save AMI Settings</strong></li>' +
-        '<li>Click <strong>Create AMI Now</strong> to test — status will update to <em>available</em> after ~5-15 minutes</li>' +
+        '<li>Click <strong>Create AMI Now</strong> to test — status shows <em>pending</em> then <em>available</em> after 5–15 min</li>' +
         '</ol>' +
 
         hr() +
@@ -840,13 +868,34 @@ function csS3Post(action, extra, onDone) {
     xhr.send(params);
 }
 
+/**
+ * Mark a cloud provider as configured in the "Include in cloud backup" checklist.
+ * Enables the checkbox, auto-checks it, and removes the "Not configured" label.
+ */
+function csMarkProviderConfigured(checkboxId) {
+    var cb = document.getElementById(checkboxId);
+    if (!cb || !cb.disabled) return; // already enabled
+    cb.disabled = false;
+    cb.checked  = true;
+    var label = cb.closest ? cb.closest('label') : cb.parentElement;
+    if (label) {
+        label.style.opacity = '';
+        label.querySelectorAll('span').forEach(function (span) {
+            if (span.textContent.indexOf('Not configured') !== -1) span.remove();
+        });
+    }
+}
+
 window.csS3Save = function () {
     var bucket = document.getElementById('cs-s3-bucket').value.trim();
     var prefix = document.getElementById('cs-s3-prefix').value.trim() || 'backups/';
     csS3Msg('Saving...', true);
     csS3Post('cs_save_s3',
         'bucket=' + encodeURIComponent(bucket) + '&prefix=' + encodeURIComponent(prefix),
-        function (res) { csS3Msg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success); }
+        function (res) {
+            csS3Msg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success);
+            if (res.success && bucket) csMarkProviderConfigured('cs-cloud-s3-enabled');
+        }
     );
 };
 
@@ -854,11 +903,12 @@ window.csS3Test = function () {
     csS3Msg('Testing\u2026', true);
     csS3Post('cs_test_s3', '', function (res) {
         csS3Msg((res.success ? '&#10003; ' : '&#10007; ') + res.data, res.success);
+        if (res.success) csMarkProviderConfigured('cs-cloud-s3-enabled');
     });
 };
 
 window.csS3SyncLatest = function () {
-    csS3Msg('Syncing latest local backup\u2026', true);
+    csS3Msg('Copying last backup to cloud\u2026', true);
     csS3Post('cs_sync_latest_s3', '', function (res) {
         csS3Msg((res.success ? '&#10003; ' : '&#10007; ') + res.data, res.success);
     });
@@ -915,7 +965,10 @@ window.csGDriveSave = function () {
     csGDriveMsg('Saving\u2026', true);
     csGDrivePost('cs_save_gdrive',
         'remote=' + encodeURIComponent(remote) + '&path=' + encodeURIComponent(path),
-        function (res) { csGDriveMsg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success); }
+        function (res) {
+            csGDriveMsg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success);
+            if (res.success && remote) csMarkProviderConfigured('cs-cloud-gdrive-enabled');
+        }
     );
 };
 
@@ -923,11 +976,12 @@ window.csGDriveTest = function () {
     csGDriveMsg('Testing\u2026', true);
     csGDrivePost('cs_test_gdrive', '', function (res) {
         csGDriveMsg((res.success ? '&#10003; ' : '&#10007; ') + res.data, res.success);
+        if (res.success) csMarkProviderConfigured('cs-cloud-gdrive-enabled');
     });
 };
 
 window.csGDriveSyncLatest = function () {
-    csGDriveMsg('Syncing latest local backup\u2026', true);
+    csGDriveMsg('Copying last backup to cloud\u2026', true);
     csGDrivePost('cs_sync_latest_gdrive', '', function (res) {
         csGDriveMsg((res.success ? '&#10003; ' : '&#10007; ') + res.data, res.success);
     });
@@ -953,8 +1007,16 @@ window.csGDriveExplain = function () {
     function hr() { return '<hr style="margin:12px 0;border:none;border-top:1px solid #e0e0e0;">'; }
 
     csShowExplain('Google Drive Backup — Setup Guide',
-        '<p style="margin:0 0 8px;">After every local backup, the most recent backup zip is automatically copied to your Google Drive via <strong>rclone</strong>. Use <strong>Sync Local Backup Now</strong> to push the latest backup manually at any time. Setup takes about 5 minutes and only needs to be done once.</p>' +
-        '<p style="margin:0 0 4px;"><strong>Backup History</strong> — lists every zip currently on your Drive. Actions:</p>' +
+        '<p style="margin:0 0 8px;">After every local backup, the most recent backup zip is automatically copied to your Google Drive via <strong>rclone</strong>. Setup takes about 5 minutes and only needs to be done once.</p>' +
+        '<p style="margin:0 0 4px;"><strong>Buttons:</strong></p>' +
+        '<ul style="margin:0 0 10px 18px;padding:0;">' +
+        '<li><strong>Save Drive Settings</strong> — saves the rclone remote name and destination folder.</li>' +
+        '<li><strong>Test Connection</strong> — runs <code>rclone lsd</code> to verify the remote exists and is reachable.</li>' +
+        '<li><strong>Diagnose</strong> — shows rclone version, remote name, and last-sync details to help debug problems.</li>' +
+        '<li><strong>Copy Last Backup to Cloud</strong> — immediately copies the <em>most recent local backup zip</em> to Google Drive. Use this after a manual backup or to push on demand without waiting for the schedule. Does not create a new backup — it copies whatever zip is already on the server.</li>' +
+        '</ul>' +
+        '<hr style="margin:10px 0;border:none;border-top:1px solid #e0e0e0;">' +
+        '<p style="margin:0 0 4px;"><strong>Cloud Backup History</strong> — lists every zip currently on your Drive. Actions:</p>' +
         '<ul style="margin:0 0 10px 18px;padding:0;">' +
         '<li><strong>Sync from Google Drive</strong> — queries Drive live. Picks up backups made before this screen existed and removes anything deleted directly in Drive.</li>' +
         '<li><strong>Tag (Edit)</strong> — attach a free-text label to any file, e.g. "pre-upgrade".</li>' +
@@ -1085,7 +1147,8 @@ window.csGDriveDiagnose = function () {
 // ================================================================
 
 function csAmiMsg(text, ok) {
-    var el = document.getElementById('cs-ami-msg');
+    // History panel msg takes priority; settings card msg is the fallback for Save/Create feedback
+    var el = document.getElementById('cs-ami-msg') || document.getElementById('cs-ami-settings-msg');
     if (!el) return;
     el.innerHTML = text;
     el.style.color = ok ? '#2e7d32' : '#c62828';
@@ -1108,7 +1171,10 @@ window.csAmiSave = function () {
         'prefix=' + encodeURIComponent(prefix) +
         '&reboot=' + reboot +
         '&region_override=' + encodeURIComponent(regionOverride),
-        function (res) { csAmiMsg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success); }
+        function (res) {
+            csAmiMsg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success);
+            if (res.success && prefix) csMarkProviderConfigured('cs-cloud-ami-enabled');
+        }
     );
 };
 
@@ -1524,7 +1590,7 @@ window.csS3HistoryRefresh = function () {
                 '<td id="cs-s3h-actions-' + keyE + '" style="white-space:nowrap;vertical-align:middle;">' +
                     '<button type="button" onclick="csS3HistorySetGolden(\'' + nameJs + '\')" class="button button-small" id="cs-s3h-golden-btn-' + keyE + '" data-golden="' + goldenD + '" title="' + goldenTit + '" style="min-width:0;padding:2px 6px;margin-bottom:3px;' + goldenSt + '">&#11088;</button> ' +
                     dlBtn +
-                    '<button type="button" onclick="csS3HistoryDelete(\'' + nameJs + '\')" class="button button-small" title="Delete from S3" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>' +
+                    '<button type="button" onclick="csS3HistoryDelete(\'' + nameJs + '\')" class="button button-small" title="Delete from AWS S3" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>' +
                 '</td>';
             tbody.appendChild(tr);
         });
@@ -1607,7 +1673,7 @@ window.csS3HistorySetGolden = function (filename) {
 };
 
 window.csS3HistoryDelete = function (filename) {
-    if (!confirm('Delete from S3?\n\n' + filename + '\n\nThis cannot be undone.')) return;
+    if (!confirm('Delete from AWS S3?\n\n' + filename + '\n\nThis cannot be undone.')) return;
     var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
     csS3HMsg('Deleting\u2026', true);
     csS3HPost('cs_s3_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
@@ -1846,6 +1912,13 @@ window.csDropboxExplain = function () {
     function hr() { return '<hr style="margin:12px 0;border:none;border-top:1px solid #e0e0e0;">'; }
     csShowExplain('Dropbox Backup — Setup Guide',
         '<p style="margin:0 0 8px;">After every local backup, the most recent backup zip is automatically copied to your Dropbox via <strong>rclone</strong>. This uses the same rclone tool as Google Drive — if you already have rclone installed you just need to add a Dropbox remote.</p>' +
+        '<p style="margin:0 0 4px;"><strong>Buttons:</strong></p>' +
+        '<ul style="margin:0 0 10px 18px;padding:0;">' +
+        '<li><strong>Save Dropbox Settings</strong> — saves the rclone remote name and destination folder.</li>' +
+        '<li><strong>Test Connection</strong> — runs <code>rclone lsd</code> to verify the remote exists and is reachable.</li>' +
+        '<li><strong>Diagnose</strong> — shows rclone version, remote name, and troubleshooting tips.</li>' +
+        '<li><strong>Copy Last Backup to Cloud</strong> — immediately copies the <em>most recent local backup zip</em> to Dropbox. Use this after a manual backup or to push on demand without waiting for the schedule. Does not create a new backup — it copies whatever zip is already on the server.</li>' +
+        '</ul>' +
         hr() +
         h('Step 1 — Install rclone (if not already installed)') +
         cmd('curl -fsSL https://rclone.org/install.sh | sudo bash') +
@@ -1874,7 +1947,10 @@ window.csDropboxSave = function () {
     var path   = pathEl.value.trim() || 'cloudscale-backups/';
     csDropboxMsg('Saving\u2026', true);
     csDropboxPost('cs_save_dropbox', 'remote=' + encodeURIComponent(remote) + '&path=' + encodeURIComponent(path),
-        function (res) { csDropboxMsg(res.success ? '\u2713 Saved' : '\u2717 ' + res.data, res.success); }
+        function (res) {
+            csDropboxMsg(res.success ? '\u2713 Saved' : '\u2717 ' + res.data, res.success);
+            if (res.success && remote) csMarkProviderConfigured('cs-cloud-dropbox-enabled');
+        }
     );
 };
 
@@ -1882,6 +1958,7 @@ window.csDropboxTest = function () {
     csDropboxMsg('Testing\u2026', true);
     csDropboxPost('cs_test_dropbox', '', function (res) {
         csDropboxMsg(res.success ? '\u2713 ' + res.data : '\u2717 ' + (res.data || 'Connection failed'), res.success);
+        if (res.success) csMarkProviderConfigured('cs-cloud-dropbox-enabled');
     });
 };
 
@@ -1898,7 +1975,7 @@ window.csDropboxDiagnose = function () {
 };
 
 window.csDropboxSyncLatest = function () {
-    csDropboxMsg('Syncing latest local backup\u2026', true);
+    csDropboxMsg('Copying last backup to cloud\u2026', true);
     csDropboxPost('cs_sync_latest_dropbox', '', function (res) {
         csDropboxMsg(res.success ? '\u2713 ' + res.data : '\u2717 ' + (res.data || 'Sync failed'), res.success);
     });
