@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.109
+ * Version:           3.2.113
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.109');
+define('CS_BACKUP_VERSION',    '3.2.113');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -649,8 +649,10 @@ function cs_admin_page(): void {
                 <?php if ($maint_active): ?>
                     <span class="cs-badge cs-badge-warn">&#9888; <?php esc_html_e( 'Maintenance Mode Active', 'cloudscale-free-backup-and-restore' ); ?></span>
                 <?php endif; ?>
-                <a href="https://your-wordpress-site.example.com/wordpress-plugin-help/backup-restore-help/" target="_blank" rel="noopener" class="cs-header-help">? Help</a>
-                <a href="https://your-wordpress-site.example.com/2026/02/24/cloudscale-free-backup-and-restore-a-wordpress-backup-plugin-that-does-exactly-what-it-says/" target="_blank" rel="noopener" class="cs-header-blog"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ffcc80;box-shadow:0 0 5px #ffcc80;flex-shrink:0;"></span>andrewbaker.ninja</a>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <a href="https://your-wordpress-site.example.com/2026/02/24/cloudscale-free-backup-and-restore-a-wordpress-backup-plugin-that-does-exactly-what-it-says/" target="_blank" rel="noopener" class="cs-header-blog"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ffcc80;box-shadow:0 0 5px #ffcc80;flex-shrink:0;"></span>andrewbaker.ninja</a>
+                    <a href="https://your-wordpress-site.example.com/wordpress-plugin-help/backup-restore-help/" target="_blank" rel="noopener" class="cs-header-help">? Help</a>
+                </div>
             </div>
         </div>
 
@@ -2958,7 +2960,7 @@ add_action('wp_ajax_cs_ami_remove_failed', function (): void {
 /**
  * AJAX: initiate an EC2 replace-root-volume-task from an AMI snapshot.
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void Sends JSON success with task_id, or JSON error with message.
  */
 add_action('wp_ajax_cs_ami_restore', function (): void {
@@ -3012,7 +3014,7 @@ add_action('wp_ajax_cs_ami_restore', function (): void {
 /**
  * AJAX: set or clear a tag on an AMI log entry.
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void Sends JSON success with new tag value.
  */
 add_action('wp_ajax_cs_ami_set_tag', function (): void {
@@ -3048,7 +3050,7 @@ add_action('wp_ajax_cs_ami_set_tag', function (): void {
  * Enforces a maximum of 4 golden images across all AMI entries.
  * Golden images are exempt from auto-pruning in cs_ami_enforce_max().
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void Sends JSON success with new golden bool.
  */
 add_action('wp_ajax_cs_ami_set_golden', function (): void {
@@ -3086,7 +3088,7 @@ add_action('wp_ajax_cs_ami_set_golden', function (): void {
 /**
  * AJAX: refresh S3 history by querying the bucket via AWS CLI.
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void Sends JSON success with array of file entries.
  */
 // ============================================================
@@ -3096,7 +3098,7 @@ add_action('wp_ajax_cs_ami_set_golden', function (): void {
 /**
  * AJAX: refresh Google Drive history by querying the remote via rclone.
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void Sends JSON success with array of file entries.
  */
 add_action('wp_ajax_cs_gdrive_refresh_history', function (): void {
@@ -3115,7 +3117,7 @@ add_action('wp_ajax_cs_gdrive_refresh_history', function (): void {
 /**
  * AJAX: set or clear a tag on a GDrive history entry.
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void Sends JSON success with new tag value.
  */
 add_action('wp_ajax_cs_gdrive_set_tag', function (): void {
@@ -3140,7 +3142,7 @@ add_action('wp_ajax_cs_gdrive_set_tag', function (): void {
  *
  * Enforces a maximum of 4 golden images (separate pool from AMI and S3).
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void Sends JSON success with new golden bool.
  */
 add_action('wp_ajax_cs_gdrive_set_golden', function (): void {
@@ -3168,7 +3170,7 @@ add_action('wp_ajax_cs_gdrive_set_golden', function (): void {
 /**
  * AJAX: delete a file from Google Drive and remove it from the local history.
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void Sends JSON success or error.
  */
 add_action('wp_ajax_cs_gdrive_delete_remote', function (): void {
@@ -3216,7 +3218,7 @@ add_action('wp_ajax_cs_s3_refresh_history', function (): void {
 /**
  * AJAX: set or clear a tag on an S3 history entry.
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void Sends JSON success with new tag value.
  */
 add_action('wp_ajax_cs_s3_set_tag', function (): void {
@@ -3242,7 +3244,7 @@ add_action('wp_ajax_cs_s3_set_tag', function (): void {
  * Enforces a maximum of 4 golden images across all S3 history entries
  * (separate pool from AMI golden images).
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void Sends JSON success with new golden bool.
  */
 add_action('wp_ajax_cs_s3_set_golden', function (): void {
@@ -3270,7 +3272,7 @@ add_action('wp_ajax_cs_s3_set_golden', function (): void {
 /**
  * AJAX: delete a file from S3 and remove it from the local history.
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void Sends JSON success or error.
  */
 add_action('wp_ajax_cs_s3_delete_remote', function (): void {
@@ -3308,7 +3310,7 @@ add_action('wp_ajax_cs_s3_delete_remote', function (): void {
  * After a successful pull the file will appear in the Backup History table
  * on the next page load.
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void Sends JSON success or error.
  */
 add_action('wp_ajax_cs_s3_pull', function (): void {
@@ -3391,7 +3393,7 @@ add_action('admin_post_cs_download', function (): void {
  * Serves from CS_BACKUP_DIR if the file exists locally; otherwise pulls from S3
  * to a temporary path, streams it, then cleans up.
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void
  */
 add_action('admin_post_cs_s3_download', function (): void {
@@ -3442,7 +3444,7 @@ add_action('admin_post_cs_s3_download', function (): void {
  *
  * Uses rclone copyto to pull the file to a temp path, streams it, then cleans up.
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void
  */
 add_action('admin_post_cs_gdrive_download', function (): void {
@@ -3982,7 +3984,7 @@ function cs_get_instance_region(): string {
  *
  * Uses the same retention count as local backups (cs_retention option).
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void
  */
 function cs_enforce_s3_retention(): void {
@@ -4044,7 +4046,7 @@ function cs_enforce_s3_retention(): void {
  *
  * Uses the same retention count as local backups (cs_retention option).
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return void
  */
 function cs_enforce_gdrive_retention(): void {
@@ -4109,7 +4111,7 @@ function cs_enforce_gdrive_retention(): void {
  * the result with the existing cs_gdrive_history option (preserving tag and
  * golden fields). Entries no longer on Drive are dropped.
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return array Updated history keyed by filename, or empty array if not configured.
  */
 function cs_gdrive_refresh_history(): array {
@@ -4170,7 +4172,7 @@ function cs_find_rclone(): string {
 /**
  * Upload a local backup file to Google Drive using rclone.
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
@@ -4446,7 +4448,7 @@ function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
  * fields for files that still exist in S3). Entries for files no longer in
  * S3 are dropped.
  *
- * @since 3.2.109
+ * @since 3.2.113
  * @return array Updated history keyed by filename, or empty array if S3 not configured.
  */
 function cs_s3_refresh_history(): array {

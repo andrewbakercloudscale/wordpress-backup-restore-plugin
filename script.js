@@ -1147,11 +1147,14 @@ window.csGDriveDiagnose = function () {
 // ================================================================
 
 function csAmiMsg(text, ok) {
-    // History panel msg takes priority; settings card msg is the fallback for Save/Create feedback
-    var el = document.getElementById('cs-ami-msg') || document.getElementById('cs-ami-settings-msg');
-    if (!el) return;
-    el.innerHTML = text;
-    el.style.color = ok ? '#2e7d32' : '#c62828';
+    // Write to both: settings card msg (always visible when using the card) and
+    // history panel msg (visible when AMI pane is selected). Using || would write
+    // to the hidden history-panel element and show nothing when the AMI pane is inactive.
+    var color = ok ? '#2e7d32' : '#c62828';
+    ['cs-ami-settings-msg', 'cs-ami-msg'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) { el.innerHTML = text; el.style.color = color; }
+    });
 }
 
 function csAmiPost(action, extra, onDone) {

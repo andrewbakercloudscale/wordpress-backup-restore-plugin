@@ -21,17 +21,17 @@
     font-size: 0.92rem;
     font-weight: 600;
     cursor: pointer;
-    background: #dde3ea;
-    border: 1px solid #b0bec5;
+    background: #eeeeee;
+    border: 1px solid #d0d0d0;
     border-bottom: none;
     border-radius: 6px 6px 0 0;
-    color: #607d8b;
+    color: #555555;
     position: relative;
     top: 2px;
     transition: background 0.12s, color 0.12s;
     line-height: 1.4;
 }
-.cs-tab:hover { background: #546e7a; color: #fff; border-color: #546e7a; }
+.cs-tab:hover { background: #0040ff; color: #fff; border-color: #0040ff; }
 .cs-tab--active {
     background: #37474f;
     color: #fff;
@@ -76,12 +76,12 @@
 
 .cs-header-help {
     display: inline-flex; align-items: center; gap: 6px;
-    padding: 6px 16px; background: rgba(255,255,255,0.15); color: #fff;
+    padding: 6px 16px; background: #2e7d32; color: #fff;
     font-size: 0.8rem; font-weight: 700; border-radius: 20px;
-    text-decoration: none; border: 1.5px solid rgba(255,255,255,0.6);
+    text-decoration: none; border: 1.5px solid #1b5e20;
     transition: background 0.12s, transform 0.12s, box-shadow 0.12s;
 }
-.cs-header-help:hover { background: rgba(255,255,255,0.28) !important; color: #fff !important; transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0,0,0,0.2); text-decoration: none !important; }
+.cs-header-help:hover { background: #1b5e20 !important; color: #fff !important; transform: translateY(-1px); box-shadow: 0 3px 8px rgba(0,0,0,0.2); text-decoration: none !important; }
 
 .cs-header-blog {
     display: inline-flex; align-items: center; gap: 6px;
