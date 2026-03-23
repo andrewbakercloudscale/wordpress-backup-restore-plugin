@@ -3,6 +3,21 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.132] - 2026-03-22
+
+### Fixed
+- PCP compliance: `cs_admin_page()` render callback now independently checks `current_user_can('manage_options')`.
+- PCP compliance: `$_POST['cs_action']` and `$_POST['schedule_enabled']` now wrapped with `wp_unslash()` and annotated with `phpcs:ignore`.
+- PCP compliance: `data-free-bytes` attribute output annotated with `phpcs:ignore EscapeOutput.OutputNotEscaped` (integer cast, no user data).
+- `uninstall.php`: Dropbox options now cleaned up on plugin delete.
+- Dropbox history pane infinite reload loop resolved.
+- AMI Save/Create buttons now show feedback message correctly.
+
+### Added
+- Copy buttons on all Explain modal code blocks.
+- Dropbox setup wizard guide.
+- Italic placeholders on text inputs.
+
 ## [3.2.125] - 2026-03-22
 - FIX: PCP compliance — added `wp_unslash()` to `intval($_POST['run_hour'])` and `intval($_POST['run_minute'])` in schedule form handler
 - FIX: PCP compliance — added `phpcs:ignore EscapeOutput.OutputNotEscaped` to hardcoded static string echoes (off-notice, cloud-off-notice, colspan, row class, inline style)
