@@ -836,14 +836,17 @@ window.csBackupExplain = function () {
 };
 
 window.csHistoryExplain = function () {
-    csShowExplain('Backup History',
-        '<p>All backup zips currently stored on the server, newest first. For each entry:</p>' +
-        '<ul style="margin:8px 0 8px 18px;padding:0;">' +
-        '<li><strong>Download</strong> — save the zip to your local machine for off-site storage.</li>' +
-        '<li><strong>Restore</strong> — drops all database tables and reimports from this backup. Only available on Full and DB-only backups. The site enters maintenance mode during the restore and comes back online automatically.</li>' +
-        '<li><strong>Delete</strong> — permanently removes the file from the server (cannot be undone).</li>' +
+    csShowExplain('Local Backup History',
+        '<p>All backup zips currently stored on the server, newest first. Use these to restore, download, or manage retention.</p>' +
+        '<p><strong>Action icons (left column):</strong></p>' +
+        '<ul style="margin:4px 0 10px 18px;padding:0;">' +
+        '<li><strong>&#8659; Download</strong> (blue arrow) — saves the zip to your local machine for off-site storage.</li>' +
+        '<li><strong>&#8635; Restore</strong> (green arrow) — drops all existing database tables and reimports from this backup. Only shown on Full and DB-only backups. The site enters maintenance mode during the restore and comes back online automatically.</li>' +
+        '<li><strong>&#128465; Delete</strong> (red bin) — permanently removes the file from the server. Cannot be undone.</li>' +
         '</ul>' +
-        '<p>The <strong>Type</strong> column shows what was included: <em>Full</em> (all components), <em>DB</em> (database only), or a custom combination. The <strong>S3</strong> column shows sync status if S3 is configured.</p>' +
+        '<p><strong>Row colours:</strong> The newest backup is highlighted green (<em>latest</em>). A <strong style="color:#b71c1c;">Delete Soon</strong> badge marks the oldest kept backup when you are at your retention limit — it will be deleted when the next backup runs. Rows highlighted orange are already over-limit and will be deleted immediately on the next backup run.</p>' +
+        '<p><strong>Type column:</strong> <em>Full</em> = all components, <em>DB</em> = database only, or a custom combination of what was selected at backup time.</p>' +
+        '<p><strong>Cloud sync columns</strong> (S3 / GDrive / Dropbox): shown when a cloud provider is configured. A green tick means this backup was successfully copied to that provider. A red cross means the sync failed (hover for the error). A dash means no sync has been attempted for this file yet. Configure cloud providers and schedules in the <strong>Cloud Backups</strong> tab.</p>' +
         '<p>Backups are stored in <code>cloudscale-backups/</code> inside <code>wp-content/</code>. The directory is protected by <code>.htaccess</code> to block direct browser access.</p>'
     );
 };
