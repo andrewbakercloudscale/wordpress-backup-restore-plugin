@@ -21,19 +21,18 @@ defined( 'ABSPATH' ) || exit;
 class CloudScale_Backup_Utils {
 
 	/**
-	 * Write a message to the PHP error log when WP_DEBUG is enabled.
+	 * Write a message to the PHP error log.
 	 *
-	 * Silenced in production so debug output never reaches live server logs.
+	 * Always writes — backup failures must be visible in server logs regardless
+	 * of WP_DEBUG, so operators can diagnose problems without enabling debug mode.
 	 *
 	 * @since 1.0.0
 	 * @param string $message Message to write to the PHP error log.
 	 * @return void
 	 */
 	public static function log( string $message ): void {
-		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
-			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-			error_log( $message );
-		}
+		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+		error_log( $message );
 	}
 
 	/**

@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.139] - 2026-03-23
+
+### Fixed
+- PCP compliance: phpcs:disable blocks for `MissingUnslash` and `InputNotSanitized` now cover all applicable `$_POST` reads in manual backup, cloud schedule save, and retention save handlers.
+- PCP compliance: `$_POST['schedule_enabled']` read in admin page render now annotated with `phpcs:ignore NonceVerification.Missing, MissingUnslash`.
+- PCP compliance: global CSS enqueue for admin sidebar nav icon annotated with `phpcs:ignore GlobalEnqueuedAssets`.
+
+## [3.2.136] - 2026-03-23
+
+### Changed
+- "Delete Soon" badge moved under the filename in the local backup history table (was in the # column).
+- "Latest" badge moved under the filename in the local backup history table (was in the # column).
+- Reverted `display:flex` on `cs-col-num` td (was breaking Dropbox column rendering).
+
 ## [3.2.132] - 2026-03-22
 
 ### Fixed

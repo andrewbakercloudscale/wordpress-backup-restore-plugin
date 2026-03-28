@@ -214,7 +214,9 @@ jQuery(function ($) {
             '#cs-include-htaccess, #cs-include-wpconfig')
             .is(':checked');
         if (!anyChecked) {
-            alert('Please select at least one backup option.');
+            csAlert('&#9888;', 'No Components Selected',
+                'Please select at least one component to include in the backup.',
+                '<p>Check one or more items — <strong>Database</strong>, <strong>Media</strong>, <strong>Plugins</strong>, <strong>Themes</strong>, or other files — before starting the backup.</p>');
             return;
         }
 
@@ -308,22 +310,27 @@ jQuery(function ($) {
 
     $(document).on('click', '.cs-delete-btn', function () {
         var file = $(this).data('file');
-        if (!confirm('Delete backup:\n\n' + file + '\n\nThis cannot be undone.')) return;
-
         var $row = $(this).closest('tr');
         var $btn = $(this);
-        $btn.prop('disabled', true).removeClass('cs-icon-btn--red').addClass('cs-icon-btn--orange');
-
-        $.post(CS.ajax_url, { action: 'cs_delete_backup', nonce: CS.nonce, file: file },
-            function (res) {
-                if (res.success) {
-                    $row.fadeOut(250, function () { $(this).remove(); });
-                } else {
-                    alert('Error: ' + res.data);
-                    $btn.prop('disabled', false).removeClass('cs-icon-btn--orange').addClass('cs-icon-btn--red');
-                }
-            }
-        );
+        csConfirm('&#128465;', 'Delete Local Backup',
+            '<span style="color:#c62828;">This backup file will be permanently deleted from the server.</span>',
+            '<p>File: <strong>' + csEscHtml(file) + '</strong></p>' +
+            '<p>The file is removed from disk immediately. Cloud copies (S3, Google Drive, Dropbox) are <strong>not affected</strong>.</p>' +
+            '<p>This action <strong>cannot be undone</strong>.</p>',
+            function () {
+                $btn.prop('disabled', true).removeClass('cs-icon-btn--red').addClass('cs-icon-btn--orange');
+                $.post(CS.ajax_url, { action: 'cs_delete_backup', nonce: CS.nonce, file: file },
+                    function (res) {
+                        if (res.success) {
+                            $row.fadeOut(250, function () { $(this).remove(); });
+                        } else {
+                            csAlert('&#10007;', 'Delete Failed', 'The backup file could not be deleted.',
+                                '<p>' + csEscHtml(res.data) + '</p>');
+                            $btn.prop('disabled', false).removeClass('cs-icon-btn--orange').addClass('cs-icon-btn--red');
+                        }
+                    }
+                );
+            }, 'Delete');
     });
 
     // ================================================================
@@ -389,7 +396,7 @@ jQuery(function ($) {
             success: function (res) {
                 if (res.success) {
                     progress('cs-modal-fill', 'cs-modal-progress-msg', 'Step 3/3: ✓ ' + res.data, 'done');
-                    setTimeout(function () { alert('Restore complete! The page will reload.'); location.reload(); }, 1500);
+                    setTimeout(function () { location.reload(); }, 1500);
                 } else {
                     progress('cs-modal-fill', 'cs-modal-progress-msg', '✗ ' + res.data, 'error');
                     $cancel.prop('disabled', false).text('Close');
@@ -412,45 +419,61 @@ jQuery(function ($) {
     });
 
     $('#cs-restore-upload-btn').on('click', function () {
-        var file = $('#cs-restore-file')[0].files[0];
-        if (!file) { alert('Please select a backup file to upload.'); return; }
-
-        var ext = file.name.split('.').pop().toLowerCase();
-        if (ext !== 'zip' && ext !== 'sql') { alert('Only .zip or .sql files are accepted.'); return; }
-
-        if (!confirm('RESTORE DATABASE from uploaded file:\n\n' + file.name + '\n\n' +
-            'This will put the site into maintenance mode, drop all tables, restore from the uploaded file, then bring the site back online.\n\n' +
-            'Have you taken a server snapshot?\n\nClick OK to proceed or Cancel to abort.')) return;
-
+        var file  = $('#cs-restore-file')[0].files[0];
         var $btn  = $(this);
         var $prog = $('#cs-restore-upload-progress');
 
-        $btn.prop('disabled', true).text('Restoring...');
-        $prog.show();
-        progress('cs-restore-upload-fill', 'cs-restore-upload-msg', 'Uploading and restoring — do not close this window...', 'running');
+        if (!file) {
+            csAlert('&#9888;', 'No File Selected', 'Please choose a backup file before restoring.',
+                '<p>Click <strong>Choose File</strong> and select a <code>.zip</code> or <code>.sql</code> backup from your computer.</p>');
+            return;
+        }
 
-        var fd = new FormData();
-        fd.append('action', 'cs_restore_upload');
-        fd.append('nonce',  CS.nonce);
-        fd.append('backup_file', file);
+        var ext = file.name.split('.').pop().toLowerCase();
+        if (ext !== 'zip' && ext !== 'sql') {
+            csAlert('&#9888;', 'Unsupported File Type', 'Only <code>.zip</code> and <code>.sql</code> files can be restored.',
+                '<p>The selected file <strong>' + csEscHtml(file.name) + '</strong> is not a supported format.</p>' +
+                '<p>Accepted: <strong>.zip</strong> (full backup archive) or <strong>.sql</strong> (database dump only).</p>');
+            return;
+        }
 
-        $.ajax({
-            url: CS.ajax_url, method: 'POST', data: fd,
-            processData: false, contentType: false, timeout: 0,
-            success: function (res) {
-                if (res.success) {
-                    progress('cs-restore-upload-fill', 'cs-restore-upload-msg', '✓ ' + res.data, 'done');
-                    setTimeout(function () { alert('Restore complete! The page will reload.'); location.reload(); }, 1500);
-                } else {
-                    progress('cs-restore-upload-fill', 'cs-restore-upload-msg', '✗ ' + res.data, 'error');
-                    $btn.prop('disabled', false).text('↩ Restore from Upload');
-                }
-            },
-            error: function (xhr, status) {
-                progress('cs-restore-upload-fill', 'cs-restore-upload-msg', '✗ Upload failed: ' + status, 'error');
-                $btn.prop('disabled', false).text('↩ Restore from Upload');
-            }
-        });
+        csConfirm('&#8629;', 'Restore from Uploaded File',
+            '<span style="color:#e65100;font-weight:600;">This will overwrite the entire database with the uploaded file.</span>',
+            '<p>Restoring <strong>' + csEscHtml(file.name) + '</strong> will:</p>' +
+            '<ul style="margin:6px 0 10px 18px;line-height:1.8;">' +
+            '<li>Put the site into <strong>maintenance mode</strong></li>' +
+            '<li><strong>Drop all current database tables</strong> and replace them with the backup</li>' +
+            '<li>Bring the site back online automatically when complete</li>' +
+            '</ul>' +
+            '<p>Take a server snapshot or AMI first. This action <strong>cannot be undone</strong>.</p>',
+            function () {
+                $btn.prop('disabled', true).text('Restoring...');
+                $prog.show();
+                progress('cs-restore-upload-fill', 'cs-restore-upload-msg', 'Uploading and restoring — do not close this window...', 'running');
+
+                var fd = new FormData();
+                fd.append('action', 'cs_restore_upload');
+                fd.append('nonce',  CS.nonce);
+                fd.append('backup_file', file);
+
+                $.ajax({
+                    url: CS.ajax_url, method: 'POST', data: fd,
+                    processData: false, contentType: false, timeout: 0,
+                    success: function (res) {
+                        if (res.success) {
+                            progress('cs-restore-upload-fill', 'cs-restore-upload-msg', '&#10003; ' + res.data, 'done');
+                            setTimeout(function () { location.reload(); }, 1500);
+                        } else {
+                            progress('cs-restore-upload-fill', 'cs-restore-upload-msg', '&#10007; ' + res.data, 'error');
+                            $btn.prop('disabled', false).text('↩ Restore from Upload');
+                        }
+                    },
+                    error: function (xhr, status) {
+                        progress('cs-restore-upload-fill', 'cs-restore-upload-msg', '&#10007; Upload failed: ' + status, 'error');
+                        $btn.prop('disabled', false).text('↩ Restore from Upload');
+                    }
+                });
+            }, 'Restore', 'background:#e65100;border-color:#bf360c;color:#fff;');
     });
 
     // ================================================================
@@ -504,7 +527,8 @@ jQuery(function ($) {
                 if (res.success) {
                     $('#cs-retention-saved').show().delay(2500).fadeOut();
                 } else {
-                    alert('Error: ' + res.data);
+                    csAlert('&#10007;', 'Save Failed', 'The retention settings could not be saved.',
+                        '<p>' + csEscHtml(res.data) + '</p>');
                 }
             }
         ).always(function () {
@@ -579,6 +603,53 @@ function csShowExplain(title, body) {
     });
 
     $('#cs-explain-overlay, #cs-explain-modal').show();
+}
+
+function csEscHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function csDialog(icon, title, subtitle, body, buttonsHtml) {
+    var $ = window.jQuery;
+    if (!$('#cs-dialog-overlay').length) {
+        $('body').append(
+            '<div id="cs-dialog-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99998;"></div>' +
+            '<div id="cs-dialog-modal" style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:#fff;border-radius:10px;padding:28px 32px;max-width:520px;width:92%;z-index:99999;box-shadow:0 8px 32px rgba(0,0,0,0.25);font-family:inherit;">' +
+            '<div id="cs-dialog-title" style="font-size:1.15rem;font-weight:700;margin:0 0 6px;color:#1a1a1a;"></div>' +
+            '<div id="cs-dialog-subtitle" style="font-size:0.92rem;margin:0 0 16px;line-height:1.5;"></div>' +
+            '<div id="cs-dialog-body" style="font-size:0.88rem;line-height:1.65;color:#444;margin-bottom:22px;"></div>' +
+            '<div id="cs-dialog-buttons" style="display:flex;gap:10px;justify-content:flex-end;"></div>' +
+            '</div>'
+        );
+    }
+    $('#cs-dialog-title').html((icon ? icon + '&nbsp;&nbsp;' : '') + csEscHtml(title));
+    $('#cs-dialog-subtitle').html(subtitle);
+    $('#cs-dialog-body').html(body);
+    $('#cs-dialog-buttons').html(buttonsHtml);
+    $('#cs-dialog-overlay, #cs-dialog-modal').show();
+}
+
+function csAlert(icon, title, subtitle, body) {
+    var $ = window.jQuery;
+    csDialog(icon, title, subtitle, body,
+        '<button type="button" id="cs-dialog-ok" class="button button-primary" style="padding:7px 24px;font-size:0.92rem;border-radius:6px;">OK</button>'
+    );
+    $('#cs-dialog-ok').off('click').on('click', function () { $('#cs-dialog-overlay, #cs-dialog-modal').hide(); });
+    $('#cs-dialog-overlay').off('click').on('click', function () { $('#cs-dialog-overlay, #cs-dialog-modal').hide(); });
+}
+
+function csConfirm(icon, title, subtitle, body, onConfirm, confirmLabel, confirmStyle) {
+    var $ = window.jQuery;
+    var lbl   = confirmLabel || 'Confirm';
+    var style = confirmStyle  || 'background:#c62828;border-color:#b71c1c;color:#fff;';
+    csDialog(icon, title, subtitle, body,
+        '<button type="button" id="cs-dialog-cancel" class="button" style="padding:7px 24px;font-size:0.92rem;border-radius:6px;">Cancel</button>' +
+        '<button type="button" id="cs-dialog-ok" class="button" style="padding:7px 24px;font-size:0.92rem;border-radius:6px;' + style + '">' + csEscHtml(lbl) + '</button>'
+    );
+    $('#cs-dialog-cancel').off('click').on('click', function () { $('#cs-dialog-overlay, #cs-dialog-modal').hide(); });
+    $('#cs-dialog-overlay').off('click').on('click', function () { $('#cs-dialog-overlay, #cs-dialog-modal').hide(); });
+    $('#cs-dialog-ok').off('click').on('click', function () {
+        $('#cs-dialog-overlay, #cs-dialog-modal').hide();
+        onConfirm();
+    });
 }
 
 window.csScheduleExplain = function () {
@@ -806,6 +877,37 @@ window.csAmiExplain = function () {
     );
 };
 
+window.csRepairTables = function () {
+    var $ = window.jQuery;
+    var $btn = $('#cs-repair-btn');
+    var $msg = $('#cs-repair-msg');
+    $btn.prop('disabled', true).text('Repairing\u2026');
+    $msg.text('').css('color', '');
+    $.post(CS.ajax_url, { action: 'cs_repair_tables', nonce: CS.nonce }, function (res) {
+        if (res.success) {
+            $msg.text('\u2713 ' + res.data).css('color', '#2e7d32');
+        } else {
+            $msg.text('\u2717 ' + (res.data || 'Repair failed')).css('color', '#c62828');
+        }
+        $btn.prop('disabled', false).text('Run Repair Now');
+    }).fail(function () {
+        $msg.text('\u2717 Request failed').css('color', '#c62828');
+        $btn.prop('disabled', false).text('Run Repair Now');
+    });
+};
+
+window.csRepairExplain = function () {
+    csShowExplain('Table Overhead Repair',
+        '<p>MySQL (InnoDB) tables accumulate <strong>fragmentation</strong> over time — wasted space left behind after rows are deleted or updated. The overhead figure is the total unused bytes across all tables in your database.</p>' +
+        '<ul style="margin:8px 0 8px 18px;padding:0;">' +
+        '<li><strong style="color:#2e7d32;">Green (&#8804; 24 MB)</strong> — normal; no action needed.</li>' +
+        '<li><strong style="color:#e65100;">Amber (&gt; 24 MB, &lt; 52 MB)</strong> — worth running a repair when convenient.</li>' +
+        '<li><strong style="color:#c62828;">Red (&#8805; 52 MB)</strong> — high fragmentation; run repair now to reclaim space and improve performance.</li>' +
+        '</ul>' +
+        '<p><strong>Run Repair Now</strong> runs <code>OPTIMIZE TABLE</code> on every table with overhead. Tables stay readable during the operation — no downtime. On large databases it may take a minute or two.</p>'
+    );
+};
+
 window.csSystemExplain = function () {
     csShowExplain('System Info',
         '<p>A live snapshot of your server environment. Use it to diagnose backup problems before they happen:</p>' +
@@ -966,7 +1068,8 @@ window.csS3SyncFile = function (btn, filename) {
             btn.textContent = '↑ Retry';
             var errEl = btn.previousElementSibling;
             if (errEl) errEl.textContent = res.data || 'Sync failed';
-            else alert('S3 sync failed: ' + (res.data || 'Unknown error'));
+            else csAlert('&#10007;', 'S3 Sync Failed', 'The file could not be uploaded to AWS S3.',
+                '<p>' + csEscHtml(res.data || 'Unknown error') + '</p>');
         }
     });
 };
@@ -1228,18 +1331,24 @@ window.csAmiCreate = function () {
     var prefix = prefixEl.value.trim();
     if (!prefix) { csAmiMsg('&#10007; Enter an AMI name prefix first.', false); return; }
     var reboot = rebootEl.checked;
-    var msg = 'Create an AMI snapshot of this instance now?';
-    if (reboot) msg += '\n\nWARNING: The instance will be REBOOTED. This will cause brief downtime.';
-    if (!confirm(msg)) return;
-    csAmiMsg('Creating AMI\u2026 this may take a moment.', true);
-    csAmiPost('cs_create_ami', '', function (res) {
-        if (res.success) {
-            csAmiMsg('&#10003; ' + (res.data.message || 'AMI created'), true);
-            setTimeout(function () { location.reload(); }, 2000);
-        } else {
-            csAmiMsg('&#10007; ' + (res.data || 'AMI creation failed'), false);
-        }
-    });
+    csConfirm('&#128247;', 'Create AMI Snapshot',
+        'A new AMI will be created from the current state of this EC2 instance.',
+        '<p>The AMI will be named using the prefix <strong>' + csEscHtml(prefix) + '</strong> and stored in your AWS account.</p>' +
+        (reboot ? '<p><strong style="color:#c62828;">&#9888; The instance will be REBOOTED.</strong> This causes brief downtime — ensure you can tolerate an interruption before proceeding.</p>' : '') +
+        '<p>AMI creation runs in the background. The table refreshes automatically when complete.</p>',
+        function () {
+            csAmiMsg('Creating AMI\u2026 this may take a moment.', true);
+            csAmiPost('cs_create_ami', '', function (res) {
+                if (res.success) {
+                    csAmiMsg('&#10003; ' + (res.data.message || 'AMI created'), true);
+                    setTimeout(function () { location.reload(); }, 2000);
+                } else {
+                    csAmiMsg('&#10007; ' + (res.data || 'AMI creation failed'), false);
+                }
+            });
+        },
+        reboot ? 'Create AMI (Reboot)' : 'Create AMI',
+        reboot ? 'background:#c62828;border-color:#b71c1c;color:#fff;' : 'background:#2e7d32;border-color:#1b5e20;color:#fff;');
 };
 
 window.csAmiStatus = function () {
@@ -1348,36 +1457,48 @@ window.csAmiRefreshOne = function (amiId) {
 window.csAmiDelete = function (amiId, amiName, alreadyDeleted) {
     var label = amiName ? amiName + ' (' + amiId + ')' : amiId;
     if (alreadyDeleted) {
-        if (!confirm('Remove this record from the log?\n\n' + label + '\n\nThis AMI has already been deleted in AWS.')) return;
-        csAmiMsg('Removing record\u2026', true);
-        csAmiPost('cs_ami_remove_record', 'ami_id=' + encodeURIComponent(amiId), function (res) {
-            if (res.success) {
-                csAmiMsg('&#10003; Record removed', true);
-                var row = document.getElementById('cs-ami-row-' + amiId);
-                if (row) row.remove();
-            } else {
-                csAmiMsg('&#10007; ' + (res.data || 'Remove failed'), false);
-            }
-        });
+        csConfirm('&#128465;', 'Remove Log Entry',
+            'This record will be removed from the AMI history table.',
+            '<p>AMI: <strong>' + csEscHtml(label) + '</strong></p>' +
+            '<p>This AMI has already been deleted in AWS. Removing it cleans up the local log — no changes are made in AWS.</p>',
+            function () {
+                csAmiMsg('Removing record\u2026', true);
+                csAmiPost('cs_ami_remove_record', 'ami_id=' + encodeURIComponent(amiId), function (res) {
+                    if (res.success) {
+                        csAmiMsg('&#10003; Record removed', true);
+                        var row = document.getElementById('cs-ami-row-' + amiId);
+                        if (row) row.remove();
+                    } else {
+                        csAmiMsg('&#10007; ' + (res.data || 'Remove failed'), false);
+                    }
+                });
+            }, 'Remove');
         return;
     }
-    if (!confirm('Deregister (delete) this AMI?\n\n' + label + '\n\nAssociated EBS snapshots will NOT be deleted automatically.')) return;
-    csAmiMsg('Deregistering ' + amiId + '\u2026', true);
-    // Show pending state immediately
-    var stateCell = document.getElementById('cs-ami-state-' + amiId);
-    if (stateCell) stateCell.innerHTML = '<span style="color:#e65100;font-weight:600;">&#9203; Pending Delete\u2026</span>';
-    csAmiPost('cs_deregister_ami', 'ami_id=' + encodeURIComponent(amiId), function (res) {
-        if (res.success) {
-            csAmiMsg('&#10003; Delete requested — status will update in 15 minutes', true);
-            // Keep row visible with pending state; cron will clean up
-            var actionsCell = document.getElementById('cs-ami-actions-' + amiId);
-            if (actionsCell) actionsCell.innerHTML = '<span style="color:#888;font-size:0.82rem;">Pending\u2026</span>';
-        } else {
-            // Revert state on failure
-            if (stateCell) stateCell.innerHTML = '<span style="color:#c62828;font-weight:600;">&#10007; Delete failed</span>';
-            csAmiMsg('&#10007; ' + (res.data || 'Deregister failed'), false);
-        }
-    });
+    csConfirm('&#128465;', 'Deregister AMI',
+        '<span style="color:#c62828;">This AMI will be permanently deregistered in AWS.</span>',
+        '<p>AMI: <strong>' + csEscHtml(label) + '</strong></p>' +
+        '<p>Deregistering removes the AMI from your AWS account. The instance can no longer be launched from this image.</p>' +
+        '<p><strong>Note:</strong> Associated EBS snapshots are <strong>not deleted automatically</strong> — remove them manually in the AWS console if needed.</p>' +
+        '<p>This action <strong>cannot be undone</strong>.</p>',
+        function () {
+            csAmiMsg('Deregistering ' + amiId + '\u2026', true);
+            // Show pending state immediately
+            var stateCell = document.getElementById('cs-ami-state-' + amiId);
+            if (stateCell) stateCell.innerHTML = '<span style="color:#e65100;font-weight:600;">&#9203; Pending Delete\u2026</span>';
+            csAmiPost('cs_deregister_ami', 'ami_id=' + encodeURIComponent(amiId), function (res) {
+                if (res.success) {
+                    csAmiMsg('&#10003; Delete requested — status will update in 15 minutes', true);
+                    // Keep row visible with pending state; cron will clean up
+                    var actionsCell = document.getElementById('cs-ami-actions-' + amiId);
+                    if (actionsCell) actionsCell.innerHTML = '<span style="color:#888;font-size:0.82rem;">Pending\u2026</span>';
+                } else {
+                    // Revert state on failure
+                    if (stateCell) stateCell.innerHTML = '<span style="color:#c62828;font-weight:600;">&#10007; Delete failed</span>';
+                    csAmiMsg('&#10007; ' + (res.data || 'Deregister failed'), false);
+                }
+            });
+        }, 'Deregister');
 };
 
 window.csAmiRestore = function (amiId, amiName) {
@@ -1542,19 +1663,24 @@ function csAmiUpdateGoldenCount() {
 }
 
 window.csAmiRemoveFailed = function (name) {
-    if (!confirm('Remove this failed record from the log?\n\n' + name)) return;
-    csAmiMsg('Removing\u2026', true);
-    csAmiPost('cs_ami_remove_failed', 'name=' + encodeURIComponent(name), function (res) {
-        if (res.success) {
-            csAmiMsg('&#10003; Record removed', true);
-            document.querySelectorAll('#cs-ami-tbody tr').forEach(function (row) {
-                var cells = row.querySelectorAll('td');
-                if (cells.length && cells[0].textContent.trim() === name) row.remove();
+    csConfirm('&#128465;', 'Remove Failed Record',
+        'This entry will be removed from the AMI history table.',
+        '<p>AMI name: <strong>' + csEscHtml(name) + '</strong></p>' +
+        '<p>This record represents a failed AMI creation attempt. Removing it cleans up the log — no changes are made in AWS.</p>',
+        function () {
+            csAmiMsg('Removing\u2026', true);
+            csAmiPost('cs_ami_remove_failed', 'name=' + encodeURIComponent(name), function (res) {
+                if (res.success) {
+                    csAmiMsg('&#10003; Record removed', true);
+                    document.querySelectorAll('#cs-ami-tbody tr').forEach(function (row) {
+                        var cells = row.querySelectorAll('td');
+                        if (cells.length && cells[0].textContent.trim() === name) row.remove();
+                    });
+                } else {
+                    csAmiMsg('&#10007; ' + (res.data || 'Remove failed'), false);
+                }
             });
-        } else {
-            csAmiMsg('&#10007; ' + (res.data || 'Remove failed'), false);
-        }
-    });
+        }, 'Remove');
 };
 
 // ================================================================
@@ -1716,21 +1842,27 @@ window.csS3HistorySetGolden = function (filename) {
 };
 
 window.csS3HistoryDelete = function (filename) {
-    if (!confirm('Delete from AWS S3?\n\n' + filename + '\n\nThis cannot be undone.')) return;
-    var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
-    csS3HMsg('Deleting\u2026', true);
-    csS3HPost('cs_s3_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
-        if (res.success) {
-            csS3HMsg('\u2713 Deleted', true);
-            var row = document.getElementById('cs-s3h-row-' + keyE);
-            if (row) row.remove();
-            csS3HUpdateGoldenCount();
-            var cEl = document.getElementById('cs-s3-count-val');
-            if (cEl) { var m = cEl.innerHTML.match(/^(\d+)/); if (m) cEl.innerHTML = cEl.innerHTML.replace(/^\d+/, Math.max(0, parseInt(m[1], 10) - 1)); }
-        } else {
-            csS3HMsg('\u2717 ' + (res.data || 'Delete failed'), false);
-        }
-    });
+    csConfirm('&#128465;', 'Delete from AWS S3',
+        '<span style="color:#c62828;">This file will be permanently deleted from your S3 bucket.</span>',
+        '<p>File: <strong>' + csEscHtml(filename) + '</strong></p>' +
+        '<p>The file will be removed from S3 immediately. Your local backup copy on this server is <strong>not affected</strong>.</p>' +
+        '<p>This action <strong>cannot be undone</strong>.</p>',
+        function () {
+            var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+            csS3HMsg('Deleting\u2026', true);
+            csS3HPost('cs_s3_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
+                if (res.success) {
+                    csS3HMsg('\u2713 Deleted', true);
+                    var row = document.getElementById('cs-s3h-row-' + keyE);
+                    if (row) row.remove();
+                    csS3HUpdateGoldenCount();
+                    var cEl = document.getElementById('cs-s3-count-val');
+                    if (cEl) { var m = cEl.innerHTML.match(/^(\d+)/); if (m) cEl.innerHTML = cEl.innerHTML.replace(/^\d+/, Math.max(0, parseInt(m[1], 10) - 1)); }
+                } else {
+                    csS3HMsg('\u2717 ' + (res.data || 'Delete failed'), false);
+                }
+            });
+        }, 'Delete');
 };
 
 window.csS3HistoryPull = function (filename) {
@@ -1912,21 +2044,27 @@ window.csGDriveHistorySetGolden = function (filename) {
 };
 
 window.csGDriveHistoryDelete = function (filename) {
-    if (!confirm('Delete from Google Drive?\n\n' + filename + '\n\nThis cannot be undone.')) return;
-    var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
-    csGDriveHMsg('Deleting\u2026', true);
-    csGDriveHPost('cs_gdrive_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
-        if (res.success) {
-            csGDriveHMsg('\u2713 Deleted', true);
-            var row = document.getElementById('cs-gd-row-' + keyE);
-            if (row) row.remove();
-            csGDriveHUpdateGoldenCount();
-            var cEl = document.getElementById('cs-gdrive-count-val');
-            if (cEl) { var m = cEl.innerHTML.match(/^(\d+)/); if (m) cEl.innerHTML = cEl.innerHTML.replace(/^\d+/, Math.max(0, parseInt(m[1], 10) - 1)); }
-        } else {
-            csGDriveHMsg('\u2717 ' + (res.data || 'Delete failed'), false);
-        }
-    });
+    csConfirm('&#128465;', 'Delete from Google Drive',
+        '<span style="color:#c62828;">This file will be permanently deleted from your Google Drive.</span>',
+        '<p>File: <strong>' + csEscHtml(filename) + '</strong></p>' +
+        '<p>The file will be removed from Google Drive immediately. Your local backup copy on this server is <strong>not affected</strong>.</p>' +
+        '<p>This action <strong>cannot be undone</strong>.</p>',
+        function () {
+            var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+            csGDriveHMsg('Deleting\u2026', true);
+            csGDriveHPost('cs_gdrive_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
+                if (res.success) {
+                    csGDriveHMsg('\u2713 Deleted', true);
+                    var row = document.getElementById('cs-gd-row-' + keyE);
+                    if (row) row.remove();
+                    csGDriveHUpdateGoldenCount();
+                    var cEl = document.getElementById('cs-gdrive-count-val');
+                    if (cEl) { var m = cEl.innerHTML.match(/^(\d+)/); if (m) cEl.innerHTML = cEl.innerHTML.replace(/^\d+/, Math.max(0, parseInt(m[1], 10) - 1)); }
+                } else {
+                    csGDriveHMsg('\u2717 ' + (res.data || 'Delete failed'), false);
+                }
+            });
+        }, 'Delete');
 };
 
 // ================================================================
@@ -2189,19 +2327,25 @@ window.csDropboxHistorySetGolden = function (filename) {
 };
 
 window.csDropboxHistoryDelete = function (filename) {
-    if (!confirm('Delete from Dropbox?\n\n' + filename + '\n\nThis cannot be undone.')) return;
-    var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
-    csDropboxHMsg('Deleting\u2026', true);
-    csDropboxHPost('cs_dropbox_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
-        if (res.success) {
-            csDropboxHMsg('\u2713 Deleted', true);
-            var row = document.getElementById('cs-db-row-' + keyE);
-            if (row) row.remove();
-            csDropboxHUpdateGoldenCount();
-            var cEl = document.getElementById('cs-dropbox-count-val');
-            if (cEl) { var m = cEl.innerHTML.match(/^(\d+)/); if (m) cEl.innerHTML = cEl.innerHTML.replace(/^\d+/, Math.max(0, parseInt(m[1], 10) - 1)); }
-        } else {
-            csDropboxHMsg('\u2717 ' + (res.data || 'Delete failed'), false);
-        }
-    });
+    csConfirm('&#128465;', 'Delete from Dropbox',
+        '<span style="color:#c62828;">This file will be permanently deleted from your Dropbox.</span>',
+        '<p>File: <strong>' + csEscHtml(filename) + '</strong></p>' +
+        '<p>The file will be removed from Dropbox immediately. Your local backup copy on this server is <strong>not affected</strong>.</p>' +
+        '<p>This action <strong>cannot be undone</strong>.</p>',
+        function () {
+            var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+            csDropboxHMsg('Deleting\u2026', true);
+            csDropboxHPost('cs_dropbox_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
+                if (res.success) {
+                    csDropboxHMsg('\u2713 Deleted', true);
+                    var row = document.getElementById('cs-db-row-' + keyE);
+                    if (row) row.remove();
+                    csDropboxHUpdateGoldenCount();
+                    var cEl = document.getElementById('cs-dropbox-count-val');
+                    if (cEl) { var m = cEl.innerHTML.match(/^(\d+)/); if (m) cEl.innerHTML = cEl.innerHTML.replace(/^\d+/, Math.max(0, parseInt(m[1], 10) - 1)); }
+                } else {
+                    csDropboxHMsg('\u2717 ' + (res.data || 'Delete failed'), false);
+                }
+            });
+        }, 'Delete');
 };
