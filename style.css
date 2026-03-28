@@ -658,7 +658,8 @@ select.cs-input-sm { width: 90px !important; }
 .cs-filename { font-family: monospace; font-size: 0.79rem; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cs-actions  { display: flex; gap: 5px; flex-wrap: nowrap; align-items: center; }
 
-.cs-latest-badge { background: #1565c0; color: #fff; font-size: 0.62rem; padding: 1px 5px; border-radius: 3px; vertical-align: middle; margin-left: 4px; }
+.cs-latest-badge { background: #1565c0; color: #fff; font-size: 0.68rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; vertical-align: middle; margin-left: 4px; }
+.cs-delete-soon-badge { background: #b71c1c; color: #fff; font-size: 0.68rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; vertical-align: middle; margin-left: 4px; }
 
 .cs-type-badge   { display: inline-block; padding: 2px 8px; border-radius: 3px; font-size: 0.73rem; font-weight: 700; }
 .cs-type-full     { background: #e3f2fd; color: #1565c0; }
