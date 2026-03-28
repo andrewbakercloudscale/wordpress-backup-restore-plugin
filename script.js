@@ -223,48 +223,129 @@ jQuery(function ($) {
         var $btn  = $(this);
         var $prog = $('#cs-backup-progress');
 
-        $btn.prop('disabled', true).text('Running backup...');
+        $btn.prop('disabled', true).text('Starting backup...');
         $prog.show();
-        progress('cs-backup-fill', 'cs-backup-msg', 'Backup in progress — this may take a few minutes for large sites...', 'running');
+        progress('cs-backup-fill', 'cs-backup-msg', 'Starting backup job\u2026', 'running');
+
+        var backupData = {
+            action:          'cs_start_backup',
+            nonce:           CS.nonce,
+            include_db:        $('#cs-include-db').is(':checked')        ? 1 : 0,
+            include_media:     $('#cs-include-media').is(':checked')     ? 1 : 0,
+            include_plugins:   $('#cs-include-plugins').is(':checked')   ? 1 : 0,
+            include_themes:    $('#cs-include-themes').is(':checked')    ? 1 : 0,
+            include_mu:        $('#cs-include-mu').is(':checked')        ? 1 : 0,
+            include_languages: $('#cs-include-languages').is(':checked') ? 1 : 0,
+            include_dropins:   $('#cs-include-dropins').is(':checked')   ? 1 : 0,
+            include_htaccess:  $('#cs-include-htaccess').is(':checked')  ? 1 : 0,
+            include_wpconfig:  $('#cs-include-wpconfig').is(':checked')  ? 1 : 0,
+        };
 
         $.ajax({
-            url:    CS.ajax_url,
-            method: 'POST',
-            timeout: 0,
-            data: {
-                action:          'cs_run_backup',
-                nonce:           CS.nonce,
-                include_db:        $('#cs-include-db').is(':checked')        ? 1 : 0,
-                include_media:     $('#cs-include-media').is(':checked')     ? 1 : 0,
-                include_plugins:   $('#cs-include-plugins').is(':checked')   ? 1 : 0,
-                include_themes:    $('#cs-include-themes').is(':checked')    ? 1 : 0,
-                include_mu:        $('#cs-include-mu').is(':checked')        ? 1 : 0,
-                include_languages: $('#cs-include-languages').is(':checked') ? 1 : 0,
-                include_dropins:     $('#cs-include-dropins').is(':checked')     ? 1 : 0,
-                include_htaccess:    $('#cs-include-htaccess').is(':checked')    ? 1 : 0,
-                include_wpconfig:  $('#cs-include-wpconfig').is(':checked')  ? 1 : 0,
-            },
+            url: CS.ajax_url, method: 'POST', timeout: 15000, data: backupData,
             success: function (res) {
                 if (res.success) {
-                    var msg = '✓ ' + res.data.message;
-                    if (res.data.s3_msg) {
-                        var s3class = res.data.s3_ok ? 'cs-s3-ok' : 'cs-s3-error';
-                        msg += '<br><span class="' + s3class + '">' + res.data.s3_msg + '</span>';
-                    }
-                    progress('cs-backup-fill', 'cs-backup-msg', msg, 'done');
-                    var delay = (res.data.s3_msg && !res.data.s3_ok) ? 6000 : 1800;
-                    setTimeout(function () { location.reload(); }, delay);
+                    csStartBackupPoll(res.data.job_id, $btn, $prog);
                 } else {
-                    progress('cs-backup-fill', 'cs-backup-msg', '✗ Error: ' + res.data, 'error');
-                    $btn.prop('disabled', false).text('▶ Create Local Backup Now');
+                    progress('cs-backup-fill', 'cs-backup-msg', '\u2717 Error: ' + res.data, 'error');
+                    $btn.prop('disabled', false).text('\u25b6 Create Local Backup Now');
                 }
             },
             error: function (xhr, status) {
-                progress('cs-backup-fill', 'cs-backup-msg', '✗ Request failed (' + status + '). Check server error log.', 'error');
-                $btn.prop('disabled', false).text('▶ Create Local Backup Now');
+                progress('cs-backup-fill', 'cs-backup-msg', '\u2717 Could not start backup (' + status + '). Check server error log.', 'error');
+                $btn.prop('disabled', false).text('\u25b6 Create Local Backup Now');
             }
         });
     });
+
+    function csStartBackupPoll(jobId, $btn, $prog) {
+        var elapsed = 0;
+        progress('cs-backup-fill', 'cs-backup-msg', 'Backup running\u2026 (0s)', 'running');
+
+        var timer = setInterval(function () {
+            elapsed += 10;
+            progress('cs-backup-fill', 'cs-backup-msg', 'Backup running\u2026 (' + elapsed + 's)', 'running');
+
+            $.ajax({
+                url: CS.ajax_url, method: 'POST', timeout: 15000,
+                data: { action: 'cs_backup_status', nonce: CS.nonce, job_id: jobId },
+                success: function (res) {
+                    if (!res.success) {
+                        clearInterval(timer);
+                        progress('cs-backup-fill', 'cs-backup-msg', '\u2717 ' + res.data, 'error');
+                        $btn.prop('disabled', false).text('\u25b6 Create Local Backup Now');
+                        return;
+                    }
+                    var d = res.data;
+                    if (d.status === 'complete') {
+                        clearInterval(timer);
+                        var msg = '\u2713 Backup complete: ' + d.filename;
+                        if (d.s3_msg)      { msg += '<br><span class="' + (d.s3_ok      ? 'cs-s3-ok' : 'cs-s3-error') + '">' + d.s3_msg      + '</span>'; }
+                        if (d.gdrive_msg)  { msg += '<br><span class="' + (d.gdrive_ok  ? 'cs-s3-ok' : 'cs-s3-error') + '">' + d.gdrive_msg  + '</span>'; }
+                        if (d.dropbox_msg) { msg += '<br><span class="' + (d.dropbox_ok ? 'cs-s3-ok' : 'cs-s3-error') + '">' + d.dropbox_msg + '</span>'; }
+                        progress('cs-backup-fill', 'cs-backup-msg', msg, 'done');
+                        var anyFail = (d.s3_msg && !d.s3_ok) || (d.gdrive_msg && !d.gdrive_ok) || (d.dropbox_msg && !d.dropbox_ok);
+                        setTimeout(function () { location.reload(); }, anyFail ? 6000 : 1800);
+                    } else if (d.status === 'error') {
+                        clearInterval(timer);
+                        progress('cs-backup-fill', 'cs-backup-msg', '\u2717 ' + (d.message || 'Backup failed'), 'error');
+                        $btn.prop('disabled', false).text('\u25b6 Create Local Backup Now');
+                    }
+                    // status === 'queued' or 'running' — keep polling
+                },
+                error: function () {
+                    // Network glitch during poll — keep trying
+                }
+            });
+        }, 10000);
+    }
+
+    // Shared poll helper for cloud sync buttons (S3 / GDrive / Dropbox)
+    // msgFn(text, ok) — the provider's msg function
+    // postFn(action, extra, cb) — the provider's post transport
+    window.csStartSyncPoll = function (startAction, msgFn) {
+        msgFn('Starting sync\u2026', true);
+        $.ajax({
+            url: CS.ajax_url, method: 'POST', timeout: 15000,
+            data: { action: startAction, nonce: CS.nonce },
+            success: function (res) {
+                if (!res.success) { msgFn('\u2717 ' + (res.data || 'Failed to start'), false); return; }
+                var jobId = res.data.job_id;
+                var elapsed = 0;
+                msgFn('Syncing\u2026 (0s)', true);
+                var timer = setInterval(function () {
+                    elapsed += 10;
+                    msgFn('Syncing\u2026 (' + elapsed + 's)', true);
+                    $.ajax({
+                        url: CS.ajax_url, method: 'POST', timeout: 15000,
+                        data: { action: 'cs_backup_status', nonce: CS.nonce, job_id: jobId },
+                        success: function (poll) {
+                            if (!poll.success) {
+                                clearInterval(timer);
+                                msgFn('\u2717 ' + (poll.data || 'Poll failed'), false);
+                                return;
+                            }
+                            var d = poll.data;
+                            if (d.status === 'complete') {
+                                clearInterval(timer);
+                                msgFn('\u2713 ' + (d.message || 'Synced'), true);
+                            } else if (d.status === 'error') {
+                                clearInterval(timer);
+                                msgFn('\u2717 ' + (d.message || 'Sync failed'), false);
+                            }
+                            // queued/running — keep polling
+                        },
+                        error: function () { /* network glitch — keep polling */ }
+                    });
+                }, 10000);
+            },
+            error: function (xhr) {
+                window._csLastRawError = xhr.responseText;
+                msgFn('\u2717 Server error \u2014 <button type="button" class="button button-small" onclick="csShowRawError()" style="vertical-align:middle;font-size:0.78rem;padding:1px 8px;margin-left:4px;">View details</button>', false);
+            }
+        });
+    };
+
 
     // ================================================================
     // Save manual backup defaults
@@ -541,6 +622,44 @@ jQuery(function ($) {
 // ================================================================
 // Explain modal — shared helper and per-section functions
 // ================================================================
+
+function csDetectErrorType(raw) {
+    if (/no space left|disk quota|ENOSPC|quota.?exceeded|out of.?space/i.test(raw))
+        return { colour: '#e65100', msg: 'Disk / storage space error \u2014 the server ran out of space. The plugin will attempt to free space automatically on the next run.' };
+    if (/errorcode_504|504|gateway.?time.?out/i.test(raw))
+        return { colour: '#c62828', msg: '504 Gateway Timeout \u2014 the backup took too long and Cloudflare killed the request. Consider running the backup via WP-Cron (scheduled) rather than the browser, or increasing your Cloudflare timeout.' };
+    if (/503|service.?unavailable/i.test(raw))
+        return { colour: '#c62828', msg: '503 Service Unavailable \u2014 the server was temporarily unable to handle the request.' };
+    if (/502|bad.?gateway/i.test(raw))
+        return { colour: '#c62828', msg: '502 Bad Gateway \u2014 the upstream server returned an invalid response.' };
+    if (/500|internal.?server.?error/i.test(raw))
+        return { colour: '#c62828', msg: '500 Internal Server Error \u2014 a PHP fatal error occurred. Check the server error log for details.' };
+    if (/403|forbidden/i.test(raw))
+        return { colour: '#c62828', msg: '403 Forbidden \u2014 the request was blocked. Your session may have expired \u2014 try refreshing the page.' };
+    if (/login|wp-login/i.test(raw))
+        return { colour: '#c62828', msg: 'Redirected to login page \u2014 your session expired. Refresh the page and log in again.' };
+    return { colour: '#c62828', msg: 'The server returned a non-JSON response (likely a PHP fatal error or redirect).' };
+}
+
+window.csShowRawError = function () {
+    var raw = window._csLastRawError || '(no content)';
+    var info = csDetectErrorType(raw);
+    csShowExplain('Server Error Response',
+        '<p style="margin:0 0 10px;color:' + info.colour + ';font-size:0.85rem;font-weight:600;">' + info.msg + '</p>' +
+        '<div id="cs-error-frame-wrap" style="width:100%;height:52vh;border:1px solid #ddd;border-radius:4px;overflow:hidden;"></div>'
+    );
+    // Widen modal for rendered content
+    var modal = document.getElementById('cs-explain-modal');
+    if (modal) modal.style.maxWidth = '820px';
+    var wrap = document.getElementById('cs-error-frame-wrap');
+    if (wrap) {
+        var iframe = document.createElement('iframe');
+        iframe.setAttribute('sandbox', 'allow-same-origin');
+        iframe.style.cssText = 'width:100%;height:100%;border:none;background:#fff;display:block;';
+        iframe.srcdoc = raw;
+        wrap.appendChild(iframe);
+    }
+};
 
 function csShowExplain(title, body) {
     var $ = window.jQuery;
@@ -1004,7 +1123,7 @@ function csS3Post(action, extra, onDone) {
     xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
     xhr.onload = function () {
         try { onDone(JSON.parse(xhr.responseText)); }
-        catch (e) { onDone({ success: false, data: 'Bad response: ' + xhr.responseText.substring(0, 100) }); }
+        catch (e) { window._csLastRawError = xhr.responseText; onDone({ success: false, data: 'Server error \u2014 <button type="button" class="button button-small" onclick="csShowRawError()" style="vertical-align:middle;font-size:0.78rem;padding:1px 8px;margin-left:4px;">View details</button>' }); }
     };
     xhr.onerror = function () { onDone({ success: false, data: 'Network error' }); };
     xhr.send(params);
@@ -1050,10 +1169,7 @@ window.csS3Test = function () {
 };
 
 window.csS3SyncLatest = function () {
-    csS3Msg('Copying last backup to cloud\u2026', true);
-    csS3Post('cs_sync_latest_s3', '', function (res) {
-        csS3Msg((res.success ? '&#10003; ' : '&#10007; ') + res.data, res.success);
-    });
+    csStartSyncPoll('cs_start_sync_s3', csS3Msg);
 };
 
 window.csS3SyncFile = function (btn, filename) {
@@ -1093,7 +1209,7 @@ function csGDrivePost(action, extra, onDone) {
     xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
     xhr.onload = function () {
         try { onDone(JSON.parse(xhr.responseText)); }
-        catch (e) { onDone({ success: false, data: 'Bad response: ' + xhr.responseText.substring(0, 100) }); }
+        catch (e) { window._csLastRawError = xhr.responseText; onDone({ success: false, data: 'Server error \u2014 <button type="button" class="button button-small" onclick="csShowRawError()" style="vertical-align:middle;font-size:0.78rem;padding:1px 8px;margin-left:4px;">View details</button>' }); }
     };
     xhr.onerror = function () { onDone({ success: false, data: 'Network error' }); };
     xhr.send(params);
@@ -1124,10 +1240,7 @@ window.csGDriveTest = function () {
 };
 
 window.csGDriveSyncLatest = function () {
-    csGDriveMsg('Copying last backup to cloud\u2026', true);
-    csGDrivePost('cs_sync_latest_gdrive', '', function (res) {
-        csGDriveMsg((res.success ? '&#10003; ' : '&#10007; ') + res.data, res.success);
-    });
+    csStartSyncPoll('cs_start_sync_gdrive', csGDriveMsg);
 };
 
 window.csGDriveExplain = function () {
@@ -2073,7 +2186,7 @@ window.csGDriveHistoryDelete = function (filename) {
 
 function csDropboxMsg(text, ok) {
     var el = document.getElementById('cs-dropbox-msg');
-    if (el) { el.textContent = text; el.style.color = ok ? '#2e7d32' : '#c62828'; }
+    if (el) { el.innerHTML = text; el.style.color = ok ? '#2e7d32' : '#c62828'; }
 }
 
 function csDropboxPost(action, extra, onDone) {
@@ -2171,10 +2284,7 @@ window.csDropboxDiagnose = function () {
 };
 
 window.csDropboxSyncLatest = function () {
-    csDropboxMsg('Copying last backup to cloud\u2026', true);
-    csDropboxPost('cs_sync_latest_dropbox', '', function (res) {
-        csDropboxMsg(res.success ? '\u2713 ' + res.data : '\u2717 ' + (res.data || 'Sync failed'), res.success);
-    });
+    csStartSyncPoll('cs_start_sync_dropbox', csDropboxMsg);
 };
 
 // ================================================================
