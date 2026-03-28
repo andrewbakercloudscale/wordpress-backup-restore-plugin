@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.153
+ * Version:           3.2.158
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.153');
+define('CS_BACKUP_VERSION',    '3.2.158');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -1569,7 +1569,9 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csGDriveTest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Test Connection', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csGDriveDiagnose()" class="button" style="margin-left:8px;background:#e65100!important;color:#fff!important;border-color:#bf360c!important;"><?php esc_html_e( 'Diagnose', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csGDriveSyncLatest()" class="button" style="margin-left:8px;background:#6a1b9a!important;color:#fff!important;border-color:#4a148c!important;"><?php esc_html_e( 'Copy Last Backup to Cloud', 'cloudscale-free-backup-and-restore' ); ?></button>
-                    <span id="cs-gdrive-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
+                </div>
+                <div style="min-height:1.5em;margin-top:5px;">
+                    <span id="cs-gdrive-msg" style="font-size:0.85rem;font-weight:600;"></span>
                 </div>
 
                 <?php if ($gdrive_remote): ?>
@@ -1621,7 +1623,9 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csDropboxTest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Test Connection', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csDropboxDiagnose()" class="button" style="margin-left:8px;background:#e65100!important;color:#fff!important;border-color:#bf360c!important;"><?php esc_html_e( 'Diagnose', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csDropboxSyncLatest()" class="button" style="margin-left:8px;background:#6a1b9a!important;color:#fff!important;border-color:#4a148c!important;"><?php esc_html_e( 'Copy Last Backup to Cloud', 'cloudscale-free-backup-and-restore' ); ?></button>
-                    <span id="cs-dropbox-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
+                </div>
+                <div style="min-height:1.5em;margin-top:5px;">
+                    <span id="cs-dropbox-msg" style="font-size:0.85rem;font-weight:600;"></span>
                 </div>
 
                 <?php if ( $dropbox_remote ): ?>
@@ -1672,7 +1676,9 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csS3Test()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Test Connection', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csS3Diagnose()" class="button" style="margin-left:8px;background:#e65100!important;color:#fff!important;border-color:#bf360c!important;"><?php esc_html_e( 'Diagnose', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csS3SyncLatest()" class="button" style="margin-left:8px;background:#6a1b9a!important;color:#fff!important;border-color:#4a148c!important;"><?php esc_html_e( 'Copy Last Backup to Cloud', 'cloudscale-free-backup-and-restore' ); ?></button>
-                    <span id="cs-s3-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
+                </div>
+                <div style="min-height:1.5em;margin-top:5px;">
+                    <span id="cs-s3-msg" style="font-size:0.85rem;font-weight:600;"></span>
                 </div>
 
                 <?php if ($s3_bucket): ?>
@@ -2084,6 +2090,144 @@ add_action('wp_ajax_cs_run_backup', function (): void {
 });
 
 // ============================================================
+// AJAX — Async backup: start (returns job ID immediately)
+// ============================================================
+
+add_action( 'wp_ajax_cs_start_backup', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
+    cs_verify_nonce();
+    cs_ensure_backup_dir();
+
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+    $opts = [
+        'include_db'        => ! empty( $_POST['include_db'] ),
+        'include_media'     => ! empty( $_POST['include_media'] ),
+        'include_plugins'   => ! empty( $_POST['include_plugins'] ),
+        'include_themes'    => ! empty( $_POST['include_themes'] ),
+        'include_mu'        => ! empty( $_POST['include_mu'] ),
+        'include_languages' => ! empty( $_POST['include_languages'] ),
+        'include_dropins'   => ! empty( $_POST['include_dropins'] ),
+        'include_htaccess'  => ! empty( $_POST['include_htaccess'] ),
+        'include_wpconfig'  => ! empty( $_POST['include_wpconfig'] ),
+    ];
+    // phpcs:enable WordPress.Security.NonceVerification.Missing
+
+    if ( ! array_filter( $opts ) ) {
+        wp_send_json_error( 'Select at least one option.' );
+    }
+
+    $job_id = 'cs_bkjob_' . bin2hex( random_bytes( 8 ) );
+    set_transient( $job_id, [ 'status' => 'queued', 'started' => time(), 'opts' => $opts ], HOUR_IN_SECONDS );
+
+    // Fire background worker — non-blocking so the browser gets a response instantly.
+    // ignore_user_abort(true) in the worker keeps it running even if CF closes the connection.
+    wp_remote_post( admin_url( 'admin-ajax.php' ), [
+        'timeout'   => 0.01,
+        'blocking'  => false,
+        'sslverify' => apply_filters( 'https_local_ssl_verify', false ),
+        'body'      => [
+            'action'  => 'cs_do_backup_job',
+            'nonce'   => wp_create_nonce( 'cs_nonce' ),
+            'job_id'  => $job_id,
+        ],
+    ] );
+
+    wp_send_json_success( [ 'job_id' => $job_id ] );
+} );
+
+// ============================================================
+// AJAX — Async backup: poll status
+// ============================================================
+
+add_action( 'wp_ajax_cs_backup_status', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
+    cs_verify_nonce();
+
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+    $job_id = sanitize_key( $_POST['job_id'] ?? '' );
+    if ( ! $job_id || ( ! str_starts_with( $job_id, 'cs_bkjob_' ) && ! str_starts_with( $job_id, 'cs_syncjob_' ) ) ) {
+        wp_send_json_error( 'Invalid job ID.' );
+    }
+
+    $data = get_transient( $job_id );
+    if ( $data === false ) {
+        wp_send_json_error( 'Job not found or expired.' );
+    }
+
+    wp_send_json_success( $data );
+} );
+
+// ============================================================
+// AJAX — Async backup: background worker (called non-blocking)
+// ============================================================
+
+add_action( 'wp_ajax_cs_do_backup_job', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) return;
+    cs_verify_nonce();
+
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+    $job_id = sanitize_key( $_POST['job_id'] ?? '' );
+    if ( ! $job_id || ! str_starts_with( $job_id, 'cs_bkjob_' ) ) return;
+
+    $data = get_transient( $job_id );
+    if ( $data === false ) return;
+
+    set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged
+    ignore_user_abort( true ); // Keep running even if CF or browser closes the connection
+
+    set_transient( $job_id, array_merge( $data, [ 'status' => 'running' ] ), HOUR_IN_SECONDS );
+
+    $opts = $data['opts'] ?? [];
+    try {
+        $filename = cs_create_backup(
+            ! empty( $opts['include_db'] ),
+            ! empty( $opts['include_media'] ),
+            ! empty( $opts['include_plugins'] ),
+            ! empty( $opts['include_themes'] ),
+            ! empty( $opts['include_mu'] ),
+            ! empty( $opts['include_languages'] ),
+            ! empty( $opts['include_dropins'] ),
+            ! empty( $opts['include_htaccess'] ),
+            ! empty( $opts['include_wpconfig'] )
+        );
+        cs_enforce_retention();
+
+        $s3      = $GLOBALS['cs_last_s3_result']      ?? [ 'skipped' => true ];
+        $gdrive  = $GLOBALS['cs_last_gdrive_result']  ?? [ 'skipped' => true ];
+        $dropbox = $GLOBALS['cs_last_dropbox_result'] ?? [ 'skipped' => true ];
+
+        $s3_msg = '';
+        if ( ! isset( $s3['skipped'] ) ) {
+            $s3_msg = $s3['ok'] ? '✓ Synced to ' . $s3['dest'] : '⚠ S3 sync failed: ' . $s3['error'];
+        }
+        $gdrive_msg = '';
+        if ( ! isset( $gdrive['skipped'] ) ) {
+            $gdrive_msg = $gdrive['ok'] ? '✓ Synced to Drive: ' . $gdrive['dest'] : '⚠ Drive sync failed: ' . $gdrive['error'];
+        }
+        $dropbox_msg = '';
+        if ( ! isset( $dropbox['skipped'] ) ) {
+            $dropbox_msg = $dropbox['ok'] ? '✓ Synced to Dropbox: ' . $dropbox['dest'] : '⚠ Dropbox sync failed: ' . $dropbox['error'];
+        }
+
+        set_transient( $job_id, [
+            'status'      => 'complete',
+            'filename'    => $filename,
+            's3_ok'       => $s3['ok']      ?? null,
+            's3_msg'      => $s3_msg,
+            'gdrive_ok'   => $gdrive['ok']  ?? null,
+            'gdrive_msg'  => $gdrive_msg,
+            'dropbox_ok'  => $dropbox['ok'] ?? null,
+            'dropbox_msg' => $dropbox_msg,
+        ], HOUR_IN_SECONDS );
+
+    } catch ( Exception $e ) {
+        set_transient( $job_id, [ 'status' => 'error', 'message' => $e->getMessage() ], HOUR_IN_SECONDS );
+    }
+
+    wp_die();
+} );
+
+// ============================================================
 // AJAX — Delete backup
 // ============================================================
 
@@ -2427,6 +2571,100 @@ add_action( 'wp_ajax_cs_sync_latest_dropbox', function (): void {
     if ( isset( $result['skipped'] ) ) { wp_send_json_error( 'Dropbox not configured — save remote settings first.' ); }
     $result['ok'] ? wp_send_json_success( 'Synced: ' . basename( $latest ) ) : wp_send_json_error( $result['error'] ?? 'Sync failed.' );
 } );
+
+// ============================================================
+// AJAX — Async cloud sync: shared helpers
+// ============================================================
+
+/**
+ * Create an async sync job transient and fire a non-blocking background worker.
+ *
+ * @since 3.2.158
+ */
+function cs_start_async_sync( string $provider_action ): void {
+    if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
+    cs_verify_nonce();
+    $latest = cs_get_latest_backup_path();
+    if ( ! $latest ) wp_send_json_error( 'No local backups found.' );
+
+    $job_id = 'cs_syncjob_' . bin2hex( random_bytes( 8 ) );
+    set_transient( $job_id, [ 'status' => 'queued', 'started' => time() ], HOUR_IN_SECONDS );
+
+    wp_remote_post( admin_url( 'admin-ajax.php' ), [
+        'timeout'   => 0.01,
+        'blocking'  => false,
+        'sslverify' => apply_filters( 'https_local_ssl_verify', false ),
+        'body'      => [
+            'action'  => $provider_action,
+            'nonce'   => wp_create_nonce( 'cs_nonce' ),
+            'job_id'  => $job_id,
+        ],
+    ] );
+
+    wp_send_json_success( [ 'job_id' => $job_id ] );
+}
+
+/**
+ * Run a sync function as a background worker and write result to a transient.
+ *
+ * @since 3.2.158
+ * @param callable $sync_fn Function that accepts a local path and returns a result array.
+ * @param string   $label   Human-readable provider name for error messages.
+ */
+function cs_do_async_sync( callable $sync_fn, string $label ): void {
+    if ( ! current_user_can( 'manage_options' ) ) return;
+    cs_verify_nonce();
+
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+    $job_id = sanitize_key( $_POST['job_id'] ?? '' );
+    if ( ! $job_id || ! str_starts_with( $job_id, 'cs_syncjob_' ) ) return;
+
+    $data = get_transient( $job_id );
+    if ( $data === false ) return;
+
+    set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged
+    ignore_user_abort( true );
+    set_transient( $job_id, array_merge( $data, [ 'status' => 'running' ] ), HOUR_IN_SECONDS );
+
+    $latest = cs_get_latest_backup_path();
+    if ( ! $latest ) {
+        set_transient( $job_id, [ 'status' => 'error', 'message' => 'No local backups found.' ], HOUR_IN_SECONDS );
+        wp_die();
+    }
+
+    $result = $sync_fn( $latest );
+
+    if ( isset( $result['skipped'] ) ) {
+        set_transient( $job_id, [ 'status' => 'error', 'message' => $label . ' not configured.' ], HOUR_IN_SECONDS );
+    } elseif ( $result['ok'] ) {
+        set_transient( $job_id, [ 'status' => 'complete', 'message' => 'Synced: ' . basename( $latest ) ], HOUR_IN_SECONDS );
+    } else {
+        set_transient( $job_id, [ 'status' => 'error', 'message' => $result['error'] ?? 'Sync failed.' ], HOUR_IN_SECONDS );
+    }
+
+    wp_die();
+}
+
+// ============================================================
+// AJAX — Async S3 sync
+// ============================================================
+
+add_action( 'wp_ajax_cs_start_sync_s3',     function (): void { cs_start_async_sync( 'cs_do_sync_job_s3' ); } );
+add_action( 'wp_ajax_cs_do_sync_job_s3',    function (): void { cs_do_async_sync( 'cs_sync_to_s3', 'S3' ); } );
+
+// ============================================================
+// AJAX — Async GDrive sync
+// ============================================================
+
+add_action( 'wp_ajax_cs_start_sync_gdrive',  function (): void { cs_start_async_sync( 'cs_do_sync_job_gdrive' ); } );
+add_action( 'wp_ajax_cs_do_sync_job_gdrive', function (): void { cs_do_async_sync( 'cs_sync_to_gdrive', 'Google Drive' ); } );
+
+// ============================================================
+// AJAX — Async Dropbox sync
+// ============================================================
+
+add_action( 'wp_ajax_cs_start_sync_dropbox',  function (): void { cs_start_async_sync( 'cs_do_sync_job_dropbox' ); } );
+add_action( 'wp_ajax_cs_do_sync_job_dropbox', function (): void { cs_do_async_sync( 'cs_sync_to_dropbox', 'Dropbox' ); } );
 
 add_action( 'wp_ajax_cs_dropbox_refresh_history', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
