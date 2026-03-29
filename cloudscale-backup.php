@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.158
+ * Version:           3.2.174
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.158');
+define('CS_BACKUP_VERSION',    '3.2.174');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -36,6 +36,40 @@ require_once CS_BACKUP_PLUGIN_DIR . 'includes/class-cloudscale-backup-utils.php'
  */
 function cs_log( string $message ): void {
     CloudScale_Backup_Utils::log( $message );
+}
+
+// ============================================================
+// Job persistence — bypass object cache
+// ============================================================
+// The WP object cache drop-in (Redis) stores transients in PHP memory when
+// Redis is unavailable. Loopback background workers start a fresh PHP process
+// with empty memory, so get_transient() returns false and jobs never run.
+// These helpers write directly to wp_options so every PHP process can read them.
+
+function cs_set_job( string $job_id, array $data, int $ttl = HOUR_IN_SECONDS ): void {
+    global $wpdb;
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+    $wpdb->replace( $wpdb->options, [ 'option_name' => 'cs_job_' . $job_id,         'option_value' => maybe_serialize( $data ),              'autoload' => 'no' ] );
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+    $wpdb->replace( $wpdb->options, [ 'option_name' => 'cs_job_expires_' . $job_id, 'option_value' => (string) ( time() + $ttl ), 'autoload' => 'no' ] );
+}
+
+function cs_get_job( string $job_id ): array|false {
+    global $wpdb;
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+    $expires = (int) $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'cs_job_expires_' . $job_id ) );
+    if ( $expires && $expires < time() ) { cs_delete_job( $job_id ); return false; }
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+    $value = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'cs_job_' . $job_id ) );
+    return $value !== null ? maybe_unserialize( $value ) : false;
+}
+
+function cs_delete_job( string $job_id ): void {
+    global $wpdb;
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+    $wpdb->delete( $wpdb->options, [ 'option_name' => 'cs_job_' . $job_id ] );
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+    $wpdb->delete( $wpdb->options, [ 'option_name' => 'cs_job_expires_' . $job_id ] );
 }
 
 // ============================================================
@@ -723,6 +757,22 @@ function cs_admin_page(): void {
         </div>
         <?php endif; ?>
 
+        <!-- ===================== ACTIVITY LOG ===================== -->
+        <div id="cs-log-panel" style="margin-bottom:10px;border:1px solid #37474f;border-radius:6px;background:#1e272e;overflow:hidden;">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 14px;background:#263238;">
+                <span style="color:#fff!important;font-family:monospace;font-size:0.82rem;font-weight:700;">&#128196; Activity Log</span>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <span id="cs-log-status" style="font-size:0.72rem;color:#aaa!important;"></span>
+                    <button id="cs-log-refresh" type="button" style="background:#37474f!important;border:none!important;color:#fff!important;border-radius:4px;padding:2px 10px;font-size:0.75rem;cursor:pointer;box-shadow:none!important;">&#8635; Refresh</button>
+                    <button id="cs-log-clear" type="button" style="background:#37474f!important;border:none!important;color:#fff!important;border-radius:4px;padding:2px 10px;font-size:0.75rem;cursor:pointer;box-shadow:none!important;">Clear</button>
+                </div>
+            </div>
+            <div id="cs-log-body" style="max-height:220px;overflow-y:auto;padding:6px 14px 8px;">
+                <div id="cs-log-entries" style="font-family:monospace;font-size:0.76rem;line-height:1.7;"></div>
+                <div id="cs-log-empty" style="font-family:monospace;font-size:0.76rem;color:#fff!important;font-style:italic;padding:2px 0;">No log entries yet.</div>
+            </div>
+        </div>
+
         <!-- ===================== TABS ===================== -->
         <div class="cs-tab-bar">
             <button class="cs-tab cs-tab--active" data-tab="local">&#128230; Local Backups</button>
@@ -1240,6 +1290,13 @@ function cs_admin_page(): void {
                             <span class="cs-summary-warn" id="cs-space-warn"></span>
                         </div>
                     </div>
+                    <div id="cs-cloud-space-warn" style="display:none;margin:10px 0 4px;padding:10px 12px;background:#fff8e1;border:1px solid #f57c00;border-radius:4px;font-size:0.84rem;">
+                        <div id="cs-cloud-space-rows" style="margin-bottom:8px;"></div>
+                        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                            <button type="button" id="cs-run-backup-anyway" class="button" style="background:#ef6c00;color:#fff;border-color:#bf360c;"><?php esc_html_e( 'Run Backup Anyway', 'cloudscale-free-backup-and-restore' ); ?></button>
+                            <button type="button" id="cs-space-check-cancel" class="button"><?php esc_html_e( 'Cancel', 'cloudscale-free-backup-and-restore' ); ?></button>
+                        </div>
+                    </div>
                     <button type="button" id="cs-run-backup" class="button button-primary cs-btn-lg">&#9654; <?php esc_html_e( 'Create Local Backup Now', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <div style="margin-top:8px;">
                         <button type="button" id="cs-save-manual-defaults" class="button"><?php esc_html_e( 'Save as defaults', 'cloudscale-free-backup-and-restore' ); ?></button>
@@ -1568,7 +1625,7 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csGDriveSave()" class="button button-primary"><?php esc_html_e( 'Save Drive Settings', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csGDriveTest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Test Connection', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csGDriveDiagnose()" class="button" style="margin-left:8px;background:#e65100!important;color:#fff!important;border-color:#bf360c!important;"><?php esc_html_e( 'Diagnose', 'cloudscale-free-backup-and-restore' ); ?></button>
-                    <button type="button" onclick="csGDriveSyncLatest()" class="button" style="margin-left:8px;background:#6a1b9a!important;color:#fff!important;border-color:#4a148c!important;"><?php esc_html_e( 'Copy Last Backup to Cloud', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" onclick="csGDriveSyncLatest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Copy Last Backup to Cloud', 'cloudscale-free-backup-and-restore' ); ?></button>
                 </div>
                 <div style="min-height:1.5em;margin-top:5px;">
                     <span id="cs-gdrive-msg" style="font-size:0.85rem;font-weight:600;"></span>
@@ -1622,7 +1679,7 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csDropboxSave()" class="button button-primary"><?php esc_html_e( 'Save Dropbox Settings', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csDropboxTest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Test Connection', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csDropboxDiagnose()" class="button" style="margin-left:8px;background:#e65100!important;color:#fff!important;border-color:#bf360c!important;"><?php esc_html_e( 'Diagnose', 'cloudscale-free-backup-and-restore' ); ?></button>
-                    <button type="button" onclick="csDropboxSyncLatest()" class="button" style="margin-left:8px;background:#6a1b9a!important;color:#fff!important;border-color:#4a148c!important;"><?php esc_html_e( 'Copy Last Backup to Cloud', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" onclick="csDropboxSyncLatest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Copy Last Backup to Cloud', 'cloudscale-free-backup-and-restore' ); ?></button>
                 </div>
                 <div style="min-height:1.5em;margin-top:5px;">
                     <span id="cs-dropbox-msg" style="font-size:0.85rem;font-weight:600;"></span>
@@ -1675,7 +1732,7 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csS3Save()" class="button button-primary"><?php esc_html_e( 'Save AWS S3 Settings', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csS3Test()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Test Connection', 'cloudscale-free-backup-and-restore' ); ?></button>
                     <button type="button" onclick="csS3Diagnose()" class="button" style="margin-left:8px;background:#e65100!important;color:#fff!important;border-color:#bf360c!important;"><?php esc_html_e( 'Diagnose', 'cloudscale-free-backup-and-restore' ); ?></button>
-                    <button type="button" onclick="csS3SyncLatest()" class="button" style="margin-left:8px;background:#6a1b9a!important;color:#fff!important;border-color:#4a148c!important;"><?php esc_html_e( 'Copy Last Backup to Cloud', 'cloudscale-free-backup-and-restore' ); ?></button>
+                    <button type="button" onclick="csS3SyncLatest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Copy Last Backup to Cloud', 'cloudscale-free-backup-and-restore' ); ?></button>
                 </div>
                 <div style="min-height:1.5em;margin-top:5px;">
                     <span id="cs-s3-msg" style="font-size:0.85rem;font-weight:600;"></span>
@@ -2117,22 +2174,23 @@ add_action( 'wp_ajax_cs_start_backup', function (): void {
     }
 
     $job_id = 'cs_bkjob_' . bin2hex( random_bytes( 8 ) );
-    set_transient( $job_id, [ 'status' => 'queued', 'started' => time(), 'opts' => $opts ], HOUR_IN_SECONDS );
+    cs_set_job( $job_id, [ 'status' => 'queued', 'started' => time(), 'opts' => $opts ] );
 
-    // Fire background worker — non-blocking so the browser gets a response instantly.
-    // ignore_user_abort(true) in the worker keeps it running even if CF closes the connection.
-    wp_remote_post( admin_url( 'admin-ajax.php' ), [
-        'timeout'   => 0.01,
-        'blocking'  => false,
-        'sslverify' => apply_filters( 'https_local_ssl_verify', false ),
-        'body'      => [
-            'action'  => 'cs_do_backup_job',
-            'nonce'   => wp_create_nonce( 'cs_nonce' ),
-            'job_id'  => $job_id,
-        ],
-    ] );
+    // Flush the response to the browser immediately, then run the backup in this same process.
+    // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+    echo wp_json_encode( [ 'success' => true, 'data' => [ 'job_id' => $job_id ] ] );
+    if ( function_exists( 'fastcgi_finish_request' ) ) {
+        fastcgi_finish_request();
+    } else {
+        if ( ob_get_level() > 0 ) ob_end_flush();
+        flush();
+    }
 
-    wp_send_json_success( [ 'job_id' => $job_id ] );
+    // Run the backup job in this same PHP-FPM process.
+    set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged
+    ignore_user_abort( true );
+    cs_execute_backup_job( $job_id, $opts );
+    wp_die();
 } );
 
 // ============================================================
@@ -2149,7 +2207,7 @@ add_action( 'wp_ajax_cs_backup_status', function (): void {
         wp_send_json_error( 'Invalid job ID.' );
     }
 
-    $data = get_transient( $job_id );
+    $data = cs_get_job( $job_id );
     if ( $data === false ) {
         wp_send_json_error( 'Job not found or expired.' );
     }
@@ -2158,27 +2216,47 @@ add_action( 'wp_ajax_cs_backup_status', function (): void {
 } );
 
 // ============================================================
-// AJAX — Async backup: background worker (called non-blocking)
+// AJAX — Async backup: execute backup (now runs inline after fastcgi_finish_request)
 // ============================================================
 
-add_action( 'wp_ajax_cs_do_backup_job', function (): void {
-    if ( ! current_user_can( 'manage_options' ) ) return;
-    cs_verify_nonce();
-
-    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-    $job_id = sanitize_key( $_POST['job_id'] ?? '' );
-    if ( ! $job_id || ! str_starts_with( $job_id, 'cs_bkjob_' ) ) return;
-
-    $data = get_transient( $job_id );
+/**
+ * Run the actual backup job after the HTTP response has been flushed to the browser.
+ *
+ * @since 3.2.174
+ */
+function cs_execute_backup_job( string $job_id, array $opts ): void {
+    $data = cs_get_job( $job_id );
     if ( $data === false ) return;
-
-    set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged
-    ignore_user_abort( true ); // Keep running even if CF or browser closes the connection
-
-    set_transient( $job_id, array_merge( $data, [ 'status' => 'running' ] ), HOUR_IN_SECONDS );
-
-    $opts = $data['opts'] ?? [];
+    cs_set_job( $job_id, array_merge( $data, [ 'status' => 'running' ] ) );
     try {
+        // Cloud space pre-check: estimate from the most recent local backup zip.
+        // If any enabled rclone provider has less free space than that estimate, abort early.
+        $existing_zips = glob( CS_BACKUP_DIR . '*.zip' ) ?: [];
+        if ( $existing_zips ) {
+            rsort( $existing_zips );
+            $est_size     = (int) filesize( $existing_zips[0] );
+            $est_mb       = round( $est_size / 1048576, 1 );
+            $space_errors = [];
+            if ( get_option( 'cs_dropbox_sync_enabled', false ) && get_option( 'cs_dropbox_remote', '' ) ) {
+                $free = cs_rclone_free_bytes( get_option( 'cs_dropbox_remote', '' ) );
+                if ( $free !== null && $free < $est_size ) {
+                    $space_errors[] = 'Dropbox has ' . round( $free / 1048576, 1 ) . ' MB free (last backup was ' . $est_mb . ' MB).';
+                }
+            }
+            if ( get_option( 'cs_gdrive_sync_enabled', true ) && get_option( 'cs_gdrive_remote', '' ) ) {
+                $free = cs_rclone_free_bytes( get_option( 'cs_gdrive_remote', '' ) );
+                if ( $free !== null && $free < $est_size ) {
+                    $space_errors[] = 'Google Drive has ' . round( $free / 1048576, 1 ) . ' MB free (last backup was ' . $est_mb . ' MB).';
+                }
+            }
+            if ( $space_errors ) {
+                $msg = 'Not enough cloud storage space — ' . implode( ' ', $space_errors ) . ' Free up space or disable that provider before backing up.';
+                cs_log( '[CloudScale Backup] Backup aborted — ' . $msg );
+                cs_set_job( $job_id, [ 'status' => 'error', 'message' => $msg ] );
+                wp_die();
+            }
+        }
+
         $filename = cs_create_backup(
             ! empty( $opts['include_db'] ),
             ! empty( $opts['include_media'] ),
@@ -2209,7 +2287,7 @@ add_action( 'wp_ajax_cs_do_backup_job', function (): void {
             $dropbox_msg = $dropbox['ok'] ? '✓ Synced to Dropbox: ' . $dropbox['dest'] : '⚠ Dropbox sync failed: ' . $dropbox['error'];
         }
 
-        set_transient( $job_id, [
+        cs_set_job( $job_id, [
             'status'      => 'complete',
             'filename'    => $filename,
             's3_ok'       => $s3['ok']      ?? null,
@@ -2218,14 +2296,12 @@ add_action( 'wp_ajax_cs_do_backup_job', function (): void {
             'gdrive_msg'  => $gdrive_msg,
             'dropbox_ok'  => $dropbox['ok'] ?? null,
             'dropbox_msg' => $dropbox_msg,
-        ], HOUR_IN_SECONDS );
+        ] );
 
     } catch ( Exception $e ) {
-        set_transient( $job_id, [ 'status' => 'error', 'message' => $e->getMessage() ], HOUR_IN_SECONDS );
+        cs_set_job( $job_id, [ 'status' => 'error', 'message' => $e->getMessage() ] );
     }
-
-    wp_die();
-} );
+}
 
 // ============================================================
 // AJAX — Delete backup
@@ -2577,9 +2653,13 @@ add_action( 'wp_ajax_cs_sync_latest_dropbox', function (): void {
 // ============================================================
 
 /**
- * Create an async sync job transient and fire a non-blocking background worker.
+ * Start an async cloud sync job.
  *
- * @since 3.2.158
+ * Uses fastcgi_finish_request() to flush the JSON response to the browser immediately,
+ * then runs the upload in the same PHP-FPM process — no HTTP loopback needed.
+ * This bypasses CloudFront/CDN routing entirely.
+ *
+ * @since 3.2.174
  */
 function cs_start_async_sync( string $provider_action ): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
@@ -2588,61 +2668,60 @@ function cs_start_async_sync( string $provider_action ): void {
     if ( ! $latest ) wp_send_json_error( 'No local backups found.' );
 
     $job_id = 'cs_syncjob_' . bin2hex( random_bytes( 8 ) );
-    set_transient( $job_id, [ 'status' => 'queued', 'started' => time() ], HOUR_IN_SECONDS );
+    cs_set_job( $job_id, [ 'status' => 'queued', 'started' => time() ] );
+    cs_log( "[CloudScale Backup] Sync job queued: {$job_id} ({$provider_action}) for " . basename( $latest ) );
 
-    wp_remote_post( admin_url( 'admin-ajax.php' ), [
-        'timeout'   => 0.01,
-        'blocking'  => false,
-        'sslverify' => apply_filters( 'https_local_ssl_verify', false ),
-        'body'      => [
-            'action'  => $provider_action,
-            'nonce'   => wp_create_nonce( 'cs_nonce' ),
-            'job_id'  => $job_id,
-        ],
-    ] );
+    // Send job_id to the browser now, before the upload starts.
+    // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+    echo wp_json_encode( [ 'success' => true, 'data' => [ 'job_id' => $job_id ] ] );
 
-    wp_send_json_success( [ 'job_id' => $job_id ] );
+    // Flush the response to the browser so the timer starts immediately.
+    if ( function_exists( 'fastcgi_finish_request' ) ) {
+        fastcgi_finish_request();
+    } else {
+        if ( ob_get_level() > 0 ) ob_end_flush();
+        flush();
+    }
+
+    // Run the upload in this same PHP-FPM process (browser already has the response).
+    set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged
+    ignore_user_abort( true );
+    cs_execute_sync_job( $job_id, $provider_action, $latest );
+    wp_die();
 }
 
 /**
- * Run a sync function as a background worker and write result to a transient.
+ * Execute a cloud sync job — called after the HTTP response has been flushed.
  *
- * @since 3.2.158
- * @param callable $sync_fn Function that accepts a local path and returns a result array.
- * @param string   $label   Human-readable provider name for error messages.
+ * @since 3.2.174
  */
-function cs_do_async_sync( callable $sync_fn, string $label ): void {
-    if ( ! current_user_can( 'manage_options' ) ) return;
-    cs_verify_nonce();
-
-    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-    $job_id = sanitize_key( $_POST['job_id'] ?? '' );
-    if ( ! $job_id || ! str_starts_with( $job_id, 'cs_syncjob_' ) ) return;
-
-    $data = get_transient( $job_id );
-    if ( $data === false ) return;
-
-    set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged
-    ignore_user_abort( true );
-    set_transient( $job_id, array_merge( $data, [ 'status' => 'running' ] ), HOUR_IN_SECONDS );
-
-    $latest = cs_get_latest_backup_path();
-    if ( ! $latest ) {
-        set_transient( $job_id, [ 'status' => 'error', 'message' => 'No local backups found.' ], HOUR_IN_SECONDS );
-        wp_die();
+function cs_execute_sync_job( string $job_id, string $provider_action, string $latest ): void {
+    $map = [
+        'cs_do_sync_job_s3'      => [ 'cs_sync_to_s3',     'S3' ],
+        'cs_do_sync_job_gdrive'  => [ 'cs_sync_to_gdrive',  'Google Drive' ],
+        'cs_do_sync_job_dropbox' => [ 'cs_sync_to_dropbox', 'Dropbox' ],
+    ];
+    if ( ! isset( $map[ $provider_action ] ) ) {
+        cs_set_job( $job_id, [ 'status' => 'error', 'message' => 'Unknown provider action.' ] );
+        return;
     }
+    [ $sync_fn, $label ] = $map[ $provider_action ];
+
+    cs_set_job( $job_id, [ 'status' => 'running', 'started' => time() ] );
+    cs_log( "[CloudScale Backup] {$label} sync starting: " . basename( $latest ) . ' (' . round( filesize( $latest ) / 1048576, 1 ) . ' MB)' );
 
     $result = $sync_fn( $latest );
 
     if ( isset( $result['skipped'] ) ) {
-        set_transient( $job_id, [ 'status' => 'error', 'message' => $label . ' not configured.' ], HOUR_IN_SECONDS );
+        cs_log( "[CloudScale Backup] {$label} sync skipped: not configured." );
+        cs_set_job( $job_id, [ 'status' => 'error', 'message' => $label . ' not configured.' ] );
     } elseif ( $result['ok'] ) {
-        set_transient( $job_id, [ 'status' => 'complete', 'message' => 'Synced: ' . basename( $latest ) ], HOUR_IN_SECONDS );
+        cs_log( "[CloudScale Backup] {$label} sync complete: " . basename( $latest ) );
+        cs_set_job( $job_id, [ 'status' => 'complete', 'message' => 'Synced: ' . basename( $latest ) ] );
     } else {
-        set_transient( $job_id, [ 'status' => 'error', 'message' => $result['error'] ?? 'Sync failed.' ], HOUR_IN_SECONDS );
+        cs_log( "[CloudScale Backup] {$label} sync failed: " . ( $result['error'] ?? 'unknown error' ) );
+        cs_set_job( $job_id, [ 'status' => 'error', 'message' => $result['error'] ?? 'Sync failed.' ] );
     }
-
-    wp_die();
 }
 
 // ============================================================
@@ -2665,6 +2744,188 @@ add_action( 'wp_ajax_cs_do_sync_job_gdrive', function (): void { cs_do_async_syn
 
 add_action( 'wp_ajax_cs_start_sync_dropbox',  function (): void { cs_start_async_sync( 'cs_do_sync_job_dropbox' ); } );
 add_action( 'wp_ajax_cs_do_sync_job_dropbox', function (): void { cs_do_async_sync( 'cs_sync_to_dropbox', 'Dropbox' ); } );
+
+// ============================================================
+// AJAX — Batch job status (single request covers all pending sync jobs)
+// ============================================================
+
+add_action( 'wp_ajax_cs_batch_job_status', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
+    cs_verify_nonce();
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+    $raw     = sanitize_text_field( $_POST['job_ids'] ?? '' );
+    $ids     = array_filter( array_map( 'sanitize_key', explode( ',', $raw ) ) );
+    $results = [];
+    foreach ( $ids as $id ) {
+        if ( ! str_starts_with( $id, 'cs_syncjob_' ) && ! str_starts_with( $id, 'cs_bkjob_' ) ) continue;
+        $data         = cs_get_job( $id );
+        $results[$id] = $data !== false ? $data : [ 'status' => 'not_found' ];
+    }
+    wp_send_json_success( $results );
+} );
+
+// ============================================================
+// AJAX — Cloud space check (pre-backup warning)
+// ============================================================
+
+add_action( 'wp_ajax_cs_cloud_space_check', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
+    cs_verify_nonce();
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+    $only = sanitize_key( $_POST['provider'] ?? '' ); // optional: limit to one provider
+
+    $zips     = glob( CS_BACKUP_DIR . '*.zip' ) ?: [];
+    $est_size = 0;
+    if ( $zips ) {
+        rsort( $zips );
+        $est_size = (int) filesize( $zips[0] );
+    }
+
+    $providers = [];
+
+    if ( ( ! $only || $only === 'dropbox' ) && get_option( 'cs_dropbox_sync_enabled', false ) && get_option( 'cs_dropbox_remote', '' ) ) {
+        $free = cs_rclone_free_bytes( get_option( 'cs_dropbox_remote', '' ) );
+        $providers['dropbox'] = [
+            'label'   => 'Dropbox',
+            'free_mb' => $free !== null ? round( $free / 1048576, 1 ) : null,
+            'est_mb'  => $est_size ? round( $est_size / 1048576, 1 ) : null,
+            'ok'      => $free === null || ! $est_size || $free >= $est_size,
+        ];
+    }
+
+    if ( ( ! $only || $only === 'gdrive' ) && get_option( 'cs_gdrive_sync_enabled', true ) && get_option( 'cs_gdrive_remote', '' ) ) {
+        $free = cs_rclone_free_bytes( get_option( 'cs_gdrive_remote', '' ) );
+        $providers['gdrive'] = [
+            'label'   => 'Google Drive',
+            'free_mb' => $free !== null ? round( $free / 1048576, 1 ) : null,
+            'est_mb'  => $est_size ? round( $est_size / 1048576, 1 ) : null,
+            'ok'      => $free === null || ! $est_size || $free >= $est_size,
+        ];
+    }
+
+    wp_send_json_success( $providers );
+} );
+
+// ============================================================
+// AJAX — Activity log viewer
+// ============================================================
+
+add_action( 'wp_ajax_cs_get_activity_log', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
+    cs_verify_nonce();
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+    $since   = (int) ( $_POST['since'] ?? 0 );
+    $entries = (array) get_option( 'cs_activity_log', [] );
+    // Also pull any pending individual log entries written by concurrent background workers.
+    global $wpdb;
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+    $rows = $wpdb->get_results( "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'cs\_log\_%' ORDER BY option_name LIMIT 200", ARRAY_A );
+    foreach ( $rows as $row ) {
+        $val = maybe_unserialize( $row['option_value'] );
+        if ( is_array( $val ) && isset( $val['t'], $val['m'] ) ) {
+            $entries[] = $val;
+        }
+    }
+    usort( $entries, fn( $a, $b ) => ( $a['t'] ?? 0 ) <=> ( $b['t'] ?? 0 ) );
+    if ( $since ) {
+        $entries = array_values( array_filter( $entries, fn( $e ) => ( $e['t'] ?? 0 ) > $since ) );
+    }
+    wp_send_json_success( [ 'entries' => array_slice( $entries, -100 ), 'server_time' => time() ] );
+} );
+
+add_action( 'wp_ajax_cs_clear_activity_log', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
+    cs_verify_nonce();
+    update_option( 'cs_activity_log', [], false );
+    global $wpdb;
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+    $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE 'cs\_log\_%'" );
+    wp_send_json_success( 'Cleared.' );
+} );
+
+// ============================================================
+// AJAX — Delete oldest cloud backup (space recovery)
+// ============================================================
+
+add_action( 'wp_ajax_cs_delete_oldest_cloud', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
+    cs_verify_nonce();
+    $provider = sanitize_key( $_POST['provider'] ?? '' );
+    $result   = cs_delete_oldest_cloud_backup( $provider );
+    if ( $result['ok'] ) {
+        // Return updated free space after deletion
+        $remote = $provider === 'dropbox' ? get_option( 'cs_dropbox_remote', '' ) : get_option( 'cs_gdrive_remote', '' );
+        $free   = $remote ? cs_rclone_free_bytes( $remote ) : null;
+        $result['free_mb'] = $free !== null ? round( $free / 1048576, 1 ) : null;
+        wp_send_json_success( $result );
+    } else {
+        wp_send_json_error( $result['error'] ?? 'Delete failed.' );
+    }
+} );
+
+/**
+ * Delete the oldest non-golden backup from a cloud provider to reclaim space.
+ *
+ * @since 3.2.174
+ * @param string $provider 'dropbox' or 'gdrive'.
+ * @return array{ok: bool, deleted?: string, error?: string}
+ */
+function cs_delete_oldest_cloud_backup( string $provider ): array {
+    $rclone = cs_find_rclone();
+    if ( ! $rclone ) return [ 'ok' => false, 'error' => 'rclone not found.' ];
+
+    if ( $provider === 'dropbox' ) {
+        $remote = get_option( 'cs_dropbox_remote', '' );
+        if ( ! $remote ) return [ 'ok' => false, 'error' => 'Dropbox not configured.' ];
+        $dest_path = ltrim( get_option( 'cs_dropbox_path', 'cloudscale-backups/' ), '/' );
+        $history   = (array) get_option( 'cs_dropbox_history', [] );
+        $regular   = array_filter( $history, fn( $e ) => empty( $e['golden'] ) );
+        if ( empty( $regular ) ) return [ 'ok' => false, 'error' => 'No non-golden Dropbox backups to delete.' ];
+        uasort( $regular, fn( $a, $b ) => ( $a['time'] ?? 0 ) <=> ( $b['time'] ?? 0 ) );
+        $key  = array_key_first( $regular );
+        $name = $regular[ $key ]['name'] ?? $key;
+        $cmd  = escapeshellarg( $rclone ) . ' deletefile ' . escapeshellarg( rtrim( $remote, ':' ) . ':' . rtrim( $dest_path, '/' ) . '/' . $name ) . ' 2>&1';
+        // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+        $out = trim( (string) shell_exec( $cmd ) );
+        if ( $out && ! preg_match( '/object not found/i', $out ) ) return [ 'ok' => false, 'error' => 'Delete failed: ' . $out ];
+        unset( $history[ $key ] );
+        update_option( 'cs_dropbox_history', $history, false );
+        cs_log( '[CloudScale Backup] Manually deleted oldest Dropbox backup: ' . $name );
+        return [ 'ok' => true, 'deleted' => $name ];
+
+    } elseif ( $provider === 'gdrive' ) {
+        $remote    = get_option( 'cs_gdrive_remote', '' );
+        if ( ! $remote ) return [ 'ok' => false, 'error' => 'Google Drive not configured.' ];
+        $dest_path   = ltrim( get_option( 'cs_gdrive_path', 'cloudscale-backups/' ), '/' );
+        $remote_path = rtrim( $remote, ':' ) . ':' . $dest_path;
+        $history     = (array) get_option( 'cs_gdrive_history', [] );
+        $regular     = array_filter( $history, fn( $e ) => empty( $e['golden'] ) );
+        if ( $regular ) {
+            uasort( $regular, fn( $a, $b ) => ( $a['time'] ?? 0 ) <=> ( $b['time'] ?? 0 ) );
+            $name = array_key_first( $regular );
+        } else {
+            // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+            $lsout = trim( (string) shell_exec( escapeshellarg( $rclone ) . ' lsjson ' . escapeshellarg( $remote_path ) . ' --files-only 2>&1' ) );
+            if ( ! $lsout ) return [ 'ok' => false, 'error' => 'No files found on Google Drive.' ];
+            $files = json_decode( $lsout, true );
+            if ( ! is_array( $files ) ) return [ 'ok' => false, 'error' => 'Could not list Google Drive files.' ];
+            $zips = array_values( array_filter( $files, fn( $f ) => str_ends_with( $f['Name'] ?? '', '.zip' ) ) );
+            if ( empty( $zips ) ) return [ 'ok' => false, 'error' => 'No backup zips found on Google Drive.' ];
+            usort( $zips, fn( $a, $b ) => strcmp( $a['ModTime'] ?? '', $b['ModTime'] ?? '' ) );
+            $name = $zips[0]['Name'];
+        }
+        $cmd = escapeshellarg( $rclone ) . ' deletefile ' . escapeshellarg( $remote_path . $name ) . ' 2>&1';
+        // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+        $out = trim( (string) shell_exec( $cmd ) );
+        if ( $out && ! preg_match( '/object not found/i', $out ) ) return [ 'ok' => false, 'error' => 'Delete failed: ' . $out ];
+        unset( $history[ $name ] );
+        update_option( 'cs_gdrive_history', $history, false );
+        cs_log( '[CloudScale Backup] Manually deleted oldest Google Drive backup: ' . $name );
+        return [ 'ok' => true, 'deleted' => $name ];
+    }
+
+    return [ 'ok' => false, 'error' => 'Unknown provider.' ];
+}
 
 add_action( 'wp_ajax_cs_dropbox_refresh_history', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
@@ -4551,6 +4812,35 @@ function cs_find_rclone(): string {
 }
 
 /**
+ * Query free bytes available on an rclone remote via `rclone about --json`.
+ * Returns null if the remote does not report quota info or if rclone is unavailable.
+ *
+ * @since 3.2.174
+ * @param string $remote rclone remote name (with or without trailing colon).
+ * @return int|null Free bytes, or null if not determinable.
+ */
+function cs_rclone_free_bytes( string $remote ): ?int {
+    $rclone = cs_find_rclone();
+    if ( ! $rclone ) return null;
+    $r   = escapeshellarg( rtrim( $remote, ':' ) . ':' );
+    $cmd = 'timeout 15 ' . escapeshellarg( $rclone ) . " about {$r} --json 2>/dev/null";
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out = trim( (string) shell_exec( $cmd ) );
+    if ( ! $out ) return null;
+    $data = json_decode( $out, true );
+    if ( ! is_array( $data ) ) return null;
+    $total = isset( $data['total'] ) ? (int) $data['total'] : null;
+    $used  = isset( $data['used'] )  ? (int) $data['used']  : null;
+    $free  = isset( $data['free'] )  ? (int) $data['free']  : null;
+    // Prefer total-used over reported free: Dropbox over-quota returns INT64_MAX as free
+    // instead of a real value, which would silently bypass the space check.
+    if ( $total !== null && $used !== null ) {
+        return max( 0, $total - $used );
+    }
+    return $free;
+}
+
+/**
  * Upload a local backup file to Google Drive using rclone.
  *
  * @since 3.2.124
@@ -4572,7 +4862,20 @@ function cs_sync_to_gdrive(string $local_path): array {
     $escaped   = escapeshellarg($local_path);
     $edest     = escapeshellarg($dest);
 
-    $cmd = escapeshellarg($rclone) . " copy {$escaped} {$edest} 2>&1";
+    // Space pre-check: abort before uploading if Google Drive has less free space than the file.
+    $file_size = file_exists( $local_path ) ? (int) filesize( $local_path ) : 0;
+    if ( $file_size > 0 ) {
+        $free = cs_rclone_free_bytes( $remote );
+        if ( $free !== null && $free < $file_size ) {
+            $free_mb = round( $free / 1048576, 1 );
+            $need_mb = round( $file_size / 1048576, 1 );
+            $err     = "Not enough space on Google Drive: {$free_mb} MB free, backup needs {$need_mb} MB.";
+            cs_log( '[CloudScale Backup] GDrive sync skipped — ' . $err );
+            return [ 'ok' => false, 'dest' => $dest, 'error' => $err ];
+        }
+    }
+
+    $cmd = escapeshellarg($rclone) . " copy --timeout 5m --contimeout 30s {$escaped} {$edest} 2>&1";
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     $out = trim((string) shell_exec($cmd));
 
@@ -4629,7 +4932,20 @@ function cs_sync_to_dropbox( string $local_path ): array {
     $escaped   = escapeshellarg( $local_path );
     $edest     = escapeshellarg( $dest );
 
-    $cmd = escapeshellarg( $rclone ) . " copy {$escaped} {$edest} 2>&1";
+    // Space pre-check: abort before uploading if Dropbox has less free space than the file.
+    $file_size = file_exists( $local_path ) ? (int) filesize( $local_path ) : 0;
+    if ( $file_size > 0 ) {
+        $free = cs_rclone_free_bytes( $remote );
+        if ( $free !== null && $free < $file_size ) {
+            $free_mb = round( $free / 1048576, 1 );
+            $need_mb = round( $file_size / 1048576, 1 );
+            $err     = "Not enough space on Dropbox: {$free_mb} MB free, backup needs {$need_mb} MB.";
+            cs_log( '[CloudScale Backup] Dropbox sync skipped — ' . $err );
+            return [ 'ok' => false, 'dest' => $dest, 'error' => $err ];
+        }
+    }
+
+    $cmd = escapeshellarg( $rclone ) . " copy --dropbox-batch-mode off --timeout 5m --contimeout 30s {$escaped} {$edest} 2>&1";
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     $out = trim( (string) shell_exec( $cmd ) );
 
