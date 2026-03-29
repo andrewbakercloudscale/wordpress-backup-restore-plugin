@@ -4,7 +4,7 @@ Tags: backup, restore, database, scheduled backup, maintenance mode
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 3.2.179
+Stable tag: 3.2.182
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -165,7 +165,7 @@ Yes. Run a full backup on the old site, install WordPress on the new host, insta
 
 == Changelog ==
 
-= 3.2.179 =
+= 3.2.182 =
 * FIX: PCP compliance — `cs_admin_page()` now independently checks `current_user_can('manage_options')`
 * FIX: PCP compliance — `wp_unslash()` added to `$_POST['cs_action']` and `$_POST['schedule_enabled']`; `phpcs:ignore` annotations added
 * FIX: PCP compliance — `data-free-bytes` attribute annotated with `phpcs:ignore EscapeOutput.OutputNotEscaped`

@@ -3,6 +3,28 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.182] - 2026-03-29
+
+### Fixed
+- PCP compliance: added `esc_html_e()` i18n wrapper to bare "Sync error" label in the S3 sync-error row — GDrive and Dropbox equivalents were already wrapped.
+- PCP compliance: added `wp_unslash()` to `$_POST['job_ids']` read in `cs_batch_job_status` handler; removed now-redundant `phpcs:ignore MissingUnslash` suppression.
+- JS: `res.data.state` and `res.data` from AJAX responses now passed through `csEscHtml()` before insertion into `innerHTML` in `csAmiRefreshOne()` and `updateRow()` (bulk refresh).
+
+### Changed
+- Sync error rows for S3, Google Drive, and Dropbox now display expanded, multi-line formatted error details (up to 400 characters, rclone timestamp prefixes stripped) instead of a truncated single-line message.
+- "X ago (date)" format changed to "X (date)" — removed redundant "ago" suffix from last-sync and sync-error timestamps across all three cloud provider cards.
+
+### Added
+- Help documentation: new Activity Log section with panel screenshot, colour-code guide, and controls reference.
+
+## [3.2.179] - 2026-03-29
+
+### Changed
+- Activity Log: capped display to 100 rows, trimming oldest entries from the top as new ones arrive.
+
+### Added
+- Activity Log: Copy button copies all visible log lines (with timestamps) to the clipboard as plain text.
+
 ## [3.2.178] - 2026-03-29
 
 ### Fixed
