@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.174
+ * Version:           3.2.175
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.174');
+define('CS_BACKUP_VERSION',    '3.2.175');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -2222,7 +2222,7 @@ add_action( 'wp_ajax_cs_backup_status', function (): void {
 /**
  * Run the actual backup job after the HTTP response has been flushed to the browser.
  *
- * @since 3.2.174
+ * @since 3.2.175
  */
 function cs_execute_backup_job( string $job_id, array $opts ): void {
     $data = cs_get_job( $job_id );
@@ -2659,7 +2659,7 @@ add_action( 'wp_ajax_cs_sync_latest_dropbox', function (): void {
  * then runs the upload in the same PHP-FPM process — no HTTP loopback needed.
  * This bypasses CloudFront/CDN routing entirely.
  *
- * @since 3.2.174
+ * @since 3.2.175
  */
 function cs_start_async_sync( string $provider_action ): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
@@ -2693,7 +2693,7 @@ function cs_start_async_sync( string $provider_action ): void {
 /**
  * Execute a cloud sync job — called after the HTTP response has been flushed.
  *
- * @since 3.2.174
+ * @since 3.2.175
  */
 function cs_execute_sync_job( string $job_id, string $provider_action, string $latest ): void {
     $map = [
@@ -2850,23 +2850,46 @@ add_action( 'wp_ajax_cs_clear_activity_log', function (): void {
 add_action( 'wp_ajax_cs_delete_oldest_cloud', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
     cs_verify_nonce();
-    $provider = sanitize_key( $_POST['provider'] ?? '' );
-    $result   = cs_delete_oldest_cloud_backup( $provider );
-    if ( $result['ok'] ) {
-        // Return updated free space after deletion
-        $remote = $provider === 'dropbox' ? get_option( 'cs_dropbox_remote', '' ) : get_option( 'cs_gdrive_remote', '' );
-        $free   = $remote ? cs_rclone_free_bytes( $remote ) : null;
-        $result['free_mb'] = $free !== null ? round( $free / 1048576, 1 ) : null;
-        wp_send_json_success( $result );
-    } else {
-        wp_send_json_error( $result['error'] ?? 'Delete failed.' );
+    $provider  = sanitize_key( $_POST['provider'] ?? '' );
+    $need_mb   = (float) ( $_POST['need_mb'] ?? 0 );  // how much space the backup needs
+    $need_bytes = $need_mb > 0 ? (int) ( $need_mb * 1048576 ) : 0;
+
+    $remote = $provider === 'dropbox' ? get_option( 'cs_dropbox_remote', '' ) : get_option( 'cs_gdrive_remote', '' );
+
+    // Delete oldest backups one by one until there is enough free space (or no more to delete).
+    $deleted = [];
+    $max_loops = 20; // safety cap
+    for ( $i = 0; $i < $max_loops; $i++ ) {
+        // Check current free space
+        $free = $remote ? cs_rclone_free_bytes( $remote ) : null;
+        if ( $need_bytes > 0 && $free !== null && $free >= $need_bytes ) {
+            break; // enough space now
+        }
+        $result = cs_delete_oldest_cloud_backup( $provider );
+        if ( ! $result['ok'] ) {
+            if ( empty( $deleted ) ) {
+                wp_send_json_error( $result['error'] ?? 'Delete failed.' );
+            }
+            break; // no more deletable backups
+        }
+        $deleted[] = $result['deleted'] ?? '';
+        if ( $need_bytes === 0 ) break; // single-delete mode if no target size given
     }
+
+    $free     = $remote ? cs_rclone_free_bytes( $remote ) : null;
+    $free_mb  = $free !== null ? round( $free / 1048576, 1 ) : null;
+    wp_send_json_success( [
+        'ok'      => true,
+        'deleted' => implode( ', ', array_filter( $deleted ) ),
+        'count'   => count( $deleted ),
+        'free_mb' => $free_mb,
+    ] );
 } );
 
 /**
  * Delete the oldest non-golden backup from a cloud provider to reclaim space.
  *
- * @since 3.2.174
+ * @since 3.2.175
  * @param string $provider 'dropbox' or 'gdrive'.
  * @return array{ok: bool, deleted?: string, error?: string}
  */
@@ -4815,7 +4838,7 @@ function cs_find_rclone(): string {
  * Query free bytes available on an rclone remote via `rclone about --json`.
  * Returns null if the remote does not report quota info or if rclone is unavailable.
  *
- * @since 3.2.174
+ * @since 3.2.175
  * @param string $remote rclone remote name (with or without trailing colon).
  * @return int|null Free bytes, or null if not determinable.
  */
