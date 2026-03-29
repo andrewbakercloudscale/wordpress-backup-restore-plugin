@@ -3,6 +3,20 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.187] - 2026-03-29
+
+### Changed
+- Plugin renamed from "CloudScale Free Backup and Restore" to "CloudScale Backup & Restore"; text domain updated to `cloudscale-backup-restore`; slug change to `cloudscale-backup-restore` requested from WordPress.org
+- Plugin URI updated to `https://andrewbaker.ninja` (previous URL returned 404)
+- readme.txt: "Free" removed from plugin name; short description updated; `== External services ==` section added documenting Amazon S3, Google Drive via rclone, and AWS EC2 IMDS; Privacy Policy corrected to reflect optional external connections
+- `docs/` folder excluded from distribution zip (contained development-only files and CDN URLs)
+
+### Fixed
+- IMDS functions `cs_get_imds_token()` and `cs_imds_get()` converted from direct `curl_exec` to `wp_remote_request()`/`wp_remote_get()` (WordPress HTTP API compliance)
+- Removed `cs_get_versioned_asset()` which wrote versioned JS/CSS copies into the plugin directory; assets now enqueued as `script.js`/`style.css` with `?ver=` query param for cache busting
+- Incomplete `phpcs:ignore WordPress.DB.DirectDatabaseQuery` annotations expanded to include `.DirectQuery, .NoCaching` sub-rules on lines 525, 3002, 3011
+- Stale phpcs suppress comments updated from "cs_verify_nonce()" to "check_ajax_referer()" to match actual code
+
 ## [3.2.182] - 2026-03-29
 
 ### Fixed

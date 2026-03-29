@@ -1,18 +1,18 @@
-=== CloudScale Free Backup and Restore ===
+=== CloudScale Backup & Restore ===
 Contributors: andrewjbaker
 Tags: backup, restore, database, scheduled backup, maintenance mode
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 3.2.186
+Stable tag: 3.2.189
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. No timeouts, no external services, no limits.
+WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. No timeouts, no limits.
 
 == Description ==
 
-Most backup plugins fail on large or busy sites. They hit PHP memory limits, execution timeouts, or external storage quotas. **CloudScale Free Backup and Restore** is built differently.
+Most backup plugins fail on large or busy sites. They hit PHP memory limits, execution timeouts, or external storage quotas. **CloudScale Backup & Restore** is built differently.
 
 It uses native server tools (`mysqldump` and `mysql` CLI) where available for fast, lock-free dumps and restores with no PHP overhead at all. When those tools are not available, it falls back to a robust PHP-streamed implementation that reads the database in chunks and never loads the whole thing into memory at once.
 
@@ -165,7 +165,7 @@ Yes. Run a full backup on the old site, install WordPress on the new host, insta
 
 == Changelog ==
 
-= 3.2.186 =
+= 3.2.189 =
 * FIX: PCP compliance — `cs_admin_page()` now independently checks `current_user_can('manage_options')`
 * FIX: PCP compliance — `wp_unslash()` added to `$_POST['cs_action']` and `$_POST['schedule_enabled']`; `phpcs:ignore` annotations added
 * FIX: PCP compliance — `data-free-bytes` attribute annotated with `phpcs:ignore EscapeOutput.OutputNotEscaped`
@@ -210,7 +210,7 @@ Yes. Run a full backup on the old site, install WordPress on the new host, insta
 * Save/create/status operations via self contained AJAX handlers
 
 = 1.0.0 =
-* Initial public release of CloudScale Free Backup and Restore
+* Initial public release of CloudScale Backup & Restore
 * Manual and scheduled backup of database, media uploads, plugins folder, and themes folder
 * Configurable schedule interval in days with specific run hour
 * Configurable retention with automatic cleanup of oldest backups
@@ -229,6 +229,22 @@ Yes. Run a full backup on the old site, install WordPress on the new host, insta
 = 1.0.0 =
 Initial release.
 
+== External services ==
+
+This plugin optionally connects to third-party services when those features are configured by the site administrator. No data is sent to any external service unless the administrator has explicitly enabled the relevant integration.
+
+**Amazon S3** (optional cloud backup)
+When S3 settings are configured, backup zip files are uploaded to the administrator's own S3 bucket after each backup run. The data transmitted is the backup zip file itself (database, media, plugins, and/or themes as selected).
+Service operated by Amazon Web Services: https://aws.amazon.com/service-terms/ — https://aws.amazon.com/privacy/
+
+**Google Drive via rclone** (optional cloud backup)
+When Google Drive settings are configured, backup zip files are transferred to the administrator's own Google Drive using the rclone tool installed on the server.
+Service operated by Google LLC: https://policies.google.com/terms — https://policies.google.com/privacy
+
+**AWS EC2 Instance Metadata Service** (AMI snapshot feature only)
+When the AMI snapshot feature is used, the plugin reads instance metadata (instance ID and region) from the local EC2 Instance Metadata Service at `http://169.254.169.254`. This address is only reachable from within an EC2 instance. AMI creation requests are then issued via the AWS CLI installed on the server.
+Service operated by Amazon Web Services: https://aws.amazon.com/service-terms/ — https://aws.amazon.com/privacy/
+
 == Privacy Policy ==
 
-CloudScale Free Backup and Restore does not collect, transmit, or store any data outside your server. All backups are stored locally in `/wp-content/cloudscale-backups/`. No telemetry, analytics, or external requests of any kind are made by this plugin.
+CloudScale Backup & Restore does not collect, transmit, or store any personal data. All backups are stored locally in `/wp-content/cloudscale-backups/`. No telemetry or analytics are sent by this plugin. Optional cloud backup features (S3, Google Drive, AMI snapshots) transmit data only when explicitly configured by the site administrator — see the External services section above.
