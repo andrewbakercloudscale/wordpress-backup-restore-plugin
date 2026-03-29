@@ -33,6 +33,32 @@ class CloudScale_Backup_Utils {
 	public static function log( string $message ): void {
 		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 		error_log( $message );
+		// Also persist in DB for the in-plugin log viewer (capped at 200 entries).
+		// Use a unique microsecond key to avoid concurrent workers clobbering each other.
+		$key = 'cs_log_' . str_replace( '.', '_', (string) microtime( true ) ) . '_' . wp_generate_password( 4, false );
+		add_option( $key, [ 't' => time(), 'm' => $message ], '', false );
+		// Periodically compact: read all cs_log_* entries, merge into cs_activity_log, delete individual rows.
+		if ( mt_rand( 0, 9 ) === 0 ) {
+			global $wpdb;
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$rows = $wpdb->get_results( "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'cs\_log\_%' ORDER BY option_name", ARRAY_A );
+			if ( $rows ) {
+				$entries = (array) get_option( 'cs_activity_log', [] );
+				foreach ( $rows as $row ) {
+					$val = maybe_unserialize( $row['option_value'] );
+					if ( is_array( $val ) && isset( $val['t'], $val['m'] ) ) {
+						$entries[] = $val;
+					}
+					// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+					$wpdb->delete( $wpdb->options, [ 'option_name' => $row['option_name'] ] );
+				}
+				usort( $entries, fn( $a, $b ) => ( $a['t'] ?? 0 ) <=> ( $b['t'] ?? 0 ) );
+				if ( count( $entries ) > 200 ) {
+					$entries = array_slice( $entries, -200 );
+				}
+				update_option( 'cs_activity_log', $entries, false );
+			}
+		}
 	}
 
 	/**

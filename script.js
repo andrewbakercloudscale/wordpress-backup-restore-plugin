@@ -208,26 +208,8 @@ jQuery(function ($) {
     // Run Backup
     // ================================================================
 
-    $('#cs-run-backup').on('click', function () {
-        var anyChecked = $('#cs-include-db, #cs-include-media, #cs-include-plugins, #cs-include-themes, ' +
-            '#cs-include-mu, #cs-include-languages, #cs-include-dropins, ' +
-            '#cs-include-htaccess, #cs-include-wpconfig')
-            .is(':checked');
-        if (!anyChecked) {
-            csAlert('&#9888;', 'No Components Selected',
-                'Please select at least one component to include in the backup.',
-                '<p>Check one or more items — <strong>Database</strong>, <strong>Media</strong>, <strong>Plugins</strong>, <strong>Themes</strong>, or other files — before starting the backup.</p>');
-            return;
-        }
-
-        var $btn  = $(this);
-        var $prog = $('#cs-backup-progress');
-
-        $btn.prop('disabled', true).text('Starting backup...');
-        $prog.show();
-        progress('cs-backup-fill', 'cs-backup-msg', 'Starting backup job\u2026', 'running');
-
-        var backupData = {
+    function csCollectBackupData() {
+        return {
             action:          'cs_start_backup',
             nonce:           CS.nonce,
             include_db:        $('#cs-include-db').is(':checked')        ? 1 : 0,
@@ -240,9 +222,16 @@ jQuery(function ($) {
             include_htaccess:  $('#cs-include-htaccess').is(':checked')  ? 1 : 0,
             include_wpconfig:  $('#cs-include-wpconfig').is(':checked')  ? 1 : 0,
         };
+    }
 
+    function csDoStartBackup($btn) {
+        var $prog = $('#cs-backup-progress');
+        $('#cs-cloud-space-warn').hide();
+        $btn.prop('disabled', true).text('Starting backup...');
+        $prog.show();
+        progress('cs-backup-fill', 'cs-backup-msg', 'Starting backup job\u2026', 'running');
         $.ajax({
-            url: CS.ajax_url, method: 'POST', timeout: 15000, data: backupData,
+            url: CS.ajax_url, method: 'POST', timeout: 15000, data: csCollectBackupData(),
             success: function (res) {
                 if (res.success) {
                     csStartBackupPoll(res.data.job_id, $btn, $prog);
@@ -256,6 +245,111 @@ jQuery(function ($) {
                 $btn.prop('disabled', false).text('\u25b6 Create Local Backup Now');
             }
         });
+    }
+
+    function csRenderSpaceRow(provider, info) {
+        var id = 'cs-space-row-' + provider;
+        var label = info.label || provider;
+        var html;
+        if (!info.ok && info.free_mb !== null) {
+            html = '<div id="' + id + '" style="margin-bottom:6px;">' +
+                '<strong style="color:#bf360c;">\u26a0 ' + label + ':</strong> ' +
+                info.free_mb + ' MB free, backup needs ~' + info.est_mb + ' MB &nbsp;' +
+                '<button type="button" class="button button-small cs-delete-oldest-btn" data-provider="' + provider + '" ' +
+                'style="font-size:0.78rem;padding:1px 8px;vertical-align:middle;">Delete oldest ' + label + ' backup</button>' +
+                ' <span class="cs-del-status-' + provider + '" style="font-size:0.78rem;margin-left:4px;"></span></div>';
+        } else if (info.free_mb !== null) {
+            html = '<div id="' + id + '" style="margin-bottom:4px;color:#2e7d32;">' +
+                '\u2713 ' + label + ': ' + info.free_mb + ' MB free \u2014 OK</div>';
+        } else {
+            html = '<div id="' + id + '" style="margin-bottom:4px;color:#555;">' +
+                label + ': space unknown \u2014 proceeding</div>';
+        }
+        return html;
+    }
+
+    $('#cs-run-backup').on('click', function () {
+        var anyChecked = $('#cs-include-db, #cs-include-media, #cs-include-plugins, #cs-include-themes, ' +
+            '#cs-include-mu, #cs-include-languages, #cs-include-dropins, ' +
+            '#cs-include-htaccess, #cs-include-wpconfig')
+            .is(':checked');
+        if (!anyChecked) {
+            csAlert('&#9888;', 'No Components Selected',
+                'Please select at least one component to include in the backup.',
+                '<p>Check one or more items — <strong>Database</strong>, <strong>Media</strong>, <strong>Plugins</strong>, <strong>Themes</strong>, or other files — before starting the backup.</p>');
+            return;
+        }
+
+        var $btn = $(this);
+        $btn.prop('disabled', true).text('Checking cloud storage\u2026');
+
+        $.ajax({
+            url: CS.ajax_url, method: 'POST', timeout: 30000,
+            data: { action: 'cs_cloud_space_check', nonce: CS.nonce },
+            success: function (res) {
+                if (!res.success || $.isEmptyObject(res.data)) {
+                    csDoStartBackup($btn);
+                    return;
+                }
+                var hasWarning = false;
+                $.each(res.data, function (p, info) { if (!info.ok) hasWarning = true; });
+                if (!hasWarning) { csDoStartBackup($btn); return; }
+
+                // Show warning panel
+                var rows = '';
+                $.each(res.data, function (p, info) { rows += csRenderSpaceRow(p, info); });
+                $('#cs-cloud-space-rows').html(rows);
+                $('#cs-cloud-space-warn').show();
+                $btn.prop('disabled', false).text('\u25b6 Create Local Backup Now');
+            },
+            error: function () { csDoStartBackup($btn); }
+        });
+    });
+
+    // "Run Backup Anyway" from the space warning panel
+    $('#cs-run-backup-anyway').on('click', function () {
+        csDoStartBackup($('#cs-run-backup'));
+    });
+
+    // Cancel from the space warning panel
+    $('#cs-space-check-cancel').on('click', function () {
+        $('#cs-cloud-space-warn').hide();
+    });
+
+    // "Delete oldest" buttons inside the space warning panel
+    $(document).on('click', '.cs-delete-oldest-btn', function () {
+        var $btn      = $(this);
+        var provider  = $btn.data('provider');
+        var $status   = $('.cs-del-status-' + provider);
+        $btn.prop('disabled', true);
+        $status.text('Deleting\u2026');
+        $.ajax({
+            url: CS.ajax_url, method: 'POST', timeout: 60000,
+            data: { action: 'cs_delete_oldest_cloud', nonce: CS.nonce, provider: provider },
+            success: function (res) {
+                if (res.success) {
+                    var d = res.data;
+                    var label = $btn.closest('[id^=cs-space-row]').find('strong').first().text().replace(/^.*? /, '').replace(':', '');
+                    var freeText = d.free_mb !== null ? d.free_mb + ' MB free' : 'space updated';
+                    $btn.closest('div').replaceWith(
+                        '<div id="cs-space-row-' + provider + '" style="margin-bottom:6px;color:#2e7d32;">' +
+                        '\u2713 Deleted <em>' + (d.deleted || 'backup') + '</em> \u2014 ' + freeText + '</div>'
+                    );
+                    // Check if all rows are now OK — if so, auto-proceed
+                    var stillWarning = $('#cs-cloud-space-rows').find('.cs-delete-oldest-btn').length > 0;
+                    if (!stillWarning) {
+                        setTimeout(function () { csDoStartBackup($('#cs-run-backup')); }, 800);
+                    }
+                } else {
+                    $status.text('\u2717 ' + (res.data || 'Delete failed'));
+                    $btn.prop('disabled', false);
+                }
+            },
+            error: function () {
+                $status.text('\u2717 Request failed');
+                $btn.prop('disabled', false);
+            }
+        });
     });
 
     function csStartBackupPoll(jobId, $btn, $prog) {
@@ -263,7 +357,7 @@ jQuery(function ($) {
         progress('cs-backup-fill', 'cs-backup-msg', 'Backup running\u2026 (0s)', 'running');
 
         var timer = setInterval(function () {
-            elapsed += 10;
+            elapsed += 1;
             progress('cs-backup-fill', 'cs-backup-msg', 'Backup running\u2026 (' + elapsed + 's)', 'running');
 
             $.ajax({
@@ -297,12 +391,126 @@ jQuery(function ($) {
                     // Network glitch during poll — keep trying
                 }
             });
-        }, 10000);
+        }, 1000);
     }
 
-    // Shared poll helper for cloud sync buttons (S3 / GDrive / Dropbox)
-    // msgFn(text, ok) — the provider's msg function
-    // postFn(action, extra, cb) — the provider's post transport
+    // Space-check wrapper for Copy Last Backup to Cloud buttons.
+    // Checks quota for the given provider before starting the sync.
+    // provider: 'gdrive' or 'dropbox'  startAction: AJAX action  msgFn: card message fn
+    window.csCheckSpaceThenSync = function (provider, startAction, msgFn) {
+        msgFn('Checking storage space\u2026', true);
+        $.ajax({
+            url: CS.ajax_url, method: 'POST', timeout: 30000,
+            data: { action: 'cs_cloud_space_check', nonce: CS.nonce, provider: provider },
+            success: function (res) {
+                var info = res.success && res.data && res.data[provider] ? res.data[provider] : null;
+                if (!info || info.ok) {
+                    csStartSyncPoll(startAction, msgFn);
+                    return;
+                }
+                // Space warning — show inline with delete + continue options
+                var label = info.label || provider;
+                var msg = '\u26a0 ' + label + ': ' + info.free_mb + ' MB free, backup needs ~' + info.est_mb + ' MB. &nbsp;' +
+                    '<button type="button" class="button button-small" id="cs-sync-del-' + provider + '" ' +
+                    'style="font-size:0.78rem;padding:1px 8px;vertical-align:middle;">Delete oldest</button>' +
+                    ' &nbsp;<button type="button" class="button button-small" id="cs-sync-anyway-' + provider + '" ' +
+                    'style="font-size:0.78rem;padding:1px 8px;vertical-align:middle;">Sync anyway</button>';
+                msgFn(msg, false);
+
+                $('#cs-sync-del-' + provider).one('click', function () {
+                    msgFn('Deleting oldest ' + label + ' backup\u2026', true);
+                    $.ajax({
+                        url: CS.ajax_url, method: 'POST', timeout: 60000,
+                        data: { action: 'cs_delete_oldest_cloud', nonce: CS.nonce, provider: provider },
+                        success: function (r) {
+                            if (r.success) {
+                                msgFn('\u2713 Deleted ' + (r.data.deleted || 'backup') + '. Starting sync\u2026', true);
+                                setTimeout(function () { csStartSyncPoll(startAction, msgFn); }, 600);
+                            } else {
+                                msgFn('\u2717 Delete failed: ' + (r.data || 'Unknown error'), false);
+                            }
+                        },
+                        error: function () { msgFn('\u2717 Delete request failed', false); }
+                    });
+                });
+
+                $('#cs-sync-anyway-' + provider).one('click', function () {
+                    csStartSyncPoll(startAction, msgFn);
+                });
+            },
+            error: function () { csStartSyncPoll(startAction, msgFn); }
+        });
+    };
+
+    // ── Single shared timer for all cloud sync jobs ──────────────────────
+    // One setInterval drives all pending jobs; one AJAX call per tick covers
+    // every outstanding job so timers never compete or jump.
+    var _csSyncJobs        = {};  // { jobId: { msgFn, elapsed } }
+    var _csSyncTimer       = null;
+    var _csConsecPollErrors = 0;
+
+    function csRegisterSyncJob(jobId, msgFn) {
+        _csSyncJobs[jobId] = { msgFn: msgFn, elapsed: 0 };
+        if (!_csSyncTimer) {
+            _csSyncTimer = setInterval(csTickSyncJobs, 1000);
+        }
+    }
+
+    function csTickSyncJobs() {
+        var ids = Object.keys(_csSyncJobs);
+        if (!ids.length) {
+            clearInterval(_csSyncTimer);
+            _csSyncTimer = null;
+            return;
+        }
+        // Increment every counter and refresh the display before the AJAX returns
+        ids.forEach(function (id) {
+            var job = _csSyncJobs[id];
+            job.elapsed++;
+            if (job.elapsed >= 300) {
+                job.msgFn('Syncing\u2026 (' + job.elapsed + 's) \u2014 still running, safe to navigate away', true);
+            } else {
+                job.msgFn('Syncing\u2026 (' + job.elapsed + 's)', true);
+            }
+        });
+        // Single AJAX covers all pending jobs
+        $.ajax({
+            url: CS.ajax_url, method: 'POST', timeout: 15000,
+            data: { action: 'cs_batch_job_status', nonce: CS.nonce, job_ids: ids.join(',') },
+            success: function (res) {
+                _csConsecPollErrors = 0;
+                if (!res.success) return;
+                $.each(res.data, function (id, d) {
+                    var job = _csSyncJobs[id];
+                    if (!job) return;
+                    if (d.status === 'complete') {
+                        job.msgFn('\u2713 ' + (d.message || 'Synced'), true);
+                        delete _csSyncJobs[id];
+                    } else if (d.status === 'error') {
+                        job.msgFn('\u2717 ' + (d.message || 'Sync failed'), false);
+                        delete _csSyncJobs[id];
+                    } else if (d.status === 'not_found') {
+                        job.msgFn('\u2717 Job expired or not found', false);
+                        delete _csSyncJobs[id];
+                    }
+                    // queued/running — leave in map
+                });
+            },
+            error: function () {
+                _csConsecPollErrors++;
+                if (_csConsecPollErrors >= 5) {
+                    Object.keys(_csSyncJobs).forEach(function (id) {
+                        _csSyncJobs[id].msgFn('\u2717 Cannot reach server \u2014 sync may still be running in background. Refresh page to check.', false);
+                        delete _csSyncJobs[id];
+                    });
+                    clearInterval(_csSyncTimer);
+                    _csSyncTimer = null;
+                }
+            }
+        });
+    }
+
+    // Shared entry point for all Copy Last Backup to Cloud buttons
     window.csStartSyncPoll = function (startAction, msgFn) {
         msgFn('Starting sync\u2026', true);
         $.ajax({
@@ -310,34 +518,8 @@ jQuery(function ($) {
             data: { action: startAction, nonce: CS.nonce },
             success: function (res) {
                 if (!res.success) { msgFn('\u2717 ' + (res.data || 'Failed to start'), false); return; }
-                var jobId = res.data.job_id;
-                var elapsed = 0;
                 msgFn('Syncing\u2026 (0s)', true);
-                var timer = setInterval(function () {
-                    elapsed += 10;
-                    msgFn('Syncing\u2026 (' + elapsed + 's)', true);
-                    $.ajax({
-                        url: CS.ajax_url, method: 'POST', timeout: 15000,
-                        data: { action: 'cs_backup_status', nonce: CS.nonce, job_id: jobId },
-                        success: function (poll) {
-                            if (!poll.success) {
-                                clearInterval(timer);
-                                msgFn('\u2717 ' + (poll.data || 'Poll failed'), false);
-                                return;
-                            }
-                            var d = poll.data;
-                            if (d.status === 'complete') {
-                                clearInterval(timer);
-                                msgFn('\u2713 ' + (d.message || 'Synced'), true);
-                            } else if (d.status === 'error') {
-                                clearInterval(timer);
-                                msgFn('\u2717 ' + (d.message || 'Sync failed'), false);
-                            }
-                            // queued/running — keep polling
-                        },
-                        error: function () { /* network glitch — keep polling */ }
-                    });
-                }, 10000);
+                csRegisterSyncJob(res.data.job_id, msgFn);
             },
             error: function (xhr) {
                 window._csLastRawError = xhr.responseText;
@@ -616,6 +798,73 @@ jQuery(function ($) {
             $btn.prop('disabled', false).text('Save Retention');
         });
     });
+
+    // ================================================================
+    // Activity Log Viewer
+    // ================================================================
+
+    var _csLogSince = 0;
+    var _csLogTimer = null;
+
+    function csLogEntry(entry) {
+        var d   = new Date(entry.t * 1000);
+        var ts  = ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
+        var msg = entry.m.replace(/\[CloudScale Backup\]\s*/i, '');
+        var col = '#9e9e9e';
+        if (/error|fail|skip|abort|not enough|denied/i.test(msg))  col = '#ef9a9a';
+        else if (/\bok\b|complet|synced|creat|delet.*ok/i.test(msg)) col = '#a5d6a7';
+        else if (/start|running|attempt|retry/i.test(msg))           col = '#80cbc4';
+        return '<div style="color:' + col + ';white-space:pre-wrap;word-break:break-all;">' +
+               '<span style="color:#546e7a;">[' + ts + ']</span> ' +
+               $('<span>').text(msg).html() + '</div>';
+    }
+
+    function csLoadLog(since) {
+        $.ajax({
+            url: CS.ajax_url, method: 'POST', timeout: 10000,
+            data: { action: 'cs_get_activity_log', nonce: CS.nonce, since: since || 0 },
+            success: function (res) {
+                if (!res.success) return;
+                var entries = res.data.entries || [];
+                _csLogSince = res.data.server_time || _csLogSince;
+                if (entries.length) {
+                    var html = '';
+                    entries.forEach(function (e) { html += csLogEntry(e); });
+                    if (since) {
+                        $('#cs-log-entries').append(html);
+                    } else {
+                        $('#cs-log-entries').html(html);
+                    }
+                    $('#cs-log-empty').hide();
+                    var body = document.getElementById('cs-log-body');
+                    if (body) body.scrollTop = body.scrollHeight;
+                } else if (!since) {
+                    $('#cs-log-entries').empty();
+                    $('#cs-log-empty').show();
+                }
+                var count = $('#cs-log-entries > div').length;
+                $('#cs-log-status').text(count ? count + ' entries' : '');
+            }
+        });
+    }
+
+    $('#cs-log-refresh').on('click', function () { csLoadLog(0); });
+
+    $('#cs-log-clear').on('click', function () {
+        $.ajax({
+            url: CS.ajax_url, method: 'POST', timeout: 10000,
+            data: { action: 'cs_clear_activity_log', nonce: CS.nonce },
+            success: function () {
+                _csLogSince = 0;
+                $('#cs-log-entries').empty();
+                $('#cs-log-empty').show();
+                $('#cs-log-status').text('');
+            }
+        });
+    });
+
+    csLoadLog(0);
+    _csLogTimer = setInterval(function () { csLoadLog(_csLogSince); }, 5000);
 
 });
 
@@ -1240,7 +1489,7 @@ window.csGDriveTest = function () {
 };
 
 window.csGDriveSyncLatest = function () {
-    csStartSyncPoll('cs_start_sync_gdrive', csGDriveMsg);
+    csCheckSpaceThenSync('gdrive', 'cs_start_sync_gdrive', csGDriveMsg);
 };
 
 window.csGDriveExplain = function () {
@@ -2284,7 +2533,7 @@ window.csDropboxDiagnose = function () {
 };
 
 window.csDropboxSyncLatest = function () {
-    csStartSyncPoll('cs_start_sync_dropbox', csDropboxMsg);
+    csCheckSpaceThenSync('dropbox', 'cs_start_sync_dropbox', csDropboxMsg);
 };
 
 // ================================================================
