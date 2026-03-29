@@ -45,7 +45,7 @@ class CloudScale_Backup_Utils {
 			if ( $rows ) {
 				$entries = (array) get_option( 'cs_activity_log', [] );
 				foreach ( $rows as $row ) {
-					$val = maybe_unserialize( $row['option_value'] );
+					$val = maybe_unserialize( $row['option_value'] ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_maybe_unserialize -- value written only by this plugin via log()
 					if ( is_array( $val ) && isset( $val['t'], $val['m'] ) ) {
 						$entries[] = $val;
 					}
