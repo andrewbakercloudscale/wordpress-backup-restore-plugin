@@ -833,6 +833,9 @@ jQuery(function ($) {
                     entries.forEach(function (e) { html += csLogEntry(e); });
                     if (since) {
                         $('#cs-log-entries').append(html);
+                        // Trim to 100 rows — remove oldest from the top
+                        var rows = $('#cs-log-entries > div');
+                        if (rows.length > 100) rows.slice(0, rows.length - 100).remove();
                     } else {
                         $('#cs-log-entries').html(html);
                     }
@@ -848,6 +851,30 @@ jQuery(function ($) {
             }
         });
     }
+
+    $('#cs-log-copy').on('click', function () {
+        var lines = [];
+        $('#cs-log-entries > div').each(function () { lines.push($(this).text()); });
+        var text = lines.join('\n');
+        if (!text) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text).then(function () {
+                var $btn = $('#cs-log-copy');
+                $btn.text('Copied!');
+                setTimeout(function () { $btn.html('&#128203; Copy'); }, 1500);
+            });
+        } else {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.select();
+            document.execCommand('copy');
+            document.body.removeChild(ta);
+            var $btn = $('#cs-log-copy');
+            $btn.text('Copied!');
+            setTimeout(function () { $btn.html('&#128203; Copy'); }, 1500);
+        }
+    });
 
     $('#cs-log-refresh').on('click', function () { csLoadLog(0); });
 
