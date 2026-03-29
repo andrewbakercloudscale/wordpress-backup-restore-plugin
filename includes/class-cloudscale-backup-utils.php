@@ -38,7 +38,7 @@ class CloudScale_Backup_Utils {
 		$key = 'cs_log_' . str_replace( '.', '_', (string) microtime( true ) ) . '_' . wp_generate_password( 4, false );
 		add_option( $key, [ 't' => time(), 'm' => $message ], '', false );
 		// Periodically compact: read all cs_log_* entries, merge into cs_activity_log, delete individual rows.
-		if ( mt_rand( 0, 9 ) === 0 ) {
+		if ( wp_rand( 0, 9 ) === 0 ) {
 			global $wpdb;
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 			$rows = $wpdb->get_results( "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'cs\_log\_%' ORDER BY option_name", ARRAY_A );
