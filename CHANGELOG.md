@@ -3,6 +3,31 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.178] - 2026-03-29
+
+### Fixed
+- PCP compliance: replaced `unlink()` with `wp_delete_file()` in local free-space cleanup.
+- PCP compliance: added `phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec` to all 41 `shell_exec()` calls that were missing suppression comments.
+- PCP compliance: added `wp_unslash()` to five `$_POST` reads using `intval()`/`(float)` cast directly — `ami_max`, `cloud_backup_delay`, `cloud_max`, `retention`, `need_mb`.
+- PCP compliance: added `phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_maybe_unserialize` with safety explanation to all `maybe_unserialize()` calls (values written only by this plugin).
+- PCP compliance: added `phpcs:ignore NonceVerification.Missing` to `cs_delete_oldest_cloud` handler (nonce verified via `cs_verify_nonce()` helper).
+
+## [3.2.177] - 2026-03-29
+
+### Fixed
+- Cloud sync free-space loop now targets 15% above required size so deletion stops with a comfortable margin rather than right at the edge.
+- `cs_rclone_free_bytes()` now computes free space as `total − used` rather than trusting the reported `free` field — Dropbox reports `INT64_MAX` when over quota, which previously bypassed the space check entirely.
+
+### Added
+- `cs_start_async_sync()` and backup job starter now use `register_shutdown_function()` + `fastcgi_finish_request()` instead of an HTTP loopback, eliminating the CloudFront 301-redirect issue that prevented background jobs from ever running.
+- Activity Log panel at the top of every admin page: timestamped, colour-coded entries, auto-refresh every 5 seconds, Refresh and Clear buttons.
+- Verbose logging for all sync and backup job lifecycle events (queued, starting, complete, failed).
+- `cs_set_job()` / `cs_get_job()` helpers write job state directly to `wp_options` via `$wpdb`, bypassing the Redis object cache which was storing transients in per-request PHP memory only.
+- `cs_batch_job_status` AJAX endpoint: single request returns status for all pending jobs.
+- Per-provider space check on Copy Last Backup to Cloud buttons; polling error handler stops after 5 consecutive failures.
+- "Copy Last Backup to Cloud" buttons changed to bright green on all three providers.
+- "Free space" button deletes oldest non-golden backups one by one until enough room exists for the next backup.
+
 ## [3.2.139] - 2026-03-23
 
 ### Fixed
