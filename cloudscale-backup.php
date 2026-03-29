@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.178
+ * Version:           3.2.179
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.178');
+define('CS_BACKUP_VERSION',    '3.2.179');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -763,11 +763,12 @@ function cs_admin_page(): void {
                 <span style="color:#fff!important;font-family:monospace;font-size:0.82rem;font-weight:700;">&#128196; Activity Log</span>
                 <div style="display:flex;gap:8px;align-items:center;">
                     <span id="cs-log-status" style="font-size:0.72rem;color:#aaa!important;"></span>
+                    <button id="cs-log-copy" type="button" style="background:#37474f!important;border:none!important;color:#fff!important;border-radius:4px;padding:2px 10px;font-size:0.75rem;cursor:pointer;box-shadow:none!important;">&#128203; Copy</button>
                     <button id="cs-log-refresh" type="button" style="background:#37474f!important;border:none!important;color:#fff!important;border-radius:4px;padding:2px 10px;font-size:0.75rem;cursor:pointer;box-shadow:none!important;">&#8635; Refresh</button>
                     <button id="cs-log-clear" type="button" style="background:#37474f!important;border:none!important;color:#fff!important;border-radius:4px;padding:2px 10px;font-size:0.75rem;cursor:pointer;box-shadow:none!important;">Clear</button>
                 </div>
             </div>
-            <div id="cs-log-body" style="max-height:220px;overflow-y:auto;padding:6px 14px 8px;">
+            <div id="cs-log-body" style="max-height:calc(10 * 0.76rem * 1.7 + 14px);overflow-y:auto;padding:6px 14px 8px;">
                 <div id="cs-log-entries" style="font-family:monospace;font-size:0.76rem;line-height:1.7;"></div>
                 <div id="cs-log-empty" style="font-family:monospace;font-size:0.76rem;color:#fff!important;font-style:italic;padding:2px 0;">No log entries yet.</div>
             </div>
@@ -2218,7 +2219,7 @@ add_action( 'wp_ajax_cs_backup_status', function (): void {
 /**
  * Run the actual backup job after the HTTP response has been flushed to the browser.
  *
- * @since 3.2.178
+ * @since 3.2.179
  */
 function cs_execute_backup_job( string $job_id, array $opts ): void {
     $data = cs_get_job( $job_id );
@@ -2655,7 +2656,7 @@ add_action( 'wp_ajax_cs_sync_latest_dropbox', function (): void {
  * then runs the upload in the same PHP-FPM process — no HTTP loopback needed.
  * This bypasses CloudFront/CDN routing entirely.
  *
- * @since 3.2.178
+ * @since 3.2.179
  */
 function cs_start_async_sync( string $provider_action ): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
@@ -2683,7 +2684,7 @@ function cs_start_async_sync( string $provider_action ): void {
 /**
  * Execute a cloud sync job — called after the HTTP response has been flushed.
  *
- * @since 3.2.178
+ * @since 3.2.179
  */
 function cs_execute_sync_job( string $job_id, string $provider_action, string $latest ): void {
     $map = [
@@ -2881,7 +2882,7 @@ add_action( 'wp_ajax_cs_delete_oldest_cloud', function (): void {
 /**
  * Delete the oldest non-golden backup from a cloud provider to reclaim space.
  *
- * @since 3.2.178
+ * @since 3.2.179
  * @param string $provider 'dropbox' or 'gdrive'.
  * @return array{ok: bool, deleted?: string, error?: string}
  */
@@ -4830,7 +4831,7 @@ function cs_find_rclone(): string {
  * Query free bytes available on an rclone remote via `rclone about --json`.
  * Returns null if the remote does not report quota info or if rclone is unavailable.
  *
- * @since 3.2.178
+ * @since 3.2.179
  * @param string $remote rclone remote name (with or without trailing colon).
  * @return int|null Free bytes, or null if not determinable.
  */
