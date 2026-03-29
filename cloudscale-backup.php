@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.176
+ * Version:           3.2.178
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.176');
+define('CS_BACKUP_VERSION',    '3.2.178');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -61,7 +61,7 @@ function cs_get_job( string $job_id ): array|false {
     if ( $expires && $expires < time() ) { cs_delete_job( $job_id ); return false; }
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
     $value = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'cs_job_' . $job_id ) );
-    return $value !== null ? maybe_unserialize( $value ) : false;
+    return $value !== null ? maybe_unserialize( $value ) : false; // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_maybe_unserialize -- value written only by this plugin via cs_set_job()
 }
 
 function cs_delete_job( string $job_id ): void {
@@ -259,7 +259,7 @@ function cs_ami_poll_handler(): void {
              . ' --query "Images[0].State"'
              . ' --output text 2>&1';
 
-        $raw   = trim((string) shell_exec($cmd));
+        $raw   = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         $state = $raw;
 
         if ($state && $state !== 'None' && !str_contains(strtolower($state), 'error') && !str_contains(strtolower($state), 'unable') && !str_contains(strtolower($state), 'invalid')) {
@@ -308,7 +308,7 @@ function cs_get_run_days(): array {
     if ($raw === null) {
         return [1, 3, 5]; // option row doesn't exist yet — install default
     }
-    $saved = maybe_unserialize($raw);
+    $saved = maybe_unserialize($raw); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_maybe_unserialize -- value written only by this plugin
     // Empty array in DB means no days saved yet — return defaults
     if (!is_array($saved) || empty($saved)) {
         return [1, 3, 5];
@@ -639,13 +639,13 @@ function cs_admin_page(): void {
     $days_map = [1 => 'Mon', 2 => 'Tue', 3 => 'Wed', 4 => 'Thu', 5 => 'Fri', 6 => 'Sat', 7 => 'Sun'];
     // Pre-compute cloud vars (needed by Run Backup section which now appears at the top of the page)
     $aws_path = cs_find_aws();
-    $aws_ver  = $aws_path ? trim((string) shell_exec(escapeshellarg($aws_path) . ' --version 2>&1')) : '';
+    $aws_ver  = $aws_path ? trim((string) shell_exec(escapeshellarg($aws_path) . ' --version 2>&1')) : ''; // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     $s3_log    = (array) get_option('cs_s3_log', []);
     $s3_synced = array_filter($s3_log, fn($e) => !empty($e['ok']));
     $s3_last   = empty($s3_synced) ? null : max(array_column($s3_synced, 'time'));
     $s3_last_failed_entry = cs_latest_failed_log_entry($s3_log, $s3_last);
     $rclone_path = cs_find_rclone();
-    $rclone_ver  = $rclone_path ? trim((string) shell_exec(escapeshellarg($rclone_path) . ' version --no-check-update 2>&1 | head -1')) : '';
+    $rclone_ver  = $rclone_path ? trim((string) shell_exec(escapeshellarg($rclone_path) . ' version --no-check-update 2>&1 | head -1')) : ''; // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     $gdrive_log    = (array) get_option('cs_gdrive_log', []);
     $gdrive_synced = array_filter($gdrive_log, fn($e) => !empty($e['ok']));
     $gdrive_last   = empty($gdrive_synced) ? null : max(array_column($gdrive_synced, 'time'));
@@ -2218,7 +2218,7 @@ add_action( 'wp_ajax_cs_backup_status', function (): void {
 /**
  * Run the actual backup job after the HTTP response has been flushed to the browser.
  *
- * @since 3.2.176
+ * @since 3.2.178
  */
 function cs_execute_backup_job( string $job_id, array $opts ): void {
     $data = cs_get_job( $job_id );
@@ -2433,7 +2433,7 @@ add_action('wp_ajax_cs_test_s3', function (): void {
     file_put_contents($tmp, $content);
     $real_tmp = realpath($tmp) ?: $tmp;
     $cmd = escapeshellarg($aws) . ' s3 cp ' . escapeshellarg($real_tmp) . ' ' . escapeshellarg($dest) . ' 2>&1';
-    $out = trim((string) shell_exec($cmd));
+    $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     wp_delete_file($tmp);
     // AWS CLI outputs nothing on success with --only-show-errors, but without that flag
     // it outputs "upload: /path to s3://..." which is a success message not an error
@@ -2508,7 +2508,7 @@ add_action('wp_ajax_cs_save_ami', function (): void {
     $prefix          = sanitize_text_field( wp_unslash( $_POST['prefix'] ?? '' ) );
     $reboot          = !empty( $_POST['reboot'] );
     $region_override = sanitize_text_field( wp_unslash( $_POST['region_override'] ?? '' ) );
-    $ami_max         = max(1, min(999, intval( $_POST['ami_max'] ?? 10 )));
+    $ami_max         = max(1, min(999, intval( wp_unslash( $_POST['ami_max'] ?? 10 ) )));
     // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
     // Validate region format if provided: letters, digits, hyphens only
     if ($region_override && !preg_match('/^[a-z0-9-]+$/', $region_override)) {
@@ -2528,8 +2528,8 @@ add_action('wp_ajax_cs_save_cloud_schedule', function (): void {
     $raw_days   = array_filter(explode(',', sanitize_text_field( wp_unslash( $_POST['ami_schedule_days'] ?? '' ) )));
     $clean_days = array_values(array_filter(array_map('intval', $raw_days), fn($d) => $d >= 1 && $d <= 7));
     update_option('cs_ami_schedule_days',   $clean_days);
-    update_option('cs_cloud_backup_delay',  max(15, intval( $_POST['cloud_backup_delay'] ?? 30 )));
-    update_option('cs_ami_max',             max(1, min(999, intval( $_POST['cloud_max'] ?? 10 ))));
+    update_option('cs_cloud_backup_delay',  max(15, intval( wp_unslash( $_POST['cloud_backup_delay'] ?? 30 ) )));
+    update_option('cs_ami_max',             max(1, min(999, intval( wp_unslash( $_POST['cloud_max'] ?? 10 ) ))));
     update_option('cs_s3_sync_enabled',        !empty($_POST['s3_sync_enabled']));
     update_option('cs_gdrive_sync_enabled',    !empty($_POST['gdrive_sync_enabled']));
     update_option('cs_dropbox_sync_enabled',   !empty($_POST['dropbox_sync_enabled']));
@@ -2572,7 +2572,7 @@ add_action('wp_ajax_cs_test_gdrive', function (): void {
     $rclone = cs_find_rclone();
     if (!$rclone) { wp_send_json_error('rclone not found on server.'); }
     $cmd = escapeshellarg($rclone) . ' lsd ' . escapeshellarg($remote . ':') . ' --max-depth 1 2>&1';
-    $out = trim((string) shell_exec($cmd));
+    $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     if ($out && preg_match('/error|failed|denied|invalid/i', $out)) {
         wp_send_json_error('Connection failed: ' . substr($out, 0, 200));
     }
@@ -2627,7 +2627,7 @@ add_action( 'wp_ajax_cs_test_dropbox', function (): void {
     if ( ! $rclone ) { wp_send_json_error( 'rclone not found on server.' ); }
     $cmd = escapeshellarg( $rclone ) . ' lsd ' . escapeshellarg( $remote . ':' ) . ' --max-depth 1 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out = trim( (string) shell_exec( $cmd ) );
+    $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     if ( $out && preg_match( '/error|failed|denied|invalid/i', $out ) ) {
         wp_send_json_error( 'Connection failed: ' . substr( $out, 0, 200 ) );
     }
@@ -2655,7 +2655,7 @@ add_action( 'wp_ajax_cs_sync_latest_dropbox', function (): void {
  * then runs the upload in the same PHP-FPM process — no HTTP loopback needed.
  * This bypasses CloudFront/CDN routing entirely.
  *
- * @since 3.2.176
+ * @since 3.2.178
  */
 function cs_start_async_sync( string $provider_action ): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
@@ -2683,7 +2683,7 @@ function cs_start_async_sync( string $provider_action ): void {
 /**
  * Execute a cloud sync job — called after the HTTP response has been flushed.
  *
- * @since 3.2.176
+ * @since 3.2.178
  */
 function cs_execute_sync_job( string $job_id, string $provider_action, string $latest ): void {
     $map = [
@@ -2811,7 +2811,7 @@ add_action( 'wp_ajax_cs_get_activity_log', function (): void {
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
     $rows = $wpdb->get_results( "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'cs\_log\_%' ORDER BY option_name LIMIT 200", ARRAY_A );
     foreach ( $rows as $row ) {
-        $val = maybe_unserialize( $row['option_value'] );
+        $val = maybe_unserialize( $row['option_value'] ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_maybe_unserialize -- value written only by this plugin via cs_log()
         if ( is_array( $val ) && isset( $val['t'], $val['m'] ) ) {
             $entries[] = $val;
         }
@@ -2840,20 +2840,22 @@ add_action( 'wp_ajax_cs_clear_activity_log', function (): void {
 add_action( 'wp_ajax_cs_delete_oldest_cloud', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
     cs_verify_nonce();
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via cs_verify_nonce(); sanitize_key() and (float) cast sanitise inputs
     $provider  = sanitize_key( $_POST['provider'] ?? '' );
-    $need_mb   = (float) ( $_POST['need_mb'] ?? 0 );  // how much space the backup needs
+    $need_mb   = (float) wp_unslash( $_POST['need_mb'] ?? 0 );  // how much space the backup needs
     $need_bytes = $need_mb > 0 ? (int) ( $need_mb * 1048576 ) : 0;
 
     $remote = $provider === 'dropbox' ? get_option( 'cs_dropbox_remote', '' ) : get_option( 'cs_gdrive_remote', '' );
 
     // Delete oldest backups one by one until there is enough free space (or no more to delete).
     $deleted = [];
-    $max_loops = 20; // safety cap
+    $max_loops  = 20; // safety cap
+    $target     = (int) ( $need_bytes * 1.15 ); // 15% buffer so we don't stop right at the edge
     for ( $i = 0; $i < $max_loops; $i++ ) {
         // Check current free space
         $free = $remote ? cs_rclone_free_bytes( $remote ) : null;
-        if ( $need_bytes > 0 && $free !== null && $free >= $need_bytes ) {
-            break; // enough space now
+        if ( $need_bytes > 0 && $free !== null && $free >= $target ) {
+            break; // enough space now (with buffer)
         }
         $result = cs_delete_oldest_cloud_backup( $provider );
         if ( ! $result['ok'] ) {
@@ -2879,7 +2881,7 @@ add_action( 'wp_ajax_cs_delete_oldest_cloud', function (): void {
 /**
  * Delete the oldest non-golden backup from a cloud provider to reclaim space.
  *
- * @since 3.2.176
+ * @since 3.2.178
  * @param string $provider 'dropbox' or 'gdrive'.
  * @return array{ok: bool, deleted?: string, error?: string}
  */
@@ -2899,7 +2901,7 @@ function cs_delete_oldest_cloud_backup( string $provider ): array {
         $name = $regular[ $key ]['name'] ?? $key;
         $cmd  = escapeshellarg( $rclone ) . ' deletefile ' . escapeshellarg( rtrim( $remote, ':' ) . ':' . rtrim( $dest_path, '/' ) . '/' . $name ) . ' 2>&1';
         // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-        $out = trim( (string) shell_exec( $cmd ) );
+        $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         if ( $out && ! preg_match( '/object not found/i', $out ) ) return [ 'ok' => false, 'error' => 'Delete failed: ' . $out ];
         unset( $history[ $key ] );
         update_option( 'cs_dropbox_history', $history, false );
@@ -2918,7 +2920,7 @@ function cs_delete_oldest_cloud_backup( string $provider ): array {
             $name = array_key_first( $regular );
         } else {
             // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-            $lsout = trim( (string) shell_exec( escapeshellarg( $rclone ) . ' lsjson ' . escapeshellarg( $remote_path ) . ' --files-only 2>&1' ) );
+            $lsout = trim( (string) shell_exec( escapeshellarg( $rclone ) . ' lsjson ' . escapeshellarg( $remote_path ) . ' --files-only 2>&1' ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
             if ( ! $lsout ) return [ 'ok' => false, 'error' => 'No files found on Google Drive.' ];
             $files = json_decode( $lsout, true );
             if ( ! is_array( $files ) ) return [ 'ok' => false, 'error' => 'Could not list Google Drive files.' ];
@@ -2929,7 +2931,7 @@ function cs_delete_oldest_cloud_backup( string $provider ): array {
         }
         $cmd = escapeshellarg( $rclone ) . ' deletefile ' . escapeshellarg( $remote_path . $name ) . ' 2>&1';
         // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-        $out = trim( (string) shell_exec( $cmd ) );
+        $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         if ( $out && ! preg_match( '/object not found/i', $out ) ) return [ 'ok' => false, 'error' => 'Delete failed: ' . $out ];
         unset( $history[ $name ] );
         update_option( 'cs_gdrive_history', $history, false );
@@ -2989,7 +2991,7 @@ add_action( 'wp_ajax_cs_dropbox_delete_remote', function (): void {
     $rpath     = rtrim( $remote, ':' ) . ':' . rtrim( $dest_path, '/' ) . '/' . $filename;
     $cmd       = escapeshellarg( $rclone ) . ' deletefile ' . escapeshellarg( $rpath ) . ' 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out = trim( (string) shell_exec( $cmd ) );
+    $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     if ( $out && preg_match( '/error|failed|no such/i', $out ) ) {
         wp_send_json_error( 'Delete failed: ' . substr( $out, 0, 200 ) );
     }
@@ -3036,7 +3038,7 @@ add_action( 'admin_post_cs_dropbox_download', function (): void {
     $tmp       = wp_tempnam( $filename );
     $cmd       = escapeshellarg( $rclone ) . ' copyto ' . escapeshellarg( $rpath ) . ' ' . escapeshellarg( $tmp ) . ' 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out = trim( (string) shell_exec( $cmd ) );
+    $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     if ( $out || ! file_exists( $tmp ) || filesize( $tmp ) === 0 ) {
         wp_delete_file( $tmp );
         wp_die( esc_html__( 'Download failed:', 'cloudscale-free-backup-and-restore' ) . ' ' . esc_html( $out ) );
@@ -3095,7 +3097,7 @@ add_action('wp_ajax_cs_create_ami', function (): void {
          . $region_flag
          . ' --output json 2>&1';
 
-    $out = trim((string) shell_exec($cmd));
+    $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
 
     // Parse the JSON response to get AMI ID
     $result = json_decode($out, true);
@@ -3180,7 +3182,7 @@ function cs_ami_enforce_max(array $log, string $aws, string $region): array {
                  . ' --image-id ' . escapeshellarg($ami_id)
                  . $region_flag
                  . ' 2>&1';
-            $out = trim((string) shell_exec($cmd));
+            $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
             // deregister-image returns empty output on success.
             // Also treat "InvalidAMIID.NotFound" as success — already gone from AWS.
             $already_gone = str_contains($out, 'InvalidAMIID') || str_contains($out, 'does not exist');
@@ -3256,7 +3258,7 @@ function cs_do_create_ami(): array {
          . $region_flag
          . ' --output json 2>&1';
 
-    $out    = trim((string) shell_exec($cmd));
+    $out    = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     $result = json_decode($out, true);
     $ami_id = $result['ImageId'] ?? null;
 
@@ -3339,7 +3341,7 @@ add_action('wp_ajax_cs_ami_status', function (): void {
          . ' --query "Images[0].State"'
          . ' --output text 2>&1';
 
-    $state = trim((string) shell_exec($cmd));
+    $state = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
 
     if ($state && !str_contains($state, 'error') && !str_contains($state, 'Error')) {
         // Update the log entry state
@@ -3385,7 +3387,7 @@ add_action('wp_ajax_cs_deregister_ami', function (): void {
          . $region_flag
          . ' 2>&1';
 
-    $out = trim((string) shell_exec($cmd));
+    $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
 
     // deregister-image returns empty output on success
     if ($out === '' || str_contains($out, '"return": true') || str_contains($out, 'Return')) {
@@ -3448,7 +3450,7 @@ add_action('cs_ami_delete_check', function (string $ami_id): void {
     $region      = cs_get_instance_region();
     $region_flag = $region ? ' --region ' . escapeshellarg($region) : '';
     $cmd = escapeshellarg($aws) . ' ec2 describe-images --image-ids ' . escapeshellarg($ami_id) . $region_flag . ' --output json 2>&1';
-    $out  = trim((string) shell_exec($cmd));
+    $out  = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     $data = json_decode($out, true);
 
     if (empty($data['Images'])) {
@@ -3485,7 +3487,7 @@ add_action('wp_ajax_cs_ami_refresh_all', function (): void {
     global $wpdb;
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- bypasses object cache intentionally; post-reset read must be authoritative
     $raw_log = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'cs_ami_log' ) );
-    $log     = $raw_log ? (array) maybe_unserialize($raw_log) : [];
+    $log     = $raw_log ? (array) maybe_unserialize($raw_log) : []; // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_maybe_unserialize -- value written only by this plugin
 
     $region      = cs_get_instance_region();
     $region_flag = $region ? ' --region ' . escapeshellarg($region) : '';
@@ -3504,7 +3506,7 @@ add_action('wp_ajax_cs_ami_refresh_all', function (): void {
              . ' --query "Images[*].{ImageId:ImageId,State:State}"'
              . ' --output json 2>&1';
 
-        $out    = trim((string) shell_exec($cmd));
+        $out    = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         $images = json_decode($out, true);
 
         // Determine state: if AWS returned a valid image entry use its state,
@@ -3656,7 +3658,7 @@ add_action('wp_ajax_cs_ami_restore', function (): void {
          . ' --output json 2>&1';
 
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $output  = shell_exec( $cmd );
+    $output  = shell_exec( $cmd ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     $decoded = json_decode( $output ?? '', true );
 
     if ( isset( $decoded['ReplaceRootVolumeTask']['ReplaceRootVolumeTaskId'] ) ) {
@@ -3851,7 +3853,7 @@ add_action('wp_ajax_cs_gdrive_delete_remote', function (): void {
     $remote_file = rtrim( $remote, ':' ) . ':' . $dest_path . $filename;
     $cmd         = escapeshellarg( $rclone ) . ' deletefile ' . escapeshellarg( $remote_file ) . ' 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out = trim( (string) shell_exec( $cmd ) );
+    $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     if ( $out === '' ) {
         $hist = (array) get_option( 'cs_gdrive_history', [] );
         unset( $hist[ $filename ] );
@@ -3953,7 +3955,7 @@ add_action('wp_ajax_cs_s3_delete_remote', function (): void {
     $s3_path = 's3://' . rtrim( $bucket, '/' ) . rtrim( $prefix, '/' ) . '/' . $filename;
     $cmd     = escapeshellarg( $aws ) . ' s3 rm ' . escapeshellarg( $s3_path ) . ' 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out = trim( (string) shell_exec( $cmd ) );
+    $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     if ( $out === '' || str_starts_with( $out, 'delete:' ) ) {
         $hist = (array) get_option( 'cs_s3_history', [] );
         unset( $hist[ $filename ] );
@@ -3993,7 +3995,7 @@ add_action('wp_ajax_cs_s3_pull', function (): void {
     $local_path = CS_BACKUP_DIR . $filename;
     $cmd        = escapeshellarg( $aws ) . ' s3 cp ' . escapeshellarg( $s3_path ) . ' ' . escapeshellarg( $local_path ) . ' 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out = trim( (string) shell_exec( $cmd ) );
+    $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     if ( ! file_exists( $local_path ) ) {
         wp_send_json_error( $out ?: 'Pull failed — file not found after download.' );
     }
@@ -4014,7 +4016,7 @@ add_action('wp_ajax_cs_save_retention', function (): void {
     }
     cs_verify_nonce();
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via cs_verify_nonce() above; intval() used for integer field
-    $r = max(1, min(9999, intval( $_POST['retention'] ?? 8 )));
+    $r = max(1, min(9999, intval( wp_unslash( $_POST['retention'] ?? 8 ) )));
     update_option('cs_retention', $r);
     $prefix = sanitize_key( wp_unslash( $_POST['backup_prefix'] ?? 'bkup' ) ) ?: 'bkup';
     // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
@@ -4085,7 +4087,7 @@ add_action('admin_post_cs_s3_download', function (): void {
         $tmp     = get_temp_dir() . 'cs_s3dl_' . md5( $filename . wp_generate_uuid4() ) . '.zip';
         $cmd     = escapeshellarg( $aws ) . ' s3 cp ' . escapeshellarg( $s3_path ) . ' ' . escapeshellarg( $tmp ) . ' 2>&1';
         // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-        shell_exec( $cmd );
+        shell_exec( $cmd ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         if ( ! file_exists( $tmp ) ) {
             wp_die( esc_html__( 'Could not retrieve file from S3.', 'cloudscale-free-backup-and-restore' ) );
         }
@@ -4132,7 +4134,7 @@ add_action('admin_post_cs_gdrive_download', function (): void {
     $tmp         = get_temp_dir() . 'cs_gddl_' . md5( $filename . wp_generate_uuid4() ) . '.zip';
     $cmd         = escapeshellarg( $rclone ) . ' copyto ' . escapeshellarg( $remote_file ) . ' ' . escapeshellarg( $tmp ) . ' 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    shell_exec( $cmd );
+    shell_exec( $cmd ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     if ( ! file_exists( $tmp ) ) {
         wp_die( esc_html__( 'Could not retrieve file from Google Drive.', 'cloudscale-free-backup-and-restore' ) );
     }
@@ -4654,7 +4656,7 @@ function cs_enforce_s3_retention(): void {
     $prefix    = '/' . ltrim(get_option('cs_s3_prefix', 'backups/'), '/');
     $s3_base   = 's3://' . rtrim($bucket, '/') . rtrim($prefix, '/') . '/';
     $cmd = escapeshellarg($aws) . ' s3 ls ' . escapeshellarg($s3_base) . ' 2>&1';
-    $out = trim((string) shell_exec($cmd));
+    $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     if (!$out) return;
 
     $files = [];
@@ -4683,7 +4685,7 @@ function cs_enforce_s3_retention(): void {
 
     foreach ($to_delete as $file) {
         $cmd     = escapeshellarg($aws) . ' s3 rm ' . escapeshellarg($s3_base . $file['name']) . ' 2>&1';
-        $del_out = trim((string) shell_exec($cmd));
+        $del_out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         // s3 rm prints "delete: s3://..." on success; anything else is an error
         if ($del_out === '' || str_starts_with($del_out, 'delete:')) {
             $remote_count--;
@@ -4717,7 +4719,7 @@ function cs_enforce_gdrive_retention(): void {
     $remote_path = rtrim($remote, ':') . ':' . $dest_path;
 
     $cmd  = escapeshellarg($rclone) . ' lsjson ' . escapeshellarg($remote_path) . ' --files-only 2>&1';
-    $out  = trim((string) shell_exec($cmd));
+    $out  = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     if (!$out) return;
 
     $data = json_decode($out, true);
@@ -4741,7 +4743,7 @@ function cs_enforce_gdrive_retention(): void {
     foreach ($to_delete as $file) {
         $file_path = $remote_path . ($file['Name'] ?? '');
         $cmd       = escapeshellarg($rclone) . ' delete ' . escapeshellarg($file_path) . ' 2>&1';
-        $del_out   = trim((string) shell_exec($cmd));
+        $del_out   = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         // rclone delete prints nothing on success; any output indicates an error
         if ($del_out === '') {
             $remote_count--;
@@ -4779,7 +4781,7 @@ function cs_gdrive_refresh_history(): array {
     $remote_path = rtrim( $remote, ':' ) . ':' . $dest_path;
     $cmd         = escapeshellarg( $rclone ) . ' lsjson ' . escapeshellarg( $remote_path ) . ' --files-only 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out  = trim( (string) shell_exec( $cmd ) );
+    $out  = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     $data = json_decode( $out ?: '[]', true );
     if ( ! is_array( $data ) ) return [];
 
@@ -4810,7 +4812,7 @@ function cs_gdrive_refresh_history(): array {
 }
 function cs_find_rclone(): string {
     $candidates = [
-        trim((string) shell_exec('which rclone 2>/dev/null')),
+        trim((string) shell_exec('which rclone 2>/dev/null')), // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         '/usr/local/bin/rclone',
         '/usr/bin/rclone',
         '/snap/bin/rclone',
@@ -4828,7 +4830,7 @@ function cs_find_rclone(): string {
  * Query free bytes available on an rclone remote via `rclone about --json`.
  * Returns null if the remote does not report quota info or if rclone is unavailable.
  *
- * @since 3.2.176
+ * @since 3.2.178
  * @param string $remote rclone remote name (with or without trailing colon).
  * @return int|null Free bytes, or null if not determinable.
  */
@@ -4838,7 +4840,7 @@ function cs_rclone_free_bytes( string $remote ): ?int {
     $r   = escapeshellarg( rtrim( $remote, ':' ) . ':' );
     $cmd = 'timeout 15 ' . escapeshellarg( $rclone ) . " about {$r} --json 2>/dev/null";
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out = trim( (string) shell_exec( $cmd ) );
+    $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     if ( ! $out ) return null;
     $data = json_decode( $out, true );
     if ( ! is_array( $data ) ) return null;
@@ -4890,13 +4892,13 @@ function cs_sync_to_gdrive(string $local_path): array {
 
     $cmd = escapeshellarg($rclone) . " copy --timeout 5m --contimeout 30s {$escaped} {$edest} 2>&1";
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out = trim((string) shell_exec($cmd));
+    $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
 
     // Space error: free oldest local backup and retry once
     if ($out && cs_is_space_error($out)) {
         cs_free_local_space('Google Drive', basename($local_path));
         // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-        $out = trim((string) shell_exec($cmd));
+        $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     }
 
     $filename = basename($local_path);
@@ -4960,13 +4962,13 @@ function cs_sync_to_dropbox( string $local_path ): array {
 
     $cmd = escapeshellarg( $rclone ) . " copy --dropbox-batch-mode off --timeout 5m --contimeout 30s {$escaped} {$edest} 2>&1";
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out = trim( (string) shell_exec( $cmd ) );
+    $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
 
     // Space error: free oldest local backup and retry once
     if ( $out && cs_is_space_error( $out ) ) {
         cs_free_local_space( 'Dropbox', basename( $local_path ) );
         // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-        $out = trim( (string) shell_exec( $cmd ) );
+        $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     }
 
     $filename = basename( $local_path );
@@ -5008,7 +5010,7 @@ function cs_dropbox_refresh_history(): array {
     $remote_path = rtrim( $remote, ':' ) . ':' . $dest_path;
     $cmd         = escapeshellarg( $rclone ) . ' lsjson ' . escapeshellarg( $remote_path ) . ' --files-only 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out  = trim( (string) shell_exec( $cmd ) );
+    $out  = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     $data = json_decode( $out ?: '[]', true );
     if ( ! is_array( $data ) ) return [];
 
@@ -5068,7 +5070,7 @@ function cs_enforce_dropbox_retention(): void {
         $rpath = rtrim( $remote, ':' ) . ':' . rtrim( $dest_path, '/' ) . '/' . $name;
         $cmd   = escapeshellarg( $rclone ) . ' deletefile ' . escapeshellarg( $rpath ) . ' 2>&1';
         // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-        shell_exec( $cmd );
+        shell_exec( $cmd ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         unset( $history[$name] );
         cs_log( '[CloudScale Backup] Dropbox retention: deleted ' . $name );
     }
@@ -5079,7 +5081,7 @@ function cs_enforce_dropbox_retention(): void {
 
 function cs_find_aws(): string {
     $candidates = [
-        trim((string) shell_exec('which aws 2>/dev/null')),
+        trim((string) shell_exec('which aws 2>/dev/null')), // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         '/usr/local/bin/aws',
         '/usr/bin/aws',
         '/usr/local/aws-cli/v2/current/bin/aws',
@@ -5119,13 +5121,13 @@ function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
 
     $cmd = escapeshellarg($aws) . " s3 cp {$escaped} {$edest} --only-show-errors 2>&1";
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out = trim((string) shell_exec($cmd));
+    $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
 
     // Space error: free oldest local backup and retry once
     if ($out && cs_is_space_error($out)) {
         cs_free_local_space('S3', basename($local_path));
         // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-        $out = trim((string) shell_exec($cmd));
+        $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     }
 
     $filename = basename($local_path);
@@ -5194,7 +5196,7 @@ function cs_s3_refresh_history(): array {
     $s3_base   = 's3://' . rtrim( $bucket, '/' ) . rtrim( $prefix, '/' ) . '/';
     $cmd       = escapeshellarg( $aws ) . ' s3 ls ' . escapeshellarg( $s3_base ) . ' 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out       = trim( (string) shell_exec( $cmd ) );
+    $out       = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     $existing  = (array) get_option( 'cs_s3_history', [] );
     $found     = [];
 
@@ -5743,7 +5745,7 @@ function cs_free_local_space( string $context, string $exclude_file = '' ): stri
     foreach ( $zips as $zip ) {
         if ( $exclude_file && basename( $zip ) === $exclude_file ) continue;
         $name = basename( $zip );
-        if ( @unlink( $zip ) ) {
+        if ( wp_delete_file( $zip ) ) {
             cs_log( "[CloudScale Backup] Space error during {$context} sync: deleted oldest local backup {$name} to free disk space. Consider increasing server storage or reducing retention count." );
             return $name;
         }
