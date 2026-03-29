@@ -255,8 +255,8 @@ jQuery(function ($) {
             html = '<div id="' + id + '" style="margin-bottom:6px;">' +
                 '<strong style="color:#bf360c;">\u26a0 ' + label + ':</strong> ' +
                 info.free_mb + ' MB free, backup needs ~' + info.est_mb + ' MB &nbsp;' +
-                '<button type="button" class="button button-small cs-delete-oldest-btn" data-provider="' + provider + '" ' +
-                'style="font-size:0.78rem;padding:1px 8px;vertical-align:middle;">Delete oldest ' + label + ' backup</button>' +
+                '<button type="button" class="button button-small cs-delete-oldest-btn" data-provider="' + provider + '" data-est-mb="' + info.est_mb + '" ' +
+                'style="font-size:0.78rem;padding:1px 8px;vertical-align:middle;">Free space on ' + label + '</button>' +
                 ' <span class="cs-del-status-' + provider + '" style="font-size:0.78rem;margin-left:4px;"></span></div>';
         } else if (info.free_mb !== null) {
             html = '<div id="' + id + '" style="margin-bottom:4px;color:#2e7d32;">' +
@@ -320,22 +320,22 @@ jQuery(function ($) {
     $(document).on('click', '.cs-delete-oldest-btn', function () {
         var $btn      = $(this);
         var provider  = $btn.data('provider');
+        var estMb     = parseFloat($btn.data('est-mb') || '0');
         var $status   = $('.cs-del-status-' + provider);
         $btn.prop('disabled', true);
-        $status.text('Deleting\u2026');
+        $status.text('Freeing space\u2026');
         $.ajax({
-            url: CS.ajax_url, method: 'POST', timeout: 60000,
-            data: { action: 'cs_delete_oldest_cloud', nonce: CS.nonce, provider: provider },
+            url: CS.ajax_url, method: 'POST', timeout: 120000,
+            data: { action: 'cs_delete_oldest_cloud', nonce: CS.nonce, provider: provider, need_mb: estMb },
             success: function (res) {
                 if (res.success) {
                     var d = res.data;
-                    var label = $btn.closest('[id^=cs-space-row]').find('strong').first().text().replace(/^.*? /, '').replace(':', '');
-                    var freeText = d.free_mb !== null ? d.free_mb + ' MB free' : 'space updated';
+                    var countText = d.count > 1 ? d.count + ' backups deleted' : 'Deleted ' + (d.deleted || 'backup');
+                    var freeText  = d.free_mb !== null ? d.free_mb + ' MB free' : 'space updated';
                     $btn.closest('div').replaceWith(
                         '<div id="cs-space-row-' + provider + '" style="margin-bottom:6px;color:#2e7d32;">' +
-                        '\u2713 Deleted <em>' + (d.deleted || 'backup') + '</em> \u2014 ' + freeText + '</div>'
+                        '\u2713 ' + countText + ' \u2014 ' + freeText + '</div>'
                     );
-                    // Check if all rows are now OK — if so, auto-proceed
                     var stillWarning = $('#cs-cloud-space-rows').find('.cs-delete-oldest-btn').length > 0;
                     if (!stillWarning) {
                         setTimeout(function () { csDoStartBackup($('#cs-run-backup')); }, 800);
@@ -418,13 +418,14 @@ jQuery(function ($) {
                 msgFn(msg, false);
 
                 $('#cs-sync-del-' + provider).one('click', function () {
-                    msgFn('Deleting oldest ' + label + ' backup\u2026', true);
+                    msgFn('Freeing space on ' + label + '\u2026', true);
                     $.ajax({
-                        url: CS.ajax_url, method: 'POST', timeout: 60000,
-                        data: { action: 'cs_delete_oldest_cloud', nonce: CS.nonce, provider: provider },
+                        url: CS.ajax_url, method: 'POST', timeout: 120000,
+                        data: { action: 'cs_delete_oldest_cloud', nonce: CS.nonce, provider: provider, need_mb: info.est_mb },
                         success: function (r) {
                             if (r.success) {
-                                msgFn('\u2713 Deleted ' + (r.data.deleted || 'backup') + '. Starting sync\u2026', true);
+                                var n = r.data.count > 1 ? r.data.count + ' backups deleted' : 'Deleted ' + (r.data.deleted || 'backup');
+                                msgFn('\u2713 ' + n + ' (' + (r.data.free_mb || '?') + ' MB free). Starting sync\u2026', true);
                                 setTimeout(function () { csStartSyncPoll(startAction, msgFn); }, 600);
                             } else {
                                 msgFn('\u2717 Delete failed: ' + (r.data || 'Unknown error'), false);
