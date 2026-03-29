@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.175
+ * Version:           3.2.176
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.175');
+define('CS_BACKUP_VERSION',    '3.2.176');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -2176,21 +2176,17 @@ add_action( 'wp_ajax_cs_start_backup', function (): void {
     $job_id = 'cs_bkjob_' . bin2hex( random_bytes( 8 ) );
     cs_set_job( $job_id, [ 'status' => 'queued', 'started' => time(), 'opts' => $opts ] );
 
-    // Flush the response to the browser immediately, then run the backup in this same process.
-    // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
-    echo wp_json_encode( [ 'success' => true, 'data' => [ 'job_id' => $job_id ] ] );
-    if ( function_exists( 'fastcgi_finish_request' ) ) {
-        fastcgi_finish_request();
-    } else {
-        if ( ob_get_level() > 0 ) ob_end_flush();
-        flush();
-    }
+    // Register the backup to run after the HTTP response is sent, then send the response.
+    // register_shutdown_function fires after wp_die()/exit, at which point fastcgi_finish_request()
+    // has already flushed the response — so the browser gets a clean JSON reply instantly.
+    register_shutdown_function( function () use ( $job_id, $opts ): void {
+        if ( function_exists( 'fastcgi_finish_request' ) ) fastcgi_finish_request();
+        set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged
+        ignore_user_abort( true );
+        cs_execute_backup_job( $job_id, $opts );
+    } );
 
-    // Run the backup job in this same PHP-FPM process.
-    set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged
-    ignore_user_abort( true );
-    cs_execute_backup_job( $job_id, $opts );
-    wp_die();
+    wp_send_json_success( [ 'job_id' => $job_id ] );
 } );
 
 // ============================================================
@@ -2222,7 +2218,7 @@ add_action( 'wp_ajax_cs_backup_status', function (): void {
 /**
  * Run the actual backup job after the HTTP response has been flushed to the browser.
  *
- * @since 3.2.175
+ * @since 3.2.176
  */
 function cs_execute_backup_job( string $job_id, array $opts ): void {
     $data = cs_get_job( $job_id );
@@ -2659,7 +2655,7 @@ add_action( 'wp_ajax_cs_sync_latest_dropbox', function (): void {
  * then runs the upload in the same PHP-FPM process — no HTTP loopback needed.
  * This bypasses CloudFront/CDN routing entirely.
  *
- * @since 3.2.175
+ * @since 3.2.176
  */
 function cs_start_async_sync( string $provider_action ): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
@@ -2671,29 +2667,23 @@ function cs_start_async_sync( string $provider_action ): void {
     cs_set_job( $job_id, [ 'status' => 'queued', 'started' => time() ] );
     cs_log( "[CloudScale Backup] Sync job queued: {$job_id} ({$provider_action}) for " . basename( $latest ) );
 
-    // Send job_id to the browser now, before the upload starts.
-    // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
-    echo wp_json_encode( [ 'success' => true, 'data' => [ 'job_id' => $job_id ] ] );
+    // Run the upload after the HTTP response is flushed to the browser.
+    // register_shutdown_function fires after wp_send_json_success/wp_die, then
+    // fastcgi_finish_request flushes the clean JSON response before the upload starts.
+    register_shutdown_function( function () use ( $job_id, $provider_action, $latest ): void {
+        if ( function_exists( 'fastcgi_finish_request' ) ) fastcgi_finish_request();
+        set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged
+        ignore_user_abort( true );
+        cs_execute_sync_job( $job_id, $provider_action, $latest );
+    } );
 
-    // Flush the response to the browser so the timer starts immediately.
-    if ( function_exists( 'fastcgi_finish_request' ) ) {
-        fastcgi_finish_request();
-    } else {
-        if ( ob_get_level() > 0 ) ob_end_flush();
-        flush();
-    }
-
-    // Run the upload in this same PHP-FPM process (browser already has the response).
-    set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged
-    ignore_user_abort( true );
-    cs_execute_sync_job( $job_id, $provider_action, $latest );
-    wp_die();
+    wp_send_json_success( [ 'job_id' => $job_id ] );
 }
 
 /**
  * Execute a cloud sync job — called after the HTTP response has been flushed.
  *
- * @since 3.2.175
+ * @since 3.2.176
  */
 function cs_execute_sync_job( string $job_id, string $provider_action, string $latest ): void {
     $map = [
@@ -2889,7 +2879,7 @@ add_action( 'wp_ajax_cs_delete_oldest_cloud', function (): void {
 /**
  * Delete the oldest non-golden backup from a cloud provider to reclaim space.
  *
- * @since 3.2.175
+ * @since 3.2.176
  * @param string $provider 'dropbox' or 'gdrive'.
  * @return array{ok: bool, deleted?: string, error?: string}
  */
@@ -4838,7 +4828,7 @@ function cs_find_rclone(): string {
  * Query free bytes available on an rclone remote via `rclone about --json`.
  * Returns null if the remote does not report quota info or if rclone is unavailable.
  *
- * @since 3.2.175
+ * @since 3.2.176
  * @param string $remote rclone remote name (with or without trailing colon).
  * @return int|null Free bytes, or null if not determinable.
  */
