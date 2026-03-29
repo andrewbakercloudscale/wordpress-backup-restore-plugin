@@ -1776,7 +1776,7 @@ function csAmiRefreshAll() {
             if (row) { row.querySelectorAll('td').forEach(function (td) { td.style.opacity = ''; }); row.classList.remove('cs-row-golden'); }
             var color = state === 'available' ? '#2e7d32' : (state === 'pending' ? '#e65100' : '#757575');
             var icon  = state === 'available' ? '&#10003;' : (state === 'pending' ? '&#9203;' : '&#10007;');
-            stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + state + '</span>';
+            stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + csEscHtml(state) + '</span>';
             var isGolden    = row && row.dataset && row.dataset.golden === '1';
             var goldenStyle = isGolden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '';
             var goldenTitle = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
@@ -1837,9 +1837,9 @@ window.csAmiRefreshOne = function (amiId) {
             var state = res.data.state;
             var color = state === 'available' ? '#2e7d32' : (state === 'pending' ? '#e65100' : '#757575');
             var icon  = state === 'available' ? '&#10003;' : (state === 'pending' ? '&#9203;' : '&#10007;');
-            stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + state + '</span>';
+            stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + csEscHtml(state) + '</span>';
         } else {
-            stateCell.innerHTML = '<span style="color:#c62828;">&#10007; ' + (res.data || 'error') + '</span>';
+            stateCell.innerHTML = '<span style="color:#c62828;">&#10007; ' + csEscHtml(res.data || 'error') + '</span>';
         }
     });
 };

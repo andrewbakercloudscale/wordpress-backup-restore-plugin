@@ -9,7 +9,7 @@ helpLib.run({
     docsDir:    process.env.WP_DOCS_DIR,
 
     pluginName: 'CloudScale Free Backup and Restore',
-    pluginDesc: 'The only WordPress backup plugin that is 100% free — including restore. UpdraftPlus, BackupBuddy, and Duplicator all charge $70–$200 per year the moment you need to actually recover your site. CloudScale gives you scheduled backups, S3 cloud sync, Google Drive sync, Dropbox sync, and one-click restore at zero cost, forever. No upsell, no premium tier, no surprises.',
+    pluginDesc: 'The only WordPress backup plugin that is 100% free — including restore. UpdraftPlus, BackupBuddy, and Duplicator all charge $70–$200 per year the moment you need to actually recover your site. CloudScale gives you scheduled backups, one-click restore, S3 cloud sync, Google Drive sync, Dropbox sync, and AWS EC2 AMI snapshots at zero cost, forever. No upsell, no premium tier, no surprises.',
     pageTitle:  'CloudScale Free Backup and Restore: Online Help',
     pageSlug:   'backup-restore-help',
     downloadUrl: 'https://andrewninjawordpress.s3.af-south-1.amazonaws.com/cloudscale-backup.zip',
@@ -18,6 +18,10 @@ helpLib.run({
     pluginFile: `${__dirname}/../cloudscale-backup.php`,
 
     sections: [
+        {
+            id: 'activity-log', label: 'Activity Log', file: 'panel-activity-log.png', tab: 'local',
+            elementSelector: '#cs-log-panel',
+        },
         { id: 'schedule',       label: 'Backup Schedule',           file: 'panel-schedule.png',       tab: 'local', elementSelector: '#cs-tab-local .cs-card--blue'    },
         { id: 'retention',      label: 'Retention & Storage',        file: 'panel-retention.png',      tab: 'local', elementSelector: '.cs-card--green'                 },
         { id: 'system-info',    label: 'System Info',                file: 'panel-system-info.png',    tab: 'local', elementSelector: '.cs-card--purple'                },
@@ -65,6 +69,32 @@ helpLib.run({
     ],
 
     docs: {
+        'activity-log': `
+<p>The <strong>Activity Log</strong> panel appears at the top of the plugin admin page, above the Local Backups and Cloud Backups tabs. It gives you a real-time, timestamped record of everything the plugin does — useful for verifying that scheduled jobs ran, diagnosing sync failures, or copying a log dump for support.</p>
+<p><strong>What gets logged:</strong></p>
+<ul>
+<li>Backup job queued, starting, completed, or failed — with the zip filename and size.</li>
+<li>Cloud sync jobs: queued, starting, complete, or failed — for S3, Google Drive, Dropbox, and AMI.</li>
+<li>AMI state transitions (<em>pending</em> → <em>available</em>) detected during background polling.</li>
+<li>Retention deletions — when old local or cloud backups are removed automatically.</li>
+<li>Space recovery events — when oldest cloud backups are deleted to free quota.</li>
+<li>Errors and skipped operations (e.g. sync skipped because a provider is not configured).</li>
+</ul>
+<p><strong>Entry colours:</strong></p>
+<ul>
+<li><span style="background:#1e272e;color:#a5d6a7;padding:1px 6px;border-radius:3px;font-family:monospace;font-size:.9em;">Green</span> — success: backup completed, sync OK, deletion confirmed.</li>
+<li><span style="background:#1e272e;color:#80cbc4;padding:1px 6px;border-radius:3px;font-family:monospace;font-size:.9em;">Teal</span> — in-progress: starting, running, retrying.</li>
+<li><span style="background:#1e272e;color:#ef9a9a;padding:1px 6px;border-radius:3px;font-family:monospace;font-size:.9em;">Red</span> — error: failed, skipped, aborted, access denied.</li>
+<li><span style="background:#1e272e;color:#9e9e9e;padding:1px 6px;border-radius:3px;font-family:monospace;font-size:.9em;">Grey</span> — informational: all other events.</li>
+</ul>
+<p><strong>Controls:</strong></p>
+<ul>
+<li><strong>Copy</strong> — copies all visible log lines (with timestamps) to the clipboard as plain text. Paste directly into a support ticket or bug report.</li>
+<li><strong>Refresh</strong> — manually reloads the log. The panel also auto-refreshes every 5 seconds while the page is open.</li>
+<li><strong>Clear</strong> — permanently erases all log entries from the database. Cannot be undone.</li>
+</ul>
+<p>The log displays up to 100 entries and auto-scrolls to the newest entry on each refresh. Entries are stored in <code>wp_options</code> (key <code>cs_activity_log</code>). Background sync workers write temporary per-job entries (keys like <code>cs_log_*</code>) which are merged into the main log on the next load.</p>`,
+
         'schedule': `
 <p>The <strong>Backup Schedule</strong> card (blue) configures automatic, unattended backups. Enable the checkbox at the top to activate the schedule — all controls are disabled when the schedule is off.</p>
 <p><strong>File backup days</strong> — select one or more days of the week on which the scheduled backup will run. The backup fires once per day at the configured time on each selected day.</p>
@@ -114,8 +144,8 @@ helpLib.run({
 <div style="background:#f0f9ff;border-left:4px solid #0e6b8f;padding:18px 22px;border-radius:0 8px 8px 0;margin-bottom:28px;">
 <p style="margin:0 0 10px;font-size:1.3em;font-weight:800;color:#0f172a;">Why CloudScale Free Backup and Restore?</p>
 <p style="margin:0 0 10px;">Most WordPress backup plugins lure you in with a free tier — and then lock the restore button behind a paywall. UpdraftPlus Premium costs $70/year. BackupBuddy starts at $80/year. Duplicator Pro is $69/year. All of them charge you at exactly the moment you are most desperate: when your site is broken and you need to get it back.</p>
-<p style="margin:0 0 10px;"><strong>CloudScale is free. Not "free with paid restore." Free.</strong> Scheduled or manual backups, one-click restore, maintenance mode, S3 cloud sync, Google Drive sync, and Dropbox sync — all included, no subscription required, source code on GitHub.</p>
-<p style="margin:0;">Your backups are stored on your server and can be automatically synced to Amazon S3, Google Drive, or Dropbox so a server failure never means data loss.</p>
+<p style="margin:0 0 10px;"><strong>CloudScale is free. Not "free with paid restore." Free.</strong> Scheduled or manual backups, one-click restore, maintenance mode, S3 cloud sync, Google Drive sync, Dropbox sync, and EC2 AMI snapshots — all included, no subscription required, source code on GitHub.</p>
+<p style="margin:0;">Your backups are stored on your server and can be automatically synced to Amazon S3, Google Drive, or Dropbox so a server failure never means data loss. And if the entire server dies, AMI snapshots let you spin up a replacement in minutes.</p>
 </div>
 <p>The <strong>Create Local Backup Now</strong> card (orange) lets you run an immediate backup with full control over which components are included. Select components in the two columns, then click <strong>Create Local Backup Now</strong>. Keep the browser tab open until the progress bar completes.</p>
 <p><strong>Core components:</strong></p>
@@ -134,7 +164,25 @@ helpLib.run({
 <li><strong>wp-config.php</strong> — contains environment-specific credentials. Do not restore this file to a different server without updating the credentials it contains.</li>
 </ul>
 <p>Each component shows its current disk size. The <strong>Estimated backup size</strong> and <strong>Disk free space</strong> update in real time as you tick and untick components.</p>
-<p><strong>Save as defaults</strong> — saves the current checkbox selection as the default for future manual backups.</p>`,
+<p><strong>Save as defaults</strong> — saves the current checkbox selection as the default for future manual backups.</p>
+<hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
+<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Cloud storage pre-check</p>
+<p>When you click <strong>Create Local Backup Now</strong>, the plugin first checks whether any configured cloud providers (Google Drive and Dropbox) have enough free space to receive the backup. The button text changes to <em>Checking cloud storage…</em> during this check. AWS S3 does not impose a quota limit so it is not checked.</p>
+<p><strong>If all providers have sufficient space</strong> — the backup starts immediately, no action needed.</p>
+<p><strong>If a provider is running low</strong> — a yellow warning panel appears below the backup button showing, for each affected provider, the exact MB free vs the estimated MB needed. You then have three options:</p>
+<ul>
+<li><strong>Free space on [Provider]</strong> — deletes the oldest non-golden backup(s) from that provider one by one until enough space is freed (with a 15% safety margin), then reports the new free space. Golden images are never deleted by this action. Once space is freed, click <strong>Create Local Backup Now</strong> again to proceed, or use <em>Run Backup Anyway</em>.</li>
+<li><strong>Run Backup Anyway</strong> — starts the backup regardless. The local backup will be created successfully. If a cloud provider genuinely has no space, the sync step will fail and the failure will be recorded in the Local Backup History table and the Activity Log.</li>
+<li><strong>Cancel</strong> — dismisses the warning panel without starting a backup.</li>
+</ul>
+<p>If the cloud provider cannot be reached during the check (network error, rclone not configured, etc.), the backup starts immediately without waiting.</p>
+<hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
+<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Disk space alerts</p>
+<p>If your server disk is running low, a banner alert appears above the tab bar:</p>
+<ul>
+<li><strong>Warning (amber)</strong> — disk is at 10–20% free. The banner shows free space and an estimate of how many more backups will fit. Consider reducing the retention count or removing old backups.</li>
+<li><strong>Critical (red)</strong> — disk is below 10% free. Free up space or move old backups off-server immediately — the next backup may fail if insufficient space remains.</li>
+</ul>`,
 
         'backup-list': `
 <p>The <strong>Local Backups</strong> card (teal) shows every backup zip currently stored on your server.</p>
@@ -147,6 +195,7 @@ helpLib.run({
 <li><strong>Restore</strong> — opens the restore confirmation modal for that backup.</li>
 <li><strong>Delete</strong> — permanently removes the zip. Cannot be undone.</li>
 </ul>
+<p><strong>Row colours:</strong> The newest backup is highlighted green (<em>latest</em>). A <strong style="color:#b71c1c;">Delete Soon</strong> badge marks the oldest kept backup when you are at your retention limit — it will be deleted when the next backup runs. Rows highlighted orange are already over-limit and will be deleted immediately on the next backup run.</p>
 <p>The backup directory path is shown at the bottom with a <strong>Copy</strong> button. Backups are stored in <code>wp-content/cloudscale-backups/</code>.</p>`,
 
         'restore-upload': `
@@ -177,12 +226,19 @@ helpLib.run({
 <p><strong>If a restore fails mid-way</strong> — maintenance mode remains active. Manually delete <code>wp-content/.maintenance</code> via SFTP or SSH to bring the site back online, then inspect <code>wp-content/debug.log</code>.</p>`,
 
         'cloud-schedule': `
-<p>The <strong>Cloud Backup Settings</strong> card (blue) is the master control for all automated cloud syncing.</p>
-<p><strong>Cloud backup days</strong> — the days on which cloud sync runs. On each selected day the plugin runs: AMI snapshot (if enabled), then S3, then Google Drive, then Dropbox — in that order.</p>
-<p><strong>Cloud Backup Delay</strong> — minutes after the local backup completes before cloud sync begins. Minimum 15 minutes. This ensures the local zip is fully written before upload starts. The scheduled cloud time is shown when a schedule is configured.</p>
-<p><strong>Include in cloud backup</strong> — checkboxes to enable each provider. Providers that have not been configured in their cards below are greyed out. All four providers can be active simultaneously.</p>
-<p><strong>Max Cloud Backups to Keep</strong> — the retention limit applied to each cloud destination independently. When exceeded, the oldest cloud backup is deleted automatically. Applies to S3 objects, Google Drive files, Dropbox files, and AMI snapshots.</p>
-<p>If the local backup schedule is disabled while cloud sync is enabled, a warning banner appears — cloud sync will upload the most recent existing backup, but no new backups will be created.</p>`,
+<p>The <strong>Cloud Backup Settings</strong> card (blue) is the master control for all automated cloud syncing. It lives at the top of the <strong>Cloud Backups</strong> tab.</p>
+<p><strong>Cloud backup days</strong> — the days on which cloud sync runs. On each selected day the plugin runs providers in this fixed order: AMI snapshot → AWS S3 → Google Drive → Dropbox. Each provider is independent — a failure on one does not prevent the others from running.</p>
+<p><strong>Cloud Backup Delay</strong> — minutes after the local backup completes before cloud sync begins. Minimum 15 minutes. This ensures the local zip is fully written and closed before upload starts. The scheduled cloud sync time is shown when a schedule is configured.</p>
+<p><strong>Include in cloud backup</strong> — checkboxes to enable each provider individually:</p>
+<ul>
+<li><strong>AWS S3</strong> — uploads the backup zip to your S3 bucket using the AWS CLI.</li>
+<li><strong>Google Drive</strong> — copies the backup zip to Google Drive using rclone.</li>
+<li><strong>Dropbox</strong> — copies the backup zip to Dropbox using rclone.</li>
+<li><strong>AWS EC2 AMI Snapshot</strong> — creates an Amazon Machine Image of the entire EC2 server.</li>
+</ul>
+<p>Providers that have not been configured in their cards below are greyed out and cannot be enabled here. All four providers can be active simultaneously — the backup zip is uploaded to each in turn.</p>
+<p><strong>Max Cloud Backups to Keep</strong> — the retention limit applied to each cloud destination independently. When this limit is exceeded after a sync, the oldest non-golden backup is deleted automatically. Applies to S3 objects, Google Drive files, Dropbox files, and AMI snapshots. Golden images are exempt from this limit.</p>
+<p>If the local backup schedule is disabled while cloud sync is enabled, a warning banner appears at the top of the page — cloud sync will upload the most recent existing backup, but no new local backups will be created first.</p>`,
 
         'google-drive': `
 <p>The <strong>Google Drive Backup</strong> card uses <a href="https://rclone.org" target="_blank">rclone</a> to copy backup zips to Google Drive after every local backup. Setup takes about 5 minutes and only needs to be done once.</p>
@@ -190,7 +246,11 @@ helpLib.run({
 <p><strong>Destination folder</strong> — path inside Google Drive where backups are copied. Trailing slash required (e.g. <code>cloudscale-backups/</code>). Leave blank for the Drive root.</p>
 <p><strong>Test Connection</strong> — runs <code>rclone lsd</code> and reports success or the error message.</p>
 <p><strong>Diagnose</strong> — shows rclone version, remote name, and authentication errors.</p>
-<p><strong>Copy Last Backup to Cloud</strong> — immediately copies the most recent local backup zip to Drive, outside of any schedule. Does not create a new backup — it copies whatever zip is already on the server.</p>
+<p><strong>Copy Last Backup to Cloud</strong> — immediately copies the most recent local backup zip to Drive, outside of any schedule. Does not create a new backup — it copies whatever zip is already on the server. Before starting, the plugin checks how much free space Google Drive has:</p>
+<ul>
+<li>If Drive has enough space, the sync starts immediately.</li>
+<li>If Drive is running low, an inline warning appears showing MB free vs MB needed, with two options: <strong>Delete oldest</strong> (removes the oldest non-golden backup from Drive to make room, then starts the sync) or <strong>Sync anyway</strong> (proceeds regardless).</li>
+</ul>
 <p>When configured, the card shows the full destination path, number of backups in Drive, and time of last sync.</p>
 <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
 <p style="margin:0 0 16px;font-size:1.1em;font-weight:800;color:#0f172a;">Google Drive Setup Guide</p>
@@ -238,7 +298,16 @@ token = PASTE_YOUR_JSON_TOKEN_HERE
 EOF'
 sudo chown apache:apache /usr/share/httpd/.config/rclone/rclone.conf
 sudo chmod 600 /usr/share/httpd/.config/rclone/rclone.conf</pre>
-<p>Replace <code>PASTE_YOUR_JSON_TOKEN_HERE</code> with the full JSON token from Step 4, then re-run <strong>Test Connection</strong>.</p>`,
+<p>Replace <code>PASTE_YOUR_JSON_TOKEN_HERE</code> with the full JSON token from Step 4, then re-run <strong>Test Connection</strong>.</p>
+<hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
+<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Running out of Google Drive space</p>
+<p>Google Drive free tier provides 15 GB shared across Drive, Gmail, and Photos. If your backups are large, you may run out of quota. The plugin detects this in two places:</p>
+<ul>
+<li><strong>Before a manual backup</strong> — the cloud space pre-check (see <em>Create Local Backup Now</em>) warns you and offers a <em>Free space on Google Drive</em> button.</li>
+<li><strong>Before a Copy Last Backup to Cloud sync</strong> — an inline warning appears on the card with <em>Delete oldest</em> and <em>Sync anyway</em> options.</li>
+</ul>
+<p>The <em>Delete oldest</em> / <em>Free space</em> action removes the oldest non-golden backup from Google Drive one file at a time until the required space (plus a 15% buffer) is available. Golden images are never deleted automatically. If all deletable backups have been removed and there is still not enough space, you will need to free up quota manually in Google Drive, upgrade your Google One storage, or reduce your retention count.</p>
+<p>Note: the plugin computes free space as <em>total quota − used quota</em> rather than trusting Google's reported free field, which can be inaccurate when the account is over quota.</p>`,
 
         'dropbox': `
 <p>The <strong>Dropbox Backup</strong> card uses <a href="https://rclone.org" target="_blank">rclone</a> to copy backup zips to Dropbox after every local backup. If you already set up rclone for Google Drive, skip straight to Step 3 — you just need to add a new remote.</p>
@@ -246,7 +315,11 @@ sudo chmod 600 /usr/share/httpd/.config/rclone/rclone.conf</pre>
 <p><strong>Destination folder</strong> — path inside Dropbox where backups are copied. Trailing slash required (e.g. <code>cloudscale-backups/</code>). Leave blank for the Dropbox root.</p>
 <p><strong>Test Connection</strong> — verifies rclone can reach Dropbox with the configured remote.</p>
 <p><strong>Diagnose</strong> — shows rclone version, remote name, and troubleshooting tips.</p>
-<p><strong>Copy Last Backup to Cloud</strong> — immediately copies the most recent local backup zip to Dropbox, outside of any schedule. Does not create a new backup — it copies whatever zip is already on the server.</p>
+<p><strong>Copy Last Backup to Cloud</strong> — immediately copies the most recent local backup zip to Dropbox, outside of any schedule. Does not create a new backup — it copies whatever zip is already on the server. Before starting, the plugin checks how much free space Dropbox has:</p>
+<ul>
+<li>If Dropbox has enough space, the sync starts immediately.</li>
+<li>If Dropbox is running low, an inline warning appears showing MB free vs MB needed, with two options: <strong>Delete oldest</strong> (removes the oldest non-golden backup from Dropbox to make room, then starts the sync) or <strong>Sync anyway</strong> (proceeds regardless).</li>
+</ul>
 <p>When configured, the card shows the destination path, number of backups in Dropbox, and time of last sync.</p>
 <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
 <p style="margin:0 0 16px;font-size:1.1em;font-weight:800;color:#0f172a;">Dropbox Setup Guide</p>
@@ -279,7 +352,17 @@ sudo chmod 755 /usr/share/httpd</pre>
 <pre style="background:#1e1e1e;color:#d4d4d4;padding:12px 16px;border-radius:6px;font-size:.85em;overflow-x:auto;margin:0 0 12px;">rclone authorize "dropbox"</pre>
 <p>A browser window opens — log in and authorise Dropbox. The browser shows <em>"Success! All done. Please go back to rclone."</em> Rclone prints a long token like <code>{"access_token":"..."}</code> — copy the entire JSON and paste it at the <code>config_token&gt;</code> prompt on the server.</p>
 <p><strong>Step 4 — Save settings in the plugin</strong></p>
-<p>Enter <code>dropbox</code> in the <em>rclone remote name</em> field and your destination folder (e.g. <code>cloudscale-backups/</code>), click <strong>Save Dropbox Settings</strong>, then <strong>Test Connection</strong>.</p>`,
+<p>Enter <code>dropbox</code> in the <em>rclone remote name</em> field and your destination folder (e.g. <code>cloudscale-backups/</code>), click <strong>Save Dropbox Settings</strong>, then <strong>Test Connection</strong>.</p>
+<hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
+<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Running out of Dropbox space</p>
+<p>Dropbox Basic provides 2 GB free. Backup zips for a typical WordPress site are 200 MB–2 GB, so you may fill Dropbox quickly unless you keep your retention count low or upgrade your Dropbox plan.</p>
+<p>The plugin detects a Dropbox quota problem in two places:</p>
+<ul>
+<li><strong>Before a manual backup</strong> — the cloud space pre-check warns you and offers a <em>Free space on Dropbox</em> button.</li>
+<li><strong>Before a Copy Last Backup to Cloud sync</strong> — an inline warning appears on the card with <em>Delete oldest</em> and <em>Sync anyway</em> options.</li>
+</ul>
+<p>The <em>Delete oldest</em> / <em>Free space</em> action removes the oldest non-golden backup from Dropbox one file at a time until the required space (plus a 15% buffer) is available. Golden images are never deleted. If all deletable backups have been removed and there is still not enough space, you will need to free up Dropbox quota manually, upgrade your plan, or switch to a higher-quota provider such as Google Drive or S3.</p>
+<p>Note: when a Dropbox account is over quota, Dropbox returns an extremely large number as the "free space" field. The plugin works around this by computing free space as <em>total quota − used quota</em> to detect the over-quota state reliably.</p>`,
 
         's3': `
 <p>The <strong>AWS S3 Remote Backup</strong> card uses the AWS CLI to upload backup zips to an S3 bucket after every local backup. Requires the AWS CLI on the server and IAM credentials with <code>s3:PutObject</code>, <code>s3:ListBucket</code>, and <code>s3:DeleteObject</code> permissions on the target bucket.</p>
@@ -287,7 +370,7 @@ sudo chmod 755 /usr/share/httpd</pre>
 <p><strong>Key prefix (folder)</strong> — path prefix applied to all uploaded objects. Trailing slash required (e.g. <code>backups/</code>). Use <code>/</code> to store at the bucket root.</p>
 <p><strong>Test Connection</strong> — writes a small test file to the bucket and verifies it succeeds, confirming credentials and permissions are correct.</p>
 <p><strong>Diagnose</strong> — shows AWS CLI version, bucket, and last-sync details to help debug connection problems.</p>
-<p><strong>Copy Last Backup to Cloud</strong> — immediately copies the most recent local backup zip to S3, outside of any schedule. Does not create a new backup — it copies whatever zip is already on the server.</p>
+<p><strong>Copy Last Backup to Cloud</strong> — immediately copies the most recent local backup zip to S3, outside of any schedule. Does not create a new backup — it copies whatever zip is already on the server. S3 has no practical storage quota for most accounts, so no pre-flight space check is performed.</p>
 <p>When configured, the card shows the full S3 destination path (<code>s3://bucket/prefix/</code>), number of objects in the bucket, and time of last upload. If an automatic sync fails, the plugin retries once after 5 minutes.</p>
 <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
 <p style="margin:0 0 16px;font-size:1.1em;font-weight:800;color:#0f172a;">AWS CLI Setup Guide</p>
@@ -366,7 +449,7 @@ Default output format: json</pre>
 <p><strong>Region override</strong> — set this if the auto-detected region is wrong or Unknown (e.g. <code>af-south-1</code>).</p>
 <p><strong>AMI name prefix</strong> — prepended to each AMI name (e.g. <code>prod-web01</code> produces <code>prod-web01_20260227_1430</code>). The oldest non-golden AMI is deregistered automatically when <em>Max Cloud Backups to Keep</em> is exceeded.</p>
 <p><strong>Reboot instance after AMI creation</strong> — rebooting ensures filesystem consistency. Without reboot the AMI is crash-consistent (safe for most workloads). Marked with a downtime warning badge.</p>
-<p><strong>Create AMI Now</strong> — triggers an immediate AMI snapshot outside of any schedule. Status shows <em>pending</em> then <em>available</em> after 5–15 minutes.</p>
+<p><strong>Create AMI Now</strong> — triggers an immediate AMI snapshot outside of any schedule. Status shows <em>pending</em> then <em>available</em> after 5–15 minutes. AMI state is polled automatically in the background — you do not need to keep the page open, but you can monitor progress in the Activity Log.</p>
 <p>The <strong>AMI history table</strong> lists all tracked AMIs with name, tag, AMI ID, creation date, and state. Row actions:</p>
 <ul>
 <li><strong>Refresh</strong> — queries AWS for the current state (useful for AMIs still in <em>pending</em>).</li>

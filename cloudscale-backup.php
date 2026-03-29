@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://andrewbaker.ninja/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.179
+ * Version:           3.2.182
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.179');
+define('CS_BACKUP_VERSION',    '3.2.182');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -1643,12 +1643,21 @@ function cs_admin_page(): void {
                 </div>
                 <div class="cs-info-row">
                     <span>Last sync</span>
-                    <strong><?php echo $gdrive_last ? esc_html(cs_human_age($gdrive_last) . ' ago (' . wp_date('j M Y H:i', $gdrive_last) . ')') : esc_html__('Never', 'cloudscale-free-backup-and-restore'); ?></strong>
+                    <strong><?php echo $gdrive_last ? esc_html(cs_human_age($gdrive_last) . ' (' . wp_date('j M Y H:i', $gdrive_last) . ')') : esc_html__('Never', 'cloudscale-free-backup-and-restore'); ?></strong>
                 </div>
                 <?php if ($gdrive_last_failed_entry): ?>
-                <div class="cs-info-row">
-                    <span style="color:#c62828;">Sync error</span>
-                    <strong style="color:#c62828;"><?php echo esc_html(cs_human_age($gdrive_last_failed_entry['time']) . ' ago — ' . substr($gdrive_last_failed_entry['error'] ?? 'Sync failed', 0, 120)); ?></strong>
+                <div class="cs-info-row" style="align-items:flex-start;">
+                    <span style="color:#c62828;padding-top:1px;"><?php esc_html_e( 'Sync error', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    <span style="color:#c62828;font-weight:700;display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;overflow-wrap:anywhere;word-break:break-word;">
+                        <span><?php echo esc_html( cs_human_age( $gdrive_last_failed_entry['time'] ) . ' (' . wp_date( 'j M Y H:i', $gdrive_last_failed_entry['time'] ) . ')' ); ?></span>
+                        <?php
+                        $_err_raw   = substr( $gdrive_last_failed_entry['error'] ?? 'Sync failed', 0, 400 );
+                        $_err_clean = preg_replace( '/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} \S+ : /', '', $_err_raw );
+                        $_err_parts = preg_split( '/ \d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} \S+ : /', $_err_clean, 3 );
+                        ?>
+                        <span style="font-weight:normal;"><?php echo esc_html( $_err_parts[0] ?? '' ); ?></span>
+                        <?php if ( ! empty( $_err_parts[1] ) ): ?><span style="font-weight:normal;"><?php echo esc_html( $_err_parts[1] ); ?></span><?php endif; ?>
+                    </span>
                 </div>
                 <?php endif; ?>
                 <?php endif; ?>
@@ -1697,12 +1706,21 @@ function cs_admin_page(): void {
                 </div>
                 <div class="cs-info-row">
                     <span><?php esc_html_e( 'Last sync', 'cloudscale-free-backup-and-restore' ); ?></span>
-                    <strong><?php echo $dropbox_last ? esc_html( cs_human_age( $dropbox_last ) . ' ago (' . wp_date( 'j M Y H:i', $dropbox_last ) . ')' ) : esc_html__( 'Never', 'cloudscale-free-backup-and-restore' ); ?></strong>
+                    <strong><?php echo $dropbox_last ? esc_html( cs_human_age( $dropbox_last ) . ' (' . wp_date( 'j M Y H:i', $dropbox_last ) . ')' ) : esc_html__( 'Never', 'cloudscale-free-backup-and-restore' ); ?></strong>
                 </div>
                 <?php if ($dropbox_last_failed_entry): ?>
-                <div class="cs-info-row">
-                    <span style="color:#c62828;"><?php esc_html_e( 'Sync error', 'cloudscale-free-backup-and-restore' ); ?></span>
-                    <strong style="color:#c62828;"><?php echo esc_html( cs_human_age( $dropbox_last_failed_entry['time'] ) . ' ago — ' . substr( $dropbox_last_failed_entry['error'] ?? 'Sync failed', 0, 120 ) ); ?></strong>
+                <div class="cs-info-row" style="align-items:flex-start;">
+                    <span style="color:#c62828;padding-top:1px;"><?php esc_html_e( 'Sync error', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    <span style="color:#c62828;font-weight:700;display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;overflow-wrap:anywhere;word-break:break-word;">
+                        <span><?php echo esc_html( cs_human_age( $dropbox_last_failed_entry['time'] ) . ' (' . wp_date( 'j M Y H:i', $dropbox_last_failed_entry['time'] ) . ')' ); ?></span>
+                        <?php
+                        $_err_raw   = substr( $dropbox_last_failed_entry['error'] ?? 'Sync failed', 0, 400 );
+                        $_err_clean = preg_replace( '/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} \S+ : /', '', $_err_raw );
+                        $_err_parts = preg_split( '/ \d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} \S+ : /', $_err_clean, 3 );
+                        ?>
+                        <span style="font-weight:normal;"><?php echo esc_html( $_err_parts[0] ?? '' ); ?></span>
+                        <?php if ( ! empty( $_err_parts[1] ) ): ?><span style="font-weight:normal;"><?php echo esc_html( $_err_parts[1] ); ?></span><?php endif; ?>
+                    </span>
                 </div>
                 <?php endif; ?>
                 <?php endif; ?>
@@ -1750,12 +1768,21 @@ function cs_admin_page(): void {
                 </div>
                 <div class="cs-info-row">
                     <span>Last S3 sync</span>
-                    <strong><?php echo $s3_last ? esc_html(cs_human_age($s3_last) . ' ago (' . wp_date('j M Y H:i', $s3_last) . ')') : esc_html__('Never', 'cloudscale-free-backup-and-restore'); ?></strong>
+                    <strong><?php echo $s3_last ? esc_html(cs_human_age($s3_last) . ' (' . wp_date('j M Y H:i', $s3_last) . ')') : esc_html__('Never', 'cloudscale-free-backup-and-restore'); ?></strong>
                 </div>
                 <?php if ($s3_last_failed_entry): ?>
-                <div class="cs-info-row">
-                    <span style="color:#c62828;">Sync error</span>
-                    <strong style="color:#c62828;"><?php echo esc_html(cs_human_age($s3_last_failed_entry['time']) . ' ago — ' . substr($s3_last_failed_entry['error'] ?? 'Sync failed', 0, 120)); ?></strong>
+                <div class="cs-info-row" style="align-items:flex-start;">
+                    <span style="color:#c62828;padding-top:1px;"><?php esc_html_e( 'Sync error', 'cloudscale-free-backup-and-restore' ); ?></span>
+                    <span style="color:#c62828;font-weight:700;display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;overflow-wrap:anywhere;word-break:break-word;">
+                        <span><?php echo esc_html( cs_human_age( $s3_last_failed_entry['time'] ) . ' (' . wp_date( 'j M Y H:i', $s3_last_failed_entry['time'] ) . ')' ); ?></span>
+                        <?php
+                        $_err_raw   = substr( $s3_last_failed_entry['error'] ?? 'Sync failed', 0, 400 );
+                        $_err_clean = preg_replace( '/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} \S+ : /', '', $_err_raw );
+                        $_err_parts = preg_split( '/ \d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} \S+ : /', $_err_clean, 3 );
+                        ?>
+                        <span style="font-weight:normal;"><?php echo esc_html( $_err_parts[0] ?? '' ); ?></span>
+                        <?php if ( ! empty( $_err_parts[1] ) ): ?><span style="font-weight:normal;"><?php echo esc_html( $_err_parts[1] ); ?></span><?php endif; ?>
+                    </span>
                 </div>
                 <?php endif; ?>
                 <?php endif; ?>
@@ -2219,7 +2246,7 @@ add_action( 'wp_ajax_cs_backup_status', function (): void {
 /**
  * Run the actual backup job after the HTTP response has been flushed to the browser.
  *
- * @since 3.2.179
+ * @since 3.2.182
  */
 function cs_execute_backup_job( string $job_id, array $opts ): void {
     $data = cs_get_job( $job_id );
@@ -2656,7 +2683,7 @@ add_action( 'wp_ajax_cs_sync_latest_dropbox', function (): void {
  * then runs the upload in the same PHP-FPM process — no HTTP loopback needed.
  * This bypasses CloudFront/CDN routing entirely.
  *
- * @since 3.2.179
+ * @since 3.2.182
  */
 function cs_start_async_sync( string $provider_action ): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
@@ -2684,7 +2711,7 @@ function cs_start_async_sync( string $provider_action ): void {
 /**
  * Execute a cloud sync job — called after the HTTP response has been flushed.
  *
- * @since 3.2.179
+ * @since 3.2.182
  */
 function cs_execute_sync_job( string $job_id, string $provider_action, string $latest ): void {
     $map = [
@@ -2743,8 +2770,8 @@ add_action( 'wp_ajax_cs_do_sync_job_dropbox', function (): void { cs_do_async_sy
 add_action( 'wp_ajax_cs_batch_job_status', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
     cs_verify_nonce();
-    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-    $raw     = sanitize_text_field( $_POST['job_ids'] ?? '' );
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified via cs_verify_nonce()
+    $raw     = sanitize_text_field( wp_unslash( $_POST['job_ids'] ?? '' ) );
     $ids     = array_filter( array_map( 'sanitize_key', explode( ',', $raw ) ) );
     $results = [];
     foreach ( $ids as $id ) {
@@ -2882,7 +2909,7 @@ add_action( 'wp_ajax_cs_delete_oldest_cloud', function (): void {
 /**
  * Delete the oldest non-golden backup from a cloud provider to reclaim space.
  *
- * @since 3.2.179
+ * @since 3.2.182
  * @param string $provider 'dropbox' or 'gdrive'.
  * @return array{ok: bool, deleted?: string, error?: string}
  */
@@ -4831,7 +4858,7 @@ function cs_find_rclone(): string {
  * Query free bytes available on an rclone remote via `rclone about --json`.
  * Returns null if the remote does not report quota info or if rclone is unavailable.
  *
- * @since 3.2.179
+ * @since 3.2.182
  * @param string $remote rclone remote name (with or without trailing colon).
  * @return int|null Free bytes, or null if not determinable.
  */
