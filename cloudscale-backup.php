@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Free Backup and Restore
  * Plugin URI:        https://your-wordpress-site.example.com/cloudscale-backup
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.182
+ * Version:           3.2.186
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.182');
+define('CS_BACKUP_VERSION',    '3.2.186');
 define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -184,7 +184,7 @@ function cs_ensure_backup_dir(): void {
     }
     $htaccess = CS_BACKUP_DIR . '.htaccess';
     if (!file_exists($htaccess)) {
-        file_put_contents($htaccess, "Deny from all\n");
+        file_put_contents($htaccess, "Deny from all\n"); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- WP Filesystem API unavailable before init; writing to plugin-owned backup dir
     }
     $index = CS_BACKUP_DIR . 'index.php';
     if (!file_exists($index)) {
@@ -2108,7 +2108,7 @@ add_action('wp_ajax_cs_run_backup', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     cs_ensure_backup_dir();
 
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via cs_verify_nonce() above; boolean !empty() checkbox checks only
@@ -2180,7 +2180,7 @@ add_action('wp_ajax_cs_run_backup', function (): void {
 
 add_action( 'wp_ajax_cs_start_backup', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     cs_ensure_backup_dir();
 
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
@@ -2223,7 +2223,7 @@ add_action( 'wp_ajax_cs_start_backup', function (): void {
 
 add_action( 'wp_ajax_cs_backup_status', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
 
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
     $job_id = sanitize_key( $_POST['job_id'] ?? '' );
@@ -2246,7 +2246,7 @@ add_action( 'wp_ajax_cs_backup_status', function (): void {
 /**
  * Run the actual backup job after the HTTP response has been flushed to the browser.
  *
- * @since 3.2.182
+ * @since 3.2.186
  */
 function cs_execute_backup_job( string $job_id, array $opts ): void {
     $data = cs_get_job( $job_id );
@@ -2335,7 +2335,7 @@ add_action('wp_ajax_cs_delete_backup', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $file = sanitize_file_name( wp_unslash( $_POST['file'] ?? '' ) );
     $path = CS_BACKUP_DIR . $file;
@@ -2354,7 +2354,7 @@ add_action('wp_ajax_cs_restore_backup', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
     ignore_user_abort(true);
 
@@ -2385,11 +2385,11 @@ add_action('wp_ajax_cs_restore_upload', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
     ignore_user_abort(true);
 
-    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.InputNotValidated -- nonce verified via cs_verify_nonce(); tmp_name is a server path, not user input; file extension is validated below
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.InputNotValidated -- nonce verified via check_ajax_referer( 'cs_nonce', 'nonce' ); tmp_name is a server path, not user input; file extension is validated below
     if (empty($_FILES['backup_file'])) {
         wp_send_json_error('No file uploaded.');
     }
@@ -2427,9 +2427,9 @@ add_action('wp_ajax_cs_save_manual_defaults', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     $valid = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'htaccess', 'wpconfig'];
-    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via cs_verify_nonce(); values validated via array_intersect() against a whitelist
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_ajax_referer( 'cs_nonce', 'nonce' ); values validated via array_intersect() against a whitelist
     $raw   = isset($_POST['components']) && is_array($_POST['components']) ? wp_unslash( $_POST['components'] ) : [];
     $clean = array_values(array_intersect($raw, $valid));
     update_option('cs_manual_defaults', $clean);
@@ -2444,7 +2444,7 @@ add_action('wp_ajax_cs_test_s3', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     $bucket = get_option('cs_s3_bucket', '');
     $prefix = get_option('cs_s3_prefix', 'backups/');
     if (!$bucket) {
@@ -2458,7 +2458,7 @@ add_action('wp_ajax_cs_test_s3', function (): void {
     $dest   = 's3://' . rtrim($bucket, '/') . '/' . ($prefix ? $prefix . '/' : '') . 'cloudscale-test.txt';
     $content = "CloudScale Backup connection test\nWritten: " . gmdate('Y-m-d H:i:s T') . "\nBucket: " . $bucket . "\n";
     $tmp = tempnam(sys_get_temp_dir(), 'cs_test_');
-    file_put_contents($tmp, $content);
+    file_put_contents($tmp, $content); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- temp file for CLI upload test; WP Filesystem API not appropriate for temp file operations
     $real_tmp = realpath($tmp) ?: $tmp;
     $cmd = escapeshellarg($aws) . ' s3 cp ' . escapeshellarg($real_tmp) . ' ' . escapeshellarg($dest) . ' 2>&1';
     $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
@@ -2475,7 +2475,7 @@ add_action('wp_ajax_cs_save_s3', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $bucket = sanitize_text_field( wp_unslash( $_POST['bucket'] ?? '' ) );
     $prefix = sanitize_text_field( wp_unslash( $_POST['prefix'] ?? 'backups/' ) );
@@ -2502,7 +2502,7 @@ add_action('wp_ajax_cs_s3_sync_file', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     if (!$filename || !str_ends_with($filename, '.zip')) {
@@ -2531,7 +2531,7 @@ add_action('wp_ajax_cs_save_ami', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $prefix          = sanitize_text_field( wp_unslash( $_POST['prefix'] ?? '' ) );
     $reboot          = !empty( $_POST['reboot'] );
@@ -2551,7 +2551,7 @@ add_action('wp_ajax_cs_save_ami', function (): void {
 
 add_action('wp_ajax_cs_save_cloud_schedule', function (): void {
     if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via cs_verify_nonce() above; intval()/!empty() used for boolean/integer fields
     $raw_days   = array_filter(explode(',', sanitize_text_field( wp_unslash( $_POST['ami_schedule_days'] ?? '' ) )));
     $clean_days = array_values(array_filter(array_map('intval', $raw_days), fn($d) => $d >= 1 && $d <= 7));
@@ -2579,7 +2579,7 @@ add_action('wp_ajax_cs_save_cloud_schedule', function (): void {
 
 add_action('wp_ajax_cs_save_gdrive', function (): void {
     if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $remote = sanitize_text_field( wp_unslash( $_POST['remote'] ?? '' ) );
     $path   = sanitize_text_field( wp_unslash( $_POST['path']   ?? 'cloudscale-backups/' ) );
@@ -2594,7 +2594,7 @@ add_action('wp_ajax_cs_save_gdrive', function (): void {
 
 add_action('wp_ajax_cs_test_gdrive', function (): void {
     if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     $remote = get_option('cs_gdrive_remote', '');
     if (!$remote) { wp_send_json_error('No remote configured — save settings first.'); }
     $rclone = cs_find_rclone();
@@ -2609,7 +2609,7 @@ add_action('wp_ajax_cs_test_gdrive', function (): void {
 
 add_action('wp_ajax_cs_sync_latest_s3', function (): void {
     if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     $latest = cs_get_latest_backup_path();
     if (!$latest) { wp_send_json_error('No local backups found.'); }
     $result = cs_sync_to_s3($latest);
@@ -2619,7 +2619,7 @@ add_action('wp_ajax_cs_sync_latest_s3', function (): void {
 
 add_action('wp_ajax_cs_sync_latest_gdrive', function (): void {
     if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     $latest = cs_get_latest_backup_path();
     if (!$latest) { wp_send_json_error('No local backups found.'); }
     $result = cs_sync_to_gdrive($latest);
@@ -2633,7 +2633,7 @@ add_action('wp_ajax_cs_sync_latest_gdrive', function (): void {
 
 add_action( 'wp_ajax_cs_save_dropbox', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $remote = sanitize_text_field( wp_unslash( $_POST['remote'] ?? '' ) );
     $path   = sanitize_text_field( wp_unslash( $_POST['path']   ?? 'cloudscale-backups/' ) );
@@ -2648,7 +2648,7 @@ add_action( 'wp_ajax_cs_save_dropbox', function (): void {
 
 add_action( 'wp_ajax_cs_test_dropbox', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     $remote = get_option( 'cs_dropbox_remote', '' );
     if ( ! $remote ) { wp_send_json_error( 'No remote configured — save settings first.' ); }
     $rclone = cs_find_rclone();
@@ -2664,7 +2664,7 @@ add_action( 'wp_ajax_cs_test_dropbox', function (): void {
 
 add_action( 'wp_ajax_cs_sync_latest_dropbox', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     $latest = cs_get_latest_backup_path();
     if ( ! $latest ) { wp_send_json_error( 'No local backups found.' ); }
     $result = cs_sync_to_dropbox( $latest );
@@ -2683,11 +2683,11 @@ add_action( 'wp_ajax_cs_sync_latest_dropbox', function (): void {
  * then runs the upload in the same PHP-FPM process — no HTTP loopback needed.
  * This bypasses CloudFront/CDN routing entirely.
  *
- * @since 3.2.182
+ * @since 3.2.186
  */
 function cs_start_async_sync( string $provider_action ): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     $latest = cs_get_latest_backup_path();
     if ( ! $latest ) wp_send_json_error( 'No local backups found.' );
 
@@ -2711,7 +2711,7 @@ function cs_start_async_sync( string $provider_action ): void {
 /**
  * Execute a cloud sync job — called after the HTTP response has been flushed.
  *
- * @since 3.2.182
+ * @since 3.2.186
  */
 function cs_execute_sync_job( string $job_id, string $provider_action, string $latest ): void {
     $map = [
@@ -2769,7 +2769,7 @@ add_action( 'wp_ajax_cs_do_sync_job_dropbox', function (): void { cs_do_async_sy
 
 add_action( 'wp_ajax_cs_batch_job_status', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified via cs_verify_nonce()
     $raw     = sanitize_text_field( wp_unslash( $_POST['job_ids'] ?? '' ) );
     $ids     = array_filter( array_map( 'sanitize_key', explode( ',', $raw ) ) );
@@ -2788,7 +2788,7 @@ add_action( 'wp_ajax_cs_batch_job_status', function (): void {
 
 add_action( 'wp_ajax_cs_cloud_space_check', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
     $only = sanitize_key( $_POST['provider'] ?? '' ); // optional: limit to one provider
 
@@ -2830,9 +2830,8 @@ add_action( 'wp_ajax_cs_cloud_space_check', function (): void {
 
 add_action( 'wp_ajax_cs_get_activity_log', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    cs_verify_nonce();
-    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-    $since   = (int) ( $_POST['since'] ?? 0 );
+    check_ajax_referer( 'cs_nonce', 'nonce' );
+    $since   = (int) wp_unslash( $_POST['since'] ?? 0 );
     $entries = (array) get_option( 'cs_activity_log', [] );
     // Also pull any pending individual log entries written by concurrent background workers.
     global $wpdb;
@@ -2853,7 +2852,7 @@ add_action( 'wp_ajax_cs_get_activity_log', function (): void {
 
 add_action( 'wp_ajax_cs_clear_activity_log', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     update_option( 'cs_activity_log', [], false );
     global $wpdb;
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -2867,8 +2866,8 @@ add_action( 'wp_ajax_cs_clear_activity_log', function (): void {
 
 add_action( 'wp_ajax_cs_delete_oldest_cloud', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    cs_verify_nonce();
-    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via cs_verify_nonce(); sanitize_key() and (float) cast sanitise inputs
+    check_ajax_referer( 'cs_nonce', 'nonce' );
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_ajax_referer( 'cs_nonce', 'nonce' ); sanitize_key() and (float) cast sanitise inputs
     $provider  = sanitize_key( $_POST['provider'] ?? '' );
     $need_mb   = (float) wp_unslash( $_POST['need_mb'] ?? 0 );  // how much space the backup needs
     $need_bytes = $need_mb > 0 ? (int) ( $need_mb * 1048576 ) : 0;
@@ -2909,7 +2908,7 @@ add_action( 'wp_ajax_cs_delete_oldest_cloud', function (): void {
 /**
  * Delete the oldest non-golden backup from a cloud provider to reclaim space.
  *
- * @since 3.2.182
+ * @since 3.2.186
  * @param string $provider 'dropbox' or 'gdrive'.
  * @return array{ok: bool, deleted?: string, error?: string}
  */
@@ -2972,7 +2971,7 @@ function cs_delete_oldest_cloud_backup( string $provider ): array {
 
 add_action( 'wp_ajax_cs_dropbox_refresh_history', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     if ( ! get_option( 'cs_dropbox_remote', '' ) ) { wp_send_json_error( 'Dropbox not configured.' ); }
     $hist = cs_dropbox_refresh_history();
     update_option( 'cs_dropbox_remote_count', count( $hist ), false );
@@ -2981,7 +2980,7 @@ add_action( 'wp_ajax_cs_dropbox_refresh_history', function (): void {
 
 add_action( 'wp_ajax_cs_dropbox_set_golden', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     $history  = (array) get_option( 'cs_dropbox_history', [] );
@@ -2993,7 +2992,7 @@ add_action( 'wp_ajax_cs_dropbox_set_golden', function (): void {
 
 add_action( 'wp_ajax_cs_dropbox_set_tag', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     $tag      = substr( sanitize_text_field( wp_unslash( $_POST['tag'] ?? '' ) ), 0, 40 );
@@ -3007,7 +3006,7 @@ add_action( 'wp_ajax_cs_dropbox_set_tag', function (): void {
 
 add_action( 'wp_ajax_cs_dropbox_delete_remote', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     if ( ! $filename ) { wp_send_json_error( 'Invalid filename.' ); }
@@ -3032,7 +3031,7 @@ add_action( 'wp_ajax_cs_dropbox_delete_remote', function (): void {
 
 add_action( 'wp_ajax_cs_repair_tables', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     global $wpdb;
     $tables = $wpdb->get_col( // phpcs:ignore WordPress.DB.DirectDatabaseQuery
         $wpdb->prepare(
@@ -3083,7 +3082,7 @@ add_action('wp_ajax_cs_create_ami', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     set_time_limit(120); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to allow AMI create-image API call to complete
 
     $instance_id = cs_get_instance_id();
@@ -3327,7 +3326,7 @@ add_action('wp_ajax_cs_ami_status', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
 
     $aws = cs_find_aws();
     if (!$aws) {
@@ -3395,7 +3394,7 @@ add_action('wp_ajax_cs_deregister_ami', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
 
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $ami_id = sanitize_text_field( wp_unslash( $_POST['ami_id'] ?? '' ) );
@@ -3502,7 +3501,7 @@ add_action('wp_ajax_cs_ami_refresh_all', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
 
     $aws = cs_find_aws();
@@ -3588,7 +3587,7 @@ add_action('wp_ajax_cs_ami_reset_deleted', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     $log     = (array) get_option('cs_ami_log', []);
     $reset   = 0;
     foreach ($log as &$entry) {
@@ -3611,7 +3610,7 @@ add_action('wp_ajax_cs_ami_remove_record', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
 
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $ami_id = sanitize_text_field( wp_unslash( $_POST['ami_id'] ?? '' ) );
@@ -3630,7 +3629,7 @@ add_action('wp_ajax_cs_ami_remove_failed', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $name = sanitize_text_field( wp_unslash( $_POST['name'] ?? '' ) );
     if (!$name) {
@@ -3659,7 +3658,7 @@ add_action('wp_ajax_cs_ami_restore', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $ami_id = sanitize_text_field( wp_unslash( $_POST['ami_id'] ?? '' ) );
     if ( ! preg_match( '/^ami-[a-f0-9]{8,17}$/', $ami_id ) ) {
@@ -3713,7 +3712,7 @@ add_action('wp_ajax_cs_ami_set_tag', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $ami_id = sanitize_text_field( wp_unslash( $_POST['ami_id'] ?? '' ) );
     $tag    = sanitize_text_field( wp_unslash( $_POST['tag']    ?? '' ) );
@@ -3749,7 +3748,7 @@ add_action('wp_ajax_cs_ami_set_golden', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $ami_id = sanitize_text_field( wp_unslash( $_POST['ami_id'] ?? '' ) );
     if ( ! preg_match( '/^ami-[a-f0-9]{8,17}$/', $ami_id ) ) {
@@ -3797,7 +3796,7 @@ add_action('wp_ajax_cs_gdrive_refresh_history', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     if ( ! get_option( 'cs_gdrive_remote', '' ) ) {
         wp_send_json_error( 'Google Drive not configured.' );
     }
@@ -3816,7 +3815,7 @@ add_action('wp_ajax_cs_gdrive_set_tag', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     $tag      = sanitize_text_field( wp_unslash( $_POST['tag']      ?? '' ) );
@@ -3841,7 +3840,7 @@ add_action('wp_ajax_cs_gdrive_set_golden', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
@@ -3869,7 +3868,7 @@ add_action('wp_ajax_cs_gdrive_delete_remote', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
@@ -3898,7 +3897,7 @@ add_action('wp_ajax_cs_s3_refresh_history', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     if ( ! get_option( 'cs_s3_bucket', '' ) ) {
         wp_send_json_error( 'S3 not configured.' );
     }
@@ -3917,7 +3916,7 @@ add_action('wp_ajax_cs_s3_set_tag', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     $tag      = sanitize_text_field( wp_unslash( $_POST['tag']      ?? '' ) );
@@ -3943,7 +3942,7 @@ add_action('wp_ajax_cs_s3_set_golden', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
@@ -3971,7 +3970,7 @@ add_action('wp_ajax_cs_s3_delete_remote', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
@@ -4009,7 +4008,7 @@ add_action('wp_ajax_cs_s3_pull', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     cs_ensure_backup_dir();
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via cs_verify_nonce() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
@@ -4042,7 +4041,7 @@ add_action('wp_ajax_cs_save_retention', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    cs_verify_nonce();
+    check_ajax_referer( 'cs_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via cs_verify_nonce() above; intval() used for integer field
     $r = max(1, min(9999, intval( wp_unslash( $_POST['retention'] ?? 8 ) )));
     update_option('cs_retention', $r);
@@ -4384,7 +4383,7 @@ function cs_render_dashboard_widget(): void {
  */
 function cs_maintenance_on(): void {
     $php = '<?php $upgrading = ' . time() . '; ?>';
-    file_put_contents(CS_BACKUP_MAINT_FILE, $php);
+    file_put_contents(CS_BACKUP_MAINT_FILE, $php); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- writing .maintenance file requires direct filesystem access; WP Filesystem API unavailable at restore time
 }
 
 /**
@@ -4858,7 +4857,7 @@ function cs_find_rclone(): string {
  * Query free bytes available on an rclone remote via `rclone about --json`.
  * Returns null if the remote does not report quota info or if rclone is unavailable.
  *
- * @since 3.2.182
+ * @since 3.2.186
  * @param string $remote rclone remote name (with or without trailing colon).
  * @return int|null Free bytes, or null if not determinable.
  */
@@ -5271,7 +5270,7 @@ function cs_dump_database(): string {
  * @return bool True if mysqldump is found in PATH.
  */
 function cs_mysqldump_available(): bool {
-    exec('which mysqldump 2>/dev/null', $out, $rc);
+    exec('which mysqldump 2>/dev/null', $out, $rc); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- checking binary availability via which; no user input
     return $rc === 0;
 }
 
@@ -5298,14 +5297,14 @@ function cs_dump_via_mysqldump(): string {
         escapeshellarg($tmp)
     );
 
-    exec($cmd, $output, $rc);
+    exec($cmd, $output, $rc); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- mysqldump CLI backup; all args built with escapeshellarg()
 
     if ($rc !== 0 || !file_exists($tmp) || filesize($tmp) < 100) {
         wp_delete_file($tmp);
         return cs_dump_via_php($GLOBALS['wpdb']);
     }
 
-    $sql = file_get_contents($tmp);
+    $sql = file_get_contents($tmp); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading mysqldump output from temp file; WP Filesystem API not appropriate for temp file operations
     wp_delete_file( $tmp );
     return $sql;
 }
@@ -5445,7 +5444,7 @@ function cs_restore_from_zip(string $zip_path): void {
  * @throws \Exception If the file is empty or unreadable.
  */
 function cs_restore_sql_file(string $path): void {
-    $sql = file_get_contents($path);
+    $sql = file_get_contents($path); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading uploaded SQL backup file; WP Filesystem API not appropriate for restore operations
     if (empty($sql)) {
         throw new Exception('SQL file is empty.');
     }
@@ -5474,7 +5473,7 @@ function cs_execute_sql_string(string $sql): void {
         return;
     }
 
-    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare -- static session variable; no user input; restore requires direct execution
+    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- restore requires direct execution; prepare() cannot be applied to DDL/DML replay from a trusted backup file
     $wpdb->query('SET FOREIGN_KEY_CHECKS=0');
 
     foreach (cs_split_sql($sql) as $stmt) {
@@ -5482,15 +5481,14 @@ function cs_execute_sql_string(string $sql): void {
         if (empty($stmt) || str_starts_with($stmt, '--') || str_starts_with($stmt, '/*')) {
             continue;
         }
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- full SQL from a trusted backup file; prepare() cannot be applied to DDL/DML replay
         $wpdb->query($stmt);
         if ($wpdb->last_error) {
             cs_log('CS Restore statement error: ' . $wpdb->last_error . ' | ' . substr($stmt, 0, 200));
         }
     }
 
-    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare -- static session variable; restore requires direct execution
     $wpdb->query('SET FOREIGN_KEY_CHECKS=1');
+    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
 }
 
 /**
@@ -5500,7 +5498,7 @@ function cs_execute_sql_string(string $sql): void {
  * @return bool True if mysql is found in PATH.
  */
 function cs_mysql_cli_available(): bool {
-    exec('which mysql 2>/dev/null', $out, $rc);
+    exec('which mysql 2>/dev/null', $out, $rc); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- checking binary availability via which; no user input
     return $rc === 0;
 }
 
@@ -5517,7 +5515,7 @@ function cs_mysql_cli_available(): bool {
  */
 function cs_restore_via_mysql_cli(string $sql): void {
     $tmp = tempnam(sys_get_temp_dir(), 'cs_restore_') . '.sql';
-    file_put_contents($tmp, $sql);
+    file_put_contents($tmp, $sql); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- writing SQL to temp file for mysql CLI restore; WP Filesystem API not appropriate here
 
     [$host, $port] = cs_parse_db_host(DB_HOST);
 
@@ -5531,7 +5529,7 @@ function cs_restore_via_mysql_cli(string $sql): void {
         escapeshellarg($tmp)
     );
 
-    exec($cmd, $output, $rc);
+    exec($cmd, $output, $rc); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- mysql CLI restore; all args built with escapeshellarg()
     wp_delete_file( $tmp );
 
     if ($rc !== 0) {
