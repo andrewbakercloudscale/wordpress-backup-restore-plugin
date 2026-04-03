@@ -558,6 +558,10 @@ Default output format: json</pre>
 <li><strong>Notification</strong> — on the next WordPress page load after recovery, the rollback is recorded in the Rollback History card and an email is sent to the WordPress admin address. If Twilio SMS is configured, an SMS is sent as well.</li>
 <li><strong>Branded recovery page</strong> — while the site is in a crash state, visitors see a "CloudScale Backup and Restore is automatically recovering this site" message instead of a white screen of death.</li>
 </ol>
+<div style="text-align:center;margin:20px 0;">
+<img src="https://andrewninjawordpress.s3.af-south-1.amazonaws.com/docs/recovery-page-mobile.png" alt="CloudScale Plugin Auto Recovery — branded recovery page shown to visitors while the site recovers" style="max-width:320px;width:100%;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,.15);">
+<p style="margin:8px 0 0;font-size:.82rem;color:#64748b;">What visitors see while Plugin Auto Recovery is restoring the site — a branded page with a live spinner that auto-refreshes every 30 seconds.</p>
+</div>
 <p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Settings</p>
 <ul>
 <li><strong>Enable Plugin Auto Recovery</strong> — turn the feature on or off. When disabled, no backups are taken before updates and no monitoring occurs. Enabled by default.</li>
