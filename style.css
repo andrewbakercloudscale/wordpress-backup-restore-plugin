@@ -4,7 +4,7 @@
    LAYOUT
    ================================================================ */
 
-.cs-wrap { max-width: 1200px; padding-bottom: 60px; }
+.cs-wrap { max-width: 1200px; padding-bottom: 60px; padding-right: 20px; }
 .cs-wrap input::placeholder { font-style: italic; color: #aaa; }
 
 /* ================================================================
@@ -178,7 +178,7 @@
 .cs-wrap .cs-card {
     background: #fff;
     border-radius: 10px;
-    padding: 0 20px 22px;
+    padding: 0 20px 32px;
     position: relative;
     box-shadow: 0 3px 12px rgba(0,0,0,0.12), 0 0 0 1px rgba(0,0,0,0.08);
     border: none !important;
@@ -627,6 +627,7 @@ select.cs-input-sm { width: 90px !important; }
 .cs-progress-msg   { font-weight: 600; font-size: 0.88rem; margin: 0 0 10px; color: #1d2327; }
 .cs-progress-bar   { height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden; margin-bottom: 8px; }
 .cs-progress-fill  { height: 100%; width: 30%; background: #1565c0; border-radius: 4px; animation: cs-slide 1.6s infinite ease-in-out; }
+.cs-progress-fill.cs-upload-real { animation: none; transition: width 0.3s ease; }
 
 @keyframes cs-slide {
     0%   { margin-left: 0%;  width: 25%; }
