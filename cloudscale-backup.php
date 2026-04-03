@@ -1,8 +1,9 @@
 <?php
 /**
  * Plugin Name:       CloudScale Backup & Restore
+ * Plugin URI:        https://cloudscale.consulting
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.189
+ * Version:           3.2.251
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -15,14 +16,17 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CS_BACKUP_VERSION',    '3.2.189');
-define('CS_BACKUP_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
-define('CS_BACKUP_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
-define('CS_BACKUP_PLUGIN_DIR', plugin_dir_path(__FILE__));
-define('CS_BACKUP_DIR', WP_CONTENT_DIR . '/cloudscale-backups/');
-define('CS_BACKUP_MAINT_FILE', ABSPATH . '.maintenance');
+define('CSBR_VERSION',    '3.2.251');
+define('CSBR_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
+define('CSBR_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
+define('CSBR_PLUGIN_DIR', plugin_dir_path(__FILE__));
+define('CSBR_BACKUP_DIR', WP_CONTENT_DIR . '/cloudscale-backups/');
+define('CSBR_MAINT_FILE', ABSPATH . '.maintenance');
 
-require_once CS_BACKUP_PLUGIN_DIR . 'includes/class-cloudscale-backup-utils.php';
+require_once CSBR_PLUGIN_DIR . 'includes/class-cloudscale-backup-utils.php';
+require_once CSBR_PLUGIN_DIR . 'includes/class-plugin-auto-recovery.php';
+require_once CSBR_PLUGIN_DIR . 'includes/plugin-auto-recovery-render.php';
+CSBR_Plugin_Auto_Recovery::init();
 
 /**
  * Write a message to the PHP error log when WP_DEBUG is enabled.
@@ -33,7 +37,7 @@ require_once CS_BACKUP_PLUGIN_DIR . 'includes/class-cloudscale-backup-utils.php'
  * @param string $message Message to write to the PHP error log.
  * @return void
  */
-function cs_log( string $message ): void {
+function csbr_log( string $message ): void {
     CloudScale_Backup_Utils::log( $message );
 }
 
@@ -45,38 +49,38 @@ function cs_log( string $message ): void {
 // with empty memory, so get_transient() returns false and jobs never run.
 // These helpers write directly to wp_options so every PHP process can read them.
 
-function cs_set_job( string $job_id, array $data, int $ttl = HOUR_IN_SECONDS ): void {
+function csbr_set_job( string $job_id, array $data, int $ttl = HOUR_IN_SECONDS ): void {
     global $wpdb;
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-    $wpdb->replace( $wpdb->options, [ 'option_name' => 'cs_job_' . $job_id,         'option_value' => maybe_serialize( $data ),              'autoload' => 'no' ] );
+    $wpdb->replace( $wpdb->options, [ 'option_name' => 'csbr_job_' . $job_id,         'option_value' => maybe_serialize( $data ),              'autoload' => 'no' ] );
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-    $wpdb->replace( $wpdb->options, [ 'option_name' => 'cs_job_expires_' . $job_id, 'option_value' => (string) ( time() + $ttl ), 'autoload' => 'no' ] );
+    $wpdb->replace( $wpdb->options, [ 'option_name' => 'csbr_job_expires_' . $job_id, 'option_value' => (string) ( time() + $ttl ), 'autoload' => 'no' ] );
 }
 
-function cs_get_job( string $job_id ): array|false {
+function csbr_get_job( string $job_id ): array|false {
     global $wpdb;
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-    $expires = (int) $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'cs_job_expires_' . $job_id ) );
-    if ( $expires && $expires < time() ) { cs_delete_job( $job_id ); return false; }
+    $expires = (int) $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'csbr_job_expires_' . $job_id ) );
+    if ( $expires && $expires < time() ) { csbr_delete_job( $job_id ); return false; }
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-    $value = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'cs_job_' . $job_id ) );
-    return $value !== null ? maybe_unserialize( $value ) : false; // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_maybe_unserialize -- value written only by this plugin via cs_set_job()
+    $value = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'csbr_job_' . $job_id ) );
+    return $value !== null ? maybe_unserialize( $value ) : false; // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_maybe_unserialize -- value written only by this plugin via csbr_set_job()
 }
 
-function cs_delete_job( string $job_id ): void {
+function csbr_delete_job( string $job_id ): void {
     global $wpdb;
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-    $wpdb->delete( $wpdb->options, [ 'option_name' => 'cs_job_' . $job_id ] );
+    $wpdb->delete( $wpdb->options, [ 'option_name' => 'csbr_job_' . $job_id ] );
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
-    $wpdb->delete( $wpdb->options, [ 'option_name' => 'cs_job_expires_' . $job_id ] );
+    $wpdb->delete( $wpdb->options, [ 'option_name' => 'csbr_job_expires_' . $job_id ] );
 }
 
 // ============================================================
 // Bootstrap
 // ============================================================
 
-register_activation_hook(__FILE__, 'cs_activate');
-register_deactivation_hook(__FILE__, 'cs_deactivate');
+register_activation_hook(__FILE__, 'csbr_activate');
+register_deactivation_hook(__FILE__, 'csbr_deactivate');
 
 /**
  * Plugin activation: create the backup directory and schedule the first cron event.
@@ -84,9 +88,9 @@ register_deactivation_hook(__FILE__, 'cs_deactivate');
  * @since 1.0.0
  * @return void
  */
-function cs_activate(): void {
-    cs_ensure_backup_dir();
-    cs_reschedule();
+function csbr_activate(): void {
+    csbr_ensure_backup_dir();
+    csbr_reschedule();
 }
 
 /**
@@ -96,13 +100,13 @@ function cs_activate(): void {
  * @since 1.0.0
  * @return void
  */
-function cs_deactivate(): void {
-    wp_clear_scheduled_hook('cs_scheduled_backup');
-    wp_clear_scheduled_hook('cs_scheduled_ami_backup');
-    wp_clear_scheduled_hook('cs_ami_poll');
-    wp_clear_scheduled_hook('cs_s3_retry');
-    wp_clear_scheduled_hook('cs_ami_delete_check');
-    cs_maintenance_off();
+function csbr_deactivate(): void {
+    wp_clear_scheduled_hook('csbr_scheduled_backup');
+    wp_clear_scheduled_hook('csbr_scheduled_ami_backup');
+    wp_clear_scheduled_hook('csbr_ami_poll');
+    wp_clear_scheduled_hook('csbr_s3_retry');
+    wp_clear_scheduled_hook('csbr_ami_delete_check');
+    csbr_maintenance_off();
 
     // Delete only versioned asset copies — never the canonical script.js / style.css source files.
     // Deleting the sources would break the admin UI on Deactivate → Reactivate without a fresh upload.
@@ -116,12 +120,14 @@ function cs_deactivate(): void {
         foreach (glob($assets . '*') as $f) { if (is_file($f)) { wp_delete_file($f); } }
         rmdir($assets); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- WP_Filesystem unavailable in activation/version hooks; empty dir after file deletion
     }
+
+    CSBR_Plugin_Auto_Recovery::deactivate();
 }
 
 // Version change detector — runs opcache flush on upgrade
 add_action('admin_init', function () {
-    $cached = get_option('cs_loaded_version', '');
-    if ($cached !== CS_BACKUP_VERSION) {
+    $cached = get_option('csbr_loaded_version', '');
+    if ($cached !== CSBR_VERSION) {
         if (function_exists('opcache_reset')) { opcache_reset(); }
         $dir = plugin_dir_path(__FILE__);
         // Clean up versioned JS/CSS files created by older plugin versions
@@ -133,27 +139,48 @@ add_action('admin_init', function () {
             foreach (glob($assets . '*') as $f) { if (is_file($f)) { wp_delete_file($f); } }
             rmdir($assets); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- WP_Filesystem unavailable in activation/version hooks; empty dir after file deletion
         }
-        update_option('cs_loaded_version', CS_BACKUP_VERSION);
+        // Migrate legacy cs_ options to csbr_ prefix (one-time, idempotent).
+        $legacy_options = [
+            'cs_loaded_version','cs_schedule_enabled','cs_run_days','cs_run_days_saved',
+            'cs_run_hour','cs_run_minute','cs_schedule_components','cs_auto_repair',
+            'cs_retention','cs_backup_prefix','cs_backup_seq',
+            'cs_s3_bucket','cs_s3_prefix','cs_s3_log',
+            'cs_gdrive_remote','cs_gdrive_path','cs_gdrive_log',
+            'cs_ami_prefix','cs_ami_reboot','cs_ami_region_override','cs_ami_max','cs_ami_log',
+            'cs_ami_schedule_days','cs_ami_run_hour','cs_ami_run_minute','cs_ami_sync_enabled',
+            'cs_gdrive_sync_enabled','cs_dropbox_sync_enabled','cs_onedrive_sync_enabled',
+            'cs_cloud_schedule_enabled','cs_notify_enabled','cs_notify_email','cs_notify_on',
+            'cs_dropbox_remote','cs_dropbox_path','cs_dropbox_log',
+            'cs_onedrive_remote','cs_onedrive_path','cs_onedrive_log',
+        ];
+        foreach ($legacy_options as $old_key) {
+            $new_key = 'csbr_' . substr($old_key, 3); // strip 'cs_', add 'csbr_'
+            if (get_option($old_key) !== false && get_option($new_key) === false) {
+                update_option($new_key, get_option($old_key), false);
+                delete_option($old_key);
+            }
+        }
+        update_option('csbr_loaded_version', CSBR_VERSION);
     }
 });
 
 /**
  * Create the backup directory and its protection files if they do not exist.
  *
- * Creates CS_BACKUP_DIR, drops an .htaccess deny-all, and adds a silent index.php.
+ * Creates CSBR_BACKUP_DIR, drops an .htaccess deny-all, and adds a silent index.php.
  *
  * @since 1.0.0
  * @return void
  */
-function cs_ensure_backup_dir(): void {
-    if (!file_exists(CS_BACKUP_DIR)) {
-        wp_mkdir_p(CS_BACKUP_DIR);
+function csbr_ensure_backup_dir(): void {
+    if (!file_exists(CSBR_BACKUP_DIR)) {
+        wp_mkdir_p(CSBR_BACKUP_DIR);
     }
-    $htaccess = CS_BACKUP_DIR . '.htaccess';
+    $htaccess = CSBR_BACKUP_DIR . '.htaccess';
     if (!file_exists($htaccess)) {
         file_put_contents($htaccess, "Deny from all\n"); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- WP Filesystem API unavailable before init; writing to plugin-owned backup dir
     }
-    $index = CS_BACKUP_DIR . 'index.php';
+    $index = CSBR_BACKUP_DIR . 'index.php';
     if (!file_exists($index)) {
         file_put_contents($index, "<?php // Silence\n");
     }
@@ -181,23 +208,23 @@ add_filter('cron_schedules', function (array $schedules): array {
 /**
  * Poll AWS for the state of every AMI log entry that is still 'pending'.
  * Scheduled as a single event 10 minutes after an AMI is created.
- * If any entries remain pending and are younger than CS_BACKUP_AMI_POLL_MAX_AGE,
- * reschedules itself for another CS_BACKUP_AMI_POLL_INTERVAL seconds.
+ * If any entries remain pending and are younger than CSBR_AMI_POLL_MAX_AGE,
+ * reschedules itself for another CSBR_AMI_POLL_INTERVAL seconds.
  * Gives up automatically after 2 hours to avoid polling indefinitely.
  *
  * @since 2.74.0
  * @return void
  */
-add_action('cs_ami_poll', 'cs_ami_poll_handler');
-function cs_ami_poll_handler(): void {
-    $aws = cs_find_aws();
+add_action('csbr_ami_poll', 'csbr_ami_poll_handler');
+function csbr_ami_poll_handler(): void {
+    $aws = csbr_find_aws();
     if (!$aws) {
-        cs_log('[CloudScale Backup] AMI poll: AWS CLI not found, skipping.');
+        csbr_log('[CloudScale Backup & Restore] AMI poll: AWS CLI not found, skipping.');
         return;
     }
 
-    $log     = (array) get_option('cs_ami_log', []);
-    $region  = cs_get_instance_region();
+    $log     = (array) get_option('csbr_ami_log', []);
+    $region  = csbr_get_instance_region();
     $region_flag = $region ? ' --region ' . escapeshellarg($region) : '';
     $changed = false;
     $still_pending = false;
@@ -211,12 +238,12 @@ function cs_ami_poll_handler(): void {
             continue;
         }
 
-        // Stop polling entries older than CS_BACKUP_AMI_POLL_MAX_AGE
+        // Stop polling entries older than CSBR_AMI_POLL_MAX_AGE
         $age = time() - (int) ($entry['time'] ?? 0);
-        if ($age > CS_BACKUP_AMI_POLL_MAX_AGE) {
+        if ($age > CSBR_AMI_POLL_MAX_AGE) {
             // Don't overwrite with timed-out — let Refresh All query AWS directly
             // Just stop scheduling further polls for this entry
-            cs_log('[CloudScale Backup] AMI poll: gave up scheduling polls for ' . $entry['ami_id'] . ' after ' . round($age / 60) . ' min — use Refresh All to check current state');
+            csbr_log('[CloudScale Backup & Restore] AMI poll: gave up scheduling polls for ' . $entry['ami_id'] . ' after ' . round($age / 60) . ' min — use Refresh All to check current state');
             continue;
         }
 
@@ -233,7 +260,7 @@ function cs_ami_poll_handler(): void {
             if ($entry['state'] !== $state) {
                 $entry['state'] = $state;
                 $changed = true;
-                cs_log('[CloudScale Backup] AMI poll: ' . $entry['ami_id'] . ' → ' . $state);
+                csbr_log('[CloudScale Backup & Restore] AMI poll: ' . $entry['ami_id'] . ' → ' . $state);
             }
             if ($state === 'pending') {
                 $still_pending = true;
@@ -242,19 +269,19 @@ function cs_ami_poll_handler(): void {
             // AWS returned nothing or an error — likely a credentials issue on this server user
             // Keep state as 'pending' so user knows it hasn't resolved, log the raw output
             $still_pending = true;
-            cs_log('[CloudScale Backup] AMI poll: describe-images returned "' . $raw . '" for ' . $entry['ami_id'] . ' — possible credentials issue for www-data user. Use Refresh All from the admin UI instead.');
+            csbr_log('[CloudScale Backup & Restore] AMI poll: describe-images returned "' . $raw . '" for ' . $entry['ami_id'] . ' — possible credentials issue for www-data user. Use Refresh All from the admin UI instead.');
         }
     }
     unset($entry);
 
     if ($changed) {
-        update_option('cs_ami_log', $log, false);
+        update_option('csbr_ami_log', $log, false);
     }
 
     // Reschedule if any entries are still pending and not yet timed out
-    if ($still_pending && !wp_next_scheduled('cs_ami_poll')) {
-        wp_schedule_single_event(time() + CS_BACKUP_AMI_POLL_INTERVAL, 'cs_ami_poll');
-        cs_log('[CloudScale Backup] AMI poll: rescheduled in ' . (CS_BACKUP_AMI_POLL_INTERVAL / 60) . ' min (pending AMIs remain)');
+    if ($still_pending && !wp_next_scheduled('csbr_ami_poll')) {
+        wp_schedule_single_event(time() + CSBR_AMI_POLL_INTERVAL, 'csbr_ami_poll');
+        csbr_log('[CloudScale Backup & Restore] AMI poll: rescheduled in ' . (CSBR_AMI_POLL_INTERVAL / 60) . ' min (pending AMIs remain)');
     }
 }
 
@@ -267,11 +294,11 @@ function cs_ami_poll_handler(): void {
  * @since 1.0.0
  * @return int[] Day-of-week numbers, e.g. [1, 3, 5] for Mon/Wed/Fri.
  */
-function cs_get_run_days(): array {
+function csbr_get_run_days(): array {
     global $wpdb;
     // Read directly from DB — bypasses object cache entirely
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- intentional direct read to bypass object cache and get authoritative cron-safe value
-    $raw = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'cs_run_days' ) );
+    $raw = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'csbr_run_days' ) );
     if ($raw === null) {
         return [1, 3, 5]; // option row doesn't exist yet — install default
     }
@@ -291,19 +318,19 @@ function cs_get_run_days(): array {
  * @since 1.0.0
  * @return void
  */
-function cs_reschedule(): void {
-    wp_clear_scheduled_hook('cs_scheduled_backup');
-    wp_clear_scheduled_hook('cs_scheduled_ami_backup');
+function csbr_reschedule(): void {
+    wp_clear_scheduled_hook('csbr_scheduled_backup');
+    wp_clear_scheduled_hook('csbr_scheduled_ami_backup');
 
     $timezone = wp_timezone();
     $now      = new DateTime('now', $timezone);
 
     // Local file backup — only if local schedule is enabled
-    if (get_option('cs_schedule_enabled', false)) {
-        $run_days = cs_get_run_days();
+    if (get_option('csbr_schedule_enabled', false)) {
+        $run_days = csbr_get_run_days();
         if (!empty($run_days)) {
-            $hour   = intval(get_option('cs_run_hour',   3));
-            $minute = intval(get_option('cs_run_minute', 0));
+            $hour   = intval(get_option('csbr_run_hour',   3));
+            $minute = intval(get_option('csbr_run_minute', 0));
             $candidate = clone $now;
             $candidate->setTime($hour, $minute, 0);
             for ($i = 0; $i <= 7; $i++) {
@@ -312,17 +339,17 @@ function cs_reschedule(): void {
                 $candidate->modify('+1 day');
                 $candidate->setTime($hour, $minute, 0);
             }
-            wp_schedule_event($candidate->getTimestamp(), 'daily', 'cs_scheduled_backup');
+            wp_schedule_event($candidate->getTimestamp(), 'daily', 'csbr_scheduled_backup');
         }
     }
 
     // Cloud backup (AMI + S3 + GDrive) — runs at local backup time + delay
-    if (get_option('cs_cloud_schedule_enabled', false)) {
-        $cloud_days = array_map('intval', (array) get_option('cs_ami_schedule_days', []));
+    if (get_option('csbr_cloud_schedule_enabled', false)) {
+        $cloud_days = array_map('intval', (array) get_option('csbr_ami_schedule_days', []));
         if (!empty($cloud_days)) {
-            $delay_mins   = max(15, intval(get_option('cs_cloud_backup_delay', 30)));
-            $base_hour    = intval(get_option('cs_run_hour',   3));
-            $base_minute  = intval(get_option('cs_run_minute', 0));
+            $delay_mins   = max(15, intval(get_option('csbr_cloud_backup_delay', 30)));
+            $base_hour    = intval(get_option('csbr_run_hour',   3));
+            $base_minute  = intval(get_option('csbr_run_minute', 0));
             $cloud_total  = ($base_hour * 60 + $base_minute + $delay_mins) % 1440;
             $cloud_hour   = intval($cloud_total / 60);
             $cloud_minute = $cloud_total % 60;
@@ -334,23 +361,23 @@ function cs_reschedule(): void {
                 $candidate->modify('+1 day');
                 $candidate->setTime($cloud_hour, $cloud_minute, 0);
             }
-            wp_schedule_event($candidate->getTimestamp(), 'daily', 'cs_scheduled_ami_backup');
+            wp_schedule_event($candidate->getTimestamp(), 'daily', 'csbr_scheduled_ami_backup');
         }
     }
 }
 
-add_action('cs_scheduled_backup', function () {
+add_action('csbr_scheduled_backup', function () {
     // Day-of-week guard — WP cron fires daily so skip days not in the list
-    $run_days = cs_get_run_days();
+    $run_days = csbr_get_run_days();
     $today    = intval((new DateTime('now', wp_timezone()))->format('N'));
     if (!in_array($today, $run_days, true)) return;
 
     set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
     ignore_user_abort(true);
-    cs_ensure_backup_dir();
+    csbr_ensure_backup_dir();
 
-    $c = (array) get_option('cs_schedule_components', ['db', 'media', 'plugins', 'themes']);
-    cs_create_backup(
+    $c = (array) get_option('csbr_schedule_components', ['db', 'media', 'plugins', 'themes']);
+    csbr_create_backup(
         in_array('db',        $c, true),
         in_array('media',     $c, true),
         in_array('plugins',   $c, true),
@@ -361,51 +388,54 @@ add_action('cs_scheduled_backup', function () {
         in_array('htaccess',    $c, true),
         in_array('wpconfig',    $c, true)
     );
-    cs_enforce_retention();
+    csbr_enforce_retention();
+    if ( get_option( 'csbr_auto_repair', false ) ) {
+        csbr_run_table_repair();
+    }
 });
 
-add_action('cs_scheduled_ami_backup', function () {
-    if (!get_option('cs_cloud_schedule_enabled', false)) return;
+add_action('csbr_scheduled_ami_backup', function () {
+    if (!get_option('csbr_cloud_schedule_enabled', false)) return;
 
     // Day-of-week guard
-    $cloud_days = array_map('intval', (array) get_option('cs_ami_schedule_days', []));
+    $cloud_days = array_map('intval', (array) get_option('csbr_ami_schedule_days', []));
     $today      = intval((new DateTime('now', wp_timezone()))->format('N'));
     if (empty($cloud_days) || !in_array($today, $cloud_days, true)) return;
 
     // 1. AMI snapshot (if enabled and prefix configured)
-    if (get_option('cs_ami_sync_enabled', true) && get_option('cs_ami_prefix', '')) {
-        $result = cs_do_create_ami();
+    if (get_option('csbr_ami_sync_enabled', true) && get_option('csbr_ami_prefix', '')) {
+        $result = csbr_do_create_ami();
         if ($result['ok']) {
-            cs_log('[CloudScale Backup] Scheduled AMI created: ' . $result['ami_id'] . ' (' . $result['name'] . ')');
+            csbr_log('[CloudScale Backup & Restore] Scheduled AMI created: ' . $result['ami_id'] . ' (' . $result['name'] . ')');
         } else {
-            cs_log('[CloudScale Backup] Scheduled AMI failed: ' . ($result['error'] ?? 'unknown error'));
+            csbr_log('[CloudScale Backup & Restore] Scheduled AMI failed: ' . ($result['error'] ?? 'unknown error'));
         }
     }
 
     // 2. S3 sync of latest local backup zip
-    if (get_option('cs_s3_sync_enabled', true)) {
-        $latest = cs_get_latest_backup_path();
+    if (get_option('csbr_s3_sync_enabled', true)) {
+        $latest = csbr_get_latest_backup_path();
         if ($latest) {
-            cs_sync_to_s3($latest);
-            cs_log('[CloudScale Backup] Scheduled S3 sync: ' . basename($latest));
+            csbr_sync_to_s3($latest);
+            csbr_log('[CloudScale Backup & Restore] Scheduled S3 sync: ' . basename($latest));
         }
     }
 
     // 3. Google Drive sync of latest local backup zip
-    if (get_option('cs_gdrive_sync_enabled', true)) {
-        $latest = $latest ?? cs_get_latest_backup_path();
+    if (get_option('csbr_gdrive_sync_enabled', true)) {
+        $latest = $latest ?? csbr_get_latest_backup_path();
         if ($latest) {
-            cs_sync_to_gdrive($latest);
-            cs_log('[CloudScale Backup] Scheduled GDrive sync: ' . basename($latest));
+            csbr_sync_to_gdrive($latest);
+            csbr_log('[CloudScale Backup & Restore] Scheduled GDrive sync: ' . basename($latest));
         }
     }
 
     // 4. Dropbox sync of latest local backup zip
-    if (get_option('cs_dropbox_sync_enabled', false)) {
-        $latest = $latest ?? cs_get_latest_backup_path();
+    if (get_option('csbr_dropbox_sync_enabled', false)) {
+        $latest = $latest ?? csbr_get_latest_backup_path();
         if ($latest) {
-            cs_sync_to_dropbox($latest);
-            cs_log('[CloudScale Backup] Scheduled Dropbox sync: ' . basename($latest));
+            csbr_sync_to_dropbox($latest);
+            csbr_log('[CloudScale Backup & Restore] Scheduled Dropbox sync: ' . basename($latest));
         }
     }
 });
@@ -420,16 +450,16 @@ add_action('admin_menu', function () {
         __( 'CloudScale Backup & Restore', 'cloudscale-backup-restore' ),
         'manage_options',
         'cloudscale-backup',
-        'cs_admin_page'
+        'csbr_admin_page'
     );
 });
 
 add_action('admin_enqueue_scripts', function (): void {
     // Menu icon CSS must apply on all admin pages — it targets the sidebar nav item.
-    wp_register_style( 'cs-admin-menu-icon', false, [], CS_BACKUP_VERSION );
-    wp_enqueue_style( 'cs-admin-menu-icon' ); // phpcs:ignore WordPress.WP.EnqueuedResourceParameters.MissingVersion, WordPress.WP.GlobalEnqueuedAssets.EnqueuedInSidebar -- inline-only style required on all admin pages for sidebar nav icon
+    wp_register_style( 'csbr-admin-menu-icon', false, [], CSBR_VERSION );
+    wp_enqueue_style( 'csbr-admin-menu-icon' ); // phpcs:ignore WordPress.WP.EnqueuedResourceParameters.MissingVersion, WordPress.WP.GlobalEnqueuedAssets.EnqueuedInSidebar -- inline-only style required on all admin pages for sidebar nav icon
     wp_add_inline_style(
-        'cs-admin-menu-icon',
+        'csbr-admin-menu-icon',
         '#adminmenu a[href="tools.php?page=cloudscale-backup"]::before {
             font-family: dashicons;
             content: "\f333";
@@ -444,14 +474,15 @@ add_action('admin_enqueue_scripts', function (): void {
 
 add_action('admin_enqueue_scripts', function (string $hook): void {
     if ($hook !== 'tools_page_cloudscale-backup') return;
-    wp_enqueue_style('cs-style',   plugin_dir_url(__FILE__) . 'style.css',  [], CS_BACKUP_VERSION);
-    wp_enqueue_script('cs-script', plugin_dir_url(__FILE__) . 'script.js', ['jquery'], CS_BACKUP_VERSION, true);
-    wp_localize_script('cs-script', 'CS', [
+    wp_enqueue_style('csbr-style',   plugin_dir_url(__FILE__) . 'style.css',  [], CSBR_VERSION);
+    wp_enqueue_script('csbr-script', plugin_dir_url(__FILE__) . 'script.js', ['jquery'], CSBR_VERSION, true);
+    wp_enqueue_script('csbr-par-script', plugin_dir_url(__FILE__) . 'plugin-auto-recovery.js', ['jquery', 'csbr-script'], CSBR_VERSION, true);
+    wp_localize_script('csbr-script', 'CSBR', [
         'ajax_url'       => admin_url('admin-ajax.php'),
         'admin_post_url' => admin_url('admin-post.php'),
-        'nonce'          => wp_create_nonce('cs_nonce'),
+        'nonce'          => wp_create_nonce('csbr_nonce'),
         'site_url'       => get_site_url(),
-        'ami_max'        => max(1, intval(get_option('cs_ami_max', 10))),
+        'ami_max'        => max(1, intval(get_option('csbr_ami_max', 10))),
     ]);
 });
 
@@ -465,22 +496,22 @@ add_action('admin_enqueue_scripts', function (string $hook): void {
  * @since 1.0.0
  * @return void
  */
-function cs_admin_page(): void {
+function csbr_admin_page(): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_die( esc_html__( 'You do not have permission to access this page.', 'cloudscale-backup-restore' ) );
     }
-    cs_ensure_backup_dir();
+    csbr_ensure_backup_dir();
 
-    $backups      = cs_list_backups();
+    $backups      = csbr_list_backups();
     $upload_dir   = wp_upload_dir();
-    $upload_size   = cs_dir_size($upload_dir['basedir']);
-    $plugins_size  = cs_dir_size(WP_PLUGIN_DIR);
-    $themes_size   = cs_dir_size(get_theme_root());
+    $upload_size   = csbr_dir_size($upload_dir['basedir']);
+    $plugins_size  = csbr_dir_size(WP_PLUGIN_DIR);
+    $themes_size   = csbr_dir_size(get_theme_root());
     // "Other" backup targets
     $mu_path       = defined( 'WPMU_PLUGIN_DIR' ) ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins';
-    $mu_size       = is_dir($mu_path) ? cs_dir_size($mu_path) : 0;
+    $mu_size       = is_dir($mu_path) ? csbr_dir_size($mu_path) : 0;
     $lang_path     = WP_CONTENT_DIR . '/languages';
-    $lang_size     = is_dir($lang_path) ? cs_dir_size($lang_path) : 0;
+    $lang_size     = is_dir($lang_path) ? csbr_dir_size($lang_path) : 0;
     $htaccess_path = ABSPATH . '.htaccess';
     $htaccess_size = file_exists($htaccess_path) ? (int) filesize($htaccess_path) : 0;
     $wpconfig_path = ABSPATH . 'wp-config.php';
@@ -496,14 +527,14 @@ function cs_admin_page(): void {
          WHERE table_schema = %s",
         DB_NAME
     ));
-    $next_run     = wp_next_scheduled('cs_scheduled_backup');
-    $ami_next_run = wp_next_scheduled('cs_scheduled_ami_backup');
-    $maint_active = file_exists(CS_BACKUP_MAINT_FILE);
+    $next_run     = wp_next_scheduled('csbr_scheduled_backup');
+    $ami_next_run = wp_next_scheduled('csbr_scheduled_ami_backup');
+    $maint_active = file_exists(CSBR_MAINT_FILE);
 
     // Disk space
-    $free_bytes  = disk_free_space(CS_BACKUP_DIR);
+    $free_bytes  = disk_free_space(CSBR_BACKUP_DIR);
     if ($free_bytes === false) $free_bytes = disk_free_space(ABSPATH);
-    $total_bytes = disk_total_space(CS_BACKUP_DIR);
+    $total_bytes = disk_total_space(CSBR_BACKUP_DIR);
     if ($total_bytes === false) $total_bytes = disk_total_space(ABSPATH);
     $latest_size = !empty($backups) ? $backups[0]['size'] : 0;
 
@@ -521,75 +552,91 @@ function cs_admin_page(): void {
     $show_disk_alert = ($disk_status !== 'green');
 
     // Table overhead — sum of InnoDB data_free across all tables in this DB
-    $cs_overhead_bytes  = (int) $wpdb->get_var( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+    $csbr_overhead_bytes  = (int) $wpdb->get_var( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
         $wpdb->prepare(
             'SELECT COALESCE(SUM(data_free), 0) FROM information_schema.TABLES WHERE table_schema = %s AND engine = %s',
             DB_NAME,
             'InnoDB'
         )
     );
-    $cs_overhead_mb     = $cs_overhead_bytes / (1024 * 1024);
-    $cs_overhead_status = $cs_overhead_mb <= 24 ? 'green' : ( $cs_overhead_mb < 52 ? 'amber' : 'red' );
+    $csbr_overhead_mb     = $csbr_overhead_bytes / (1024 * 1024);
+    $csbr_overhead_status = $csbr_overhead_mb <= 24 ? 'green' : ( $csbr_overhead_mb < 52 ? 'amber' : 'red' );
 
     // Handle form POST for schedule save (plain form, no redirect)
-    $cs_schedule_saved_msg = '';
-    if (isset($_POST['cs_action']) && sanitize_key( wp_unslash( $_POST['cs_action'] ) ) === 'save_schedule') { // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified inside block via check_admin_referer()
-        check_admin_referer('cs_nonce', 'nonce');
+    $csbr_schedule_saved_msg = '';
+    if (isset($_POST['csbr_action']) && sanitize_key( wp_unslash( $_POST['csbr_action'] ) ) === 'save_schedule') { // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified inside block via check_admin_referer()
+        check_admin_referer('csbr_nonce', 'nonce');
         $raw_days   = isset($_POST['run_days']) && is_array($_POST['run_days']) ? wp_unslash( $_POST['run_days'] ) : []; // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_admin_referer(); sanitised via array_map('intval') on next line
         $clean_days = array_values(array_filter(array_map('intval', $raw_days), fn($d) => $d >= 1 && $d <= 7));
-        update_option('cs_run_days',         $clean_days);
-        update_option('cs_run_days_saved',   '1');
-        update_option('cs_schedule_enabled', ! empty( wp_unslash( $_POST['schedule_enabled'] ?? '' ) )); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_admin_referer(); checkbox presence only, no value used
-        update_option('cs_run_hour',   max(0, min(23, intval( wp_unslash( $_POST['run_hour']   ?? 3 ) ))));
-        update_option('cs_run_minute', max(0, min(59, intval( wp_unslash( $_POST['run_minute'] ?? 0 ) ))));
+        update_option('csbr_run_days',         $clean_days);
+        update_option('csbr_run_days_saved',   '1');
+        update_option('csbr_schedule_enabled', ! empty( wp_unslash( $_POST['schedule_enabled'] ?? '' ) )); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_admin_referer(); checkbox presence only, no value used
+        update_option('csbr_run_hour',   max(0, min(23, intval( wp_unslash( $_POST['run_hour']   ?? 3 ) ))));
+        update_option('csbr_run_minute', max(0, min(59, intval( wp_unslash( $_POST['run_minute'] ?? 0 ) ))));
         $valid_components = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'htaccess', 'wpconfig'];
         $raw_components   = isset($_POST['schedule_components']) && is_array($_POST['schedule_components']) ? wp_unslash( $_POST['schedule_components'] ) : []; // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_admin_referer(); values validated via array_intersect() against a whitelist
         $clean_components = array_values(array_intersect($raw_components, $valid_components));
         // Default to core four if nothing selected
         if (empty($clean_components)) { $clean_components = ['db', 'media', 'plugins', 'themes']; }
-        update_option('cs_schedule_components', $clean_components);
-        wp_cache_delete('cs_run_days',            'options');
-        wp_cache_delete('cs_run_days_saved',      'options');
-        wp_cache_delete('cs_schedule_enabled',    'options');
-        wp_cache_delete('cs_schedule_components', 'options');
-        wp_cache_delete('cs_run_hour',            'options');
-        wp_cache_delete('cs_run_minute',          'options');
+        update_option('csbr_schedule_components', $clean_components);
+        update_option('csbr_auto_repair', ! empty( wp_unslash( $_POST['auto_repair'] ?? '' ) )); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_admin_referer(); checkbox presence only
+        update_option('csbr_notify_enabled', ! empty( wp_unslash( $_POST['notify_enabled'] ?? '' ) )); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- checkbox presence only
+        update_option('csbr_notify_email',   sanitize_email( wp_unslash( $_POST['notify_email'] ?? '' ) ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- unslashed above
+        $raw_notify_on   = sanitize_key( wp_unslash( $_POST['notify_on'] ?? 'both' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+        update_option('csbr_notify_on', in_array($raw_notify_on, ['success','failure','both'], true) ? $raw_notify_on : 'both');
+        update_option('csbr_encrypt_password', sanitize_text_field( wp_unslash( $_POST['encrypt_password'] ?? '' ) ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+        wp_cache_delete('csbr_run_days',            'options');
+        wp_cache_delete('csbr_run_days_saved',      'options');
+        wp_cache_delete('csbr_schedule_enabled',    'options');
+        wp_cache_delete('csbr_schedule_components', 'options');
+        wp_cache_delete('csbr_run_hour',            'options');
+        wp_cache_delete('csbr_run_minute',          'options');
+        wp_cache_delete('csbr_auto_repair',         'options');
+        wp_cache_delete('csbr_notify_enabled',      'options');
+        wp_cache_delete('csbr_notify_email',        'options');
+        wp_cache_delete('csbr_notify_on',           'options');
+        wp_cache_delete('csbr_encrypt_password',    'options');
         wp_cache_delete('alloptions',             'options');
-        cs_reschedule();
+        csbr_reschedule();
         $day_names = ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
         $saved_labels = implode(', ', array_map(fn($d) => $day_names[$d] ?? $d, $clean_days));
-        $cs_schedule_saved_msg = $saved_labels ?: 'No days selected';
+        $csbr_schedule_saved_msg = $saved_labels ?: 'No days selected';
     }
 
     // Settings — read after any POST save so page shows updated values
-    $enabled      = isset($_POST['cs_action']) ? !empty($_POST['schedule_enabled']) : (bool) get_option('cs_schedule_enabled', false); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- read-only display; nonce verified in save block above; boolean !empty() check only
-    $run_days_sel    = cs_get_run_days();
-    $hour            = intval(get_option('cs_run_hour',      3));
-    $minute          = intval(get_option('cs_run_minute',    0));
-    $ami_run_hour    = intval(get_option('cs_ami_run_hour',  3));
-    $ami_run_minute  = intval(get_option('cs_ami_run_minute', 30));
-    $sched_components  = (array) get_option('cs_schedule_components', ['db', 'media', 'plugins', 'themes']);
-    $manual_defaults   = get_option('cs_manual_defaults', null);
+    $enabled      = isset($_POST['csbr_action']) ? !empty($_POST['schedule_enabled']) : (bool) get_option('csbr_schedule_enabled', false); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- read-only display; nonce verified in save block above; boolean !empty() check only
+    $auto_repair  = isset($_POST['csbr_action']) ? !empty($_POST['auto_repair']) : (bool) get_option('csbr_auto_repair', false); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- read-only display
+    $notify_enabled = isset($_POST['csbr_action']) ? !empty($_POST['notify_enabled']) : (bool) get_option('csbr_notify_enabled', false); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
+    $notify_email   = isset($_POST['csbr_action']) ? sanitize_email( wp_unslash( $_POST['notify_email'] ?? '' ) ) : get_option('csbr_notify_email', ''); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+    $notify_on      = isset($_POST['csbr_action']) ? sanitize_key( wp_unslash( $_POST['notify_on'] ?? 'both' ) ) : get_option('csbr_notify_on', 'both'); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+    $enc_password   = isset($_POST['csbr_action']) ? sanitize_text_field( wp_unslash( $_POST['encrypt_password'] ?? '' ) ) : (string) get_option('csbr_encrypt_password', ''); // phpcs:ignore WordPress.Security.NonceVerification.Missing
+    $run_days_sel    = csbr_get_run_days();
+    $hour            = intval(get_option('csbr_run_hour',      3));
+    $minute          = intval(get_option('csbr_run_minute',    0));
+    $ami_run_hour    = intval(get_option('csbr_ami_run_hour',  3));
+    $ami_run_minute  = intval(get_option('csbr_ami_run_minute', 30));
+    $sched_components  = (array) get_option('csbr_schedule_components', ['db', 'media', 'plugins', 'themes']);
+    $manual_defaults   = get_option('csbr_manual_defaults', null);
     $md                = is_array($manual_defaults) ? $manual_defaults : null; // null = no saved defaults yet
-    $retention      = intval(get_option('cs_retention', 8));
-    $backup_prefix  = sanitize_key(get_option('cs_backup_prefix', 'bkup')) ?: 'bkup';
-    $s3_bucket     = get_option('cs_s3_bucket', '');
-    $s3_prefix     = get_option('cs_s3_prefix', 'backups/');
+    $retention      = intval(get_option('csbr_retention', 8));
+    $backup_prefix  = sanitize_key(get_option('csbr_backup_prefix', 'bkup')) ?: 'bkup';
+    $s3_bucket     = get_option('csbr_s3_bucket', '');
+    $s3_prefix     = get_option('csbr_s3_prefix', 'backups/');
     $s3_saved_msg  = '';
-    $gdrive_remote       = get_option('cs_gdrive_remote', '');
-    $gdrive_path         = get_option('cs_gdrive_path', 'cloudscale-backups/');
-    $s3_sync_enabled        = (bool) get_option('cs_s3_sync_enabled', true);
-    $gdrive_sync_enabled    = (bool) get_option('cs_gdrive_sync_enabled', true);
-    $ami_sync_enabled       = (bool) get_option('cs_ami_sync_enabled', true);
-    $cloud_schedule_enabled = (bool) get_option('cs_cloud_schedule_enabled', false);
-    $cloud_backup_delay     = max(15, intval(get_option('cs_cloud_backup_delay', 30)));
-    $ami_prefix          = get_option('cs_ami_prefix', '');
-    $ami_reboot          = (bool) get_option('cs_ami_reboot', false);
-    $ami_region_override = get_option('cs_ami_region_override', '');
-    $ami_max             = intval(get_option('cs_ami_max', 10));
-    $ami_schedule_days   = (array) get_option('cs_ami_schedule_days', []);
-    $dump_method  = cs_mysqldump_available() ? 'mysqldump (native — fast)' : 'PHP streamed (compatible)';
-    $restore_method = cs_mysql_cli_available() ? 'mysql CLI (native — fast)' : 'PHP streamed (compatible)';
+    $gdrive_remote       = get_option('csbr_gdrive_remote', '');
+    $gdrive_path         = get_option('csbr_gdrive_path', 'cloudscale-backups/');
+    $s3_sync_enabled        = (bool) get_option('csbr_s3_sync_enabled', true);
+    $gdrive_sync_enabled    = (bool) get_option('csbr_gdrive_sync_enabled', true);
+    $ami_sync_enabled       = (bool) get_option('csbr_ami_sync_enabled', true);
+    $cloud_schedule_enabled = (bool) get_option('csbr_cloud_schedule_enabled', false);
+    $cloud_backup_delay     = max(15, intval(get_option('csbr_cloud_backup_delay', 30)));
+    $ami_prefix          = get_option('csbr_ami_prefix', '');
+    $ami_reboot          = (bool) get_option('csbr_ami_reboot', false);
+    $ami_region_override = get_option('csbr_ami_region_override', '');
+    $ami_max             = intval(get_option('csbr_ami_max', 10));
+    $ami_schedule_days   = (array) get_option('csbr_ami_schedule_days', []);
+    $dump_method  = csbr_mysqldump_available() ? 'mysqldump (native — fast)' : 'PHP streamed (compatible)';
+    $restore_method = csbr_mysql_cli_available() ? 'mysql CLI (native — fast)' : 'PHP streamed (compatible)';
 
     // MySQL version
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare -- static query; no user input; caching not applicable for live server version
@@ -603,24 +650,24 @@ function cs_admin_page(): void {
 
     $days_map = [1 => 'Mon', 2 => 'Tue', 3 => 'Wed', 4 => 'Thu', 5 => 'Fri', 6 => 'Sat', 7 => 'Sun'];
     // Pre-compute cloud vars (needed by Run Backup section which now appears at the top of the page)
-    $aws_path = cs_find_aws();
+    $aws_path = csbr_find_aws();
     $aws_ver  = $aws_path ? trim((string) shell_exec(escapeshellarg($aws_path) . ' --version 2>&1')) : ''; // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $s3_log    = (array) get_option('cs_s3_log', []);
+    $s3_log    = (array) get_option('csbr_s3_log', []);
     $s3_synced = array_filter($s3_log, fn($e) => !empty($e['ok']));
     $s3_last   = empty($s3_synced) ? null : max(array_column($s3_synced, 'time'));
-    $s3_last_failed_entry = cs_latest_failed_log_entry($s3_log, $s3_last);
-    $rclone_path = cs_find_rclone();
+    $s3_last_failed_entry = csbr_latest_failed_log_entry($s3_log, $s3_last);
+    $rclone_path = csbr_find_rclone();
     $rclone_ver  = $rclone_path ? trim((string) shell_exec(escapeshellarg($rclone_path) . ' version --no-check-update 2>&1 | head -1')) : ''; // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $gdrive_log    = (array) get_option('cs_gdrive_log', []);
+    $gdrive_log    = (array) get_option('csbr_gdrive_log', []);
     $gdrive_synced = array_filter($gdrive_log, fn($e) => !empty($e['ok']));
     $gdrive_last   = empty($gdrive_synced) ? null : max(array_column($gdrive_synced, 'time'));
-    $gdrive_last_failed_entry = cs_latest_failed_log_entry($gdrive_log, $gdrive_last);
-    $s3_remote_count     = get_option('cs_s3_remote_count', null);
-    $gdrive_remote_count = get_option('cs_gdrive_remote_count', null);
+    $gdrive_last_failed_entry = csbr_latest_failed_log_entry($gdrive_log, $gdrive_last);
+    $s3_remote_count     = get_option('csbr_s3_remote_count', null);
+    $gdrive_remote_count = get_option('csbr_gdrive_remote_count', null);
     try {
-        $ami_instance_id = cs_get_instance_id();
-        $ami_region      = cs_get_instance_region();
-        $ami_log         = (array) get_option('cs_ami_log', []);
+        $ami_instance_id = csbr_get_instance_id();
+        $ami_region      = csbr_get_instance_region();
+        $ami_log         = (array) get_option('csbr_ami_log', []);
         usort($ami_log, fn($a, $b) => ($b['time'] ?? 0) <=> ($a['time'] ?? 0));
         $ami_log_recent  = $ami_log;
     } catch (\Throwable $e) {
@@ -628,30 +675,42 @@ function cs_admin_page(): void {
         $ami_region      = '';
         $ami_log         = [];
         $ami_log_recent  = [];
-        cs_log('[CloudScale Backup] AMI panel init error: ' . $e->getMessage());
+        csbr_log('[CloudScale Backup & Restore] AMI panel init error: ' . $e->getMessage());
     }
     $ami_golden_count    = count( array_filter( $ami_log_recent, fn( $e ) => ! empty( $e['golden'] ) ) );
     $ami_nongolden_count = count( array_filter( $ami_log_recent, fn( $e ) =>   empty( $e['golden'] ) ) );
-    $s3_history          = (array) get_option( 'cs_s3_history',     [] );
+    $s3_history          = (array) get_option( 'csbr_s3_history',     [] );
     uasort( $s3_history, fn( $a, $b ) => ( $b['time'] ?? 0 ) <=> ( $a['time'] ?? 0 ) );
     $s3_golden_count     = count( array_filter( $s3_history,     fn( $e ) => ! empty( $e['golden'] ) ) );
     $s3_nongolden_count  = count( array_filter( $s3_history,     fn( $e ) =>   empty( $e['golden'] ) ) );
-    $gdrive_history      = (array) get_option( 'cs_gdrive_history', [] );
+    $gdrive_history      = (array) get_option( 'csbr_gdrive_history', [] );
     uasort( $gdrive_history, fn( $a, $b ) => ( $b['time'] ?? 0 ) <=> ( $a['time'] ?? 0 ) );
     $gdrive_golden_count    = count( array_filter( $gdrive_history, fn( $e ) => ! empty( $e['golden'] ) ) );
     $gdrive_nongolden_count = count( array_filter( $gdrive_history, fn( $e ) =>   empty( $e['golden'] ) ) );
-    $dropbox_remote          = get_option( 'cs_dropbox_remote', '' );
-    $dropbox_path            = get_option( 'cs_dropbox_path', 'cloudscale-backups/' );
-    $dropbox_sync_enabled    = (bool) get_option( 'cs_dropbox_sync_enabled', false );
-    $dropbox_log             = (array) get_option( 'cs_dropbox_log', [] );
+    $dropbox_remote          = get_option( 'csbr_dropbox_remote', '' );
+    $dropbox_path            = get_option( 'csbr_dropbox_path', 'cloudscale-backups/' );
+    $dropbox_sync_enabled    = (bool) get_option( 'csbr_dropbox_sync_enabled', false );
+    $dropbox_log             = (array) get_option( 'csbr_dropbox_log', [] );
     $dropbox_synced          = array_filter( $dropbox_log, fn( $e ) => ! empty( $e['ok'] ) );
     $dropbox_last            = empty( $dropbox_synced ) ? null : max( array_column( $dropbox_synced, 'time' ) );
-    $dropbox_last_failed_entry = cs_latest_failed_log_entry( $dropbox_log, $dropbox_last );
-    $dropbox_remote_count    = get_option( 'cs_dropbox_remote_count', null );
-    $dropbox_history         = (array) get_option( 'cs_dropbox_history', [] );
+    $dropbox_last_failed_entry = csbr_latest_failed_log_entry( $dropbox_log, $dropbox_last );
+    $dropbox_remote_count    = get_option( 'csbr_dropbox_remote_count', null );
+    $dropbox_history         = (array) get_option( 'csbr_dropbox_history', [] );
     uasort( $dropbox_history, fn( $a, $b ) => ( $b['time'] ?? 0 ) <=> ( $a['time'] ?? 0 ) );
     $dropbox_golden_count    = count( array_filter( $dropbox_history, fn( $e ) => ! empty( $e['golden'] ) ) );
     $dropbox_nongolden_count = count( array_filter( $dropbox_history, fn( $e ) =>   empty( $e['golden'] ) ) );
+    $onedrive_remote          = get_option( 'csbr_onedrive_remote', '' );
+    $onedrive_path            = get_option( 'csbr_onedrive_path', 'cloudscale-backups/' );
+    $onedrive_sync_enabled    = (bool) get_option( 'csbr_onedrive_sync_enabled', false );
+    $onedrive_log             = (array) get_option( 'csbr_onedrive_log', [] );
+    $onedrive_synced          = array_filter( $onedrive_log, fn( $e ) => ! empty( $e['ok'] ) );
+    $onedrive_last            = empty( $onedrive_synced ) ? null : max( array_column( $onedrive_synced, 'time' ) );
+    $onedrive_last_failed_entry = csbr_latest_failed_log_entry( $onedrive_log, $onedrive_last );
+    $onedrive_remote_count    = get_option( 'csbr_onedrive_remote_count', null );
+    $onedrive_history         = (array) get_option( 'csbr_onedrive_history', [] );
+    uasort( $onedrive_history, fn( $a, $b ) => ( $b['time'] ?? 0 ) <=> ( $a['time'] ?? 0 ) );
+    $onedrive_golden_count    = count( array_filter( $onedrive_history, fn( $e ) => ! empty( $e['golden'] ) ) );
+    $onedrive_nongolden_count = count( array_filter( $onedrive_history, fn( $e ) =>   empty( $e['golden'] ) ) );
 
     // Pre-compute the oldest non-golden entry per provider — shown as "Delete Soon" when at capacity.
     $ami_ok_ng = array_values( array_filter( $ami_log_recent, fn( $e ) => ! empty( $e['ok'] ) && empty( $e['golden'] ) && ( $e['state'] ?? '' ) !== 'deleted in AWS' ) );
@@ -681,6 +740,13 @@ function cs_admin_page(): void {
         $dropbox_first = array_key_first( $dropbox_ng );
         $dropbox_delete_soon_name = $dropbox_ng[ $dropbox_first ]['name'] ?? $dropbox_first;
     }
+    $onedrive_ng = array_filter( $onedrive_history, fn( $e ) => empty( $e['golden'] ) );
+    $onedrive_delete_soon_name = '';
+    if ( count( $onedrive_ng ) >= $ami_max ) {
+        uasort( $onedrive_ng, fn( $a, $b ) => ( $a['time'] ?? 0 ) <=> ( $b['time'] ?? 0 ) );
+        $onedrive_first = array_key_first( $onedrive_ng );
+        $onedrive_delete_soon_name = $onedrive_ng[ $onedrive_first ]['name'] ?? $onedrive_first;
+    }
     ?>
     <div class="wrap cs-wrap">
 
@@ -689,7 +755,7 @@ function cs_admin_page(): void {
             <div class="cs-header-title">
                 <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
                     <h1 style="margin:0;">&#9729; <?php echo esc_html__( 'CloudScale Backup &amp; Restore', 'cloudscale-backup-restore' ); ?></h1>
-                    <span style="display:inline-block;background:#fff;color:#1565c0;font-size:0.95rem;font-weight:800;letter-spacing:0.04em;padding:3px 14px;border-radius:20px;font-family:monospace;line-height:1.6;flex-shrink:0;">v<?php echo esc_html( CS_BACKUP_VERSION ); ?></span>
+                    <span style="display:inline-block;background:#fff;color:#1565c0;font-size:0.95rem;font-weight:800;letter-spacing:0.04em;padding:3px 14px;border-radius:20px;font-family:monospace;line-height:1.6;flex-shrink:0;">v<?php echo esc_html( CSBR_VERSION ); ?></span>
                 </div>
                 <p class="cs-header-sub"><?php esc_html_e( 'Database · media · plugins · themes. No timeouts, no limits.', 'cloudscale-backup-restore' ); ?></p>
                 <p class="cs-header-free">&#9989; <?php esc_html_e( '100% free forever — no licence, no premium tier, no feature restrictions. Everything is included.', 'cloudscale-backup-restore' ); ?></p>
@@ -711,38 +777,22 @@ function cs_admin_page(): void {
             <?php if ($disk_status === 'red'): ?>
                 <span class="cs-alert-icon">🔴</span>
                 <div><strong>Critical: Very low disk space</strong> —
-                <?php echo esc_html(cs_format_size((int)$free_bytes)); ?> free<?php if ($backups_fit !== null): ?>, room for approximately <strong><?php echo (int) $backups_fit; ?> more backup(s)</strong><?php endif; ?>.
+                <?php echo esc_html(csbr_format_size((int)$free_bytes)); ?> free<?php if ($backups_fit !== null): ?>, room for approximately <strong><?php echo (int) $backups_fit; ?> more backup(s)</strong><?php endif; ?>.
                 Free up space or move old backups off-server immediately.</div>
             <?php else: ?>
                 <span class="cs-alert-icon">🟡</span>
                 <div><strong>Warning: Disk space is running low</strong> —
-                <?php echo esc_html(cs_format_size((int)$free_bytes)); ?> free<?php if ($backups_fit !== null): ?>, room for approximately <strong><?php echo (int) $backups_fit; ?> more backup(s)</strong><?php endif; ?>.
+                <?php echo esc_html(csbr_format_size((int)$free_bytes)); ?> free<?php if ($backups_fit !== null): ?>, room for approximately <strong><?php echo (int) $backups_fit; ?> more backup(s)</strong><?php endif; ?>.
                 Consider freeing space or reducing your retention count.</div>
             <?php endif; ?>
         </div>
         <?php endif; ?>
 
-        <!-- ===================== ACTIVITY LOG ===================== -->
-        <div id="cs-log-panel" style="margin-bottom:10px;border:1px solid #37474f;border-radius:6px;background:#1e272e;overflow:hidden;">
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 14px;background:#263238;">
-                <span style="color:#fff!important;font-family:monospace;font-size:0.82rem;font-weight:700;">&#128196; Activity Log</span>
-                <div style="display:flex;gap:8px;align-items:center;">
-                    <span id="cs-log-status" style="font-size:0.72rem;color:#aaa!important;"></span>
-                    <button id="cs-log-copy" type="button" style="background:#37474f!important;border:none!important;color:#fff!important;border-radius:4px;padding:2px 10px;font-size:0.75rem;cursor:pointer;box-shadow:none!important;">&#128203; Copy</button>
-                    <button id="cs-log-refresh" type="button" style="background:#37474f!important;border:none!important;color:#fff!important;border-radius:4px;padding:2px 10px;font-size:0.75rem;cursor:pointer;box-shadow:none!important;">&#8635; Refresh</button>
-                    <button id="cs-log-clear" type="button" style="background:#37474f!important;border:none!important;color:#fff!important;border-radius:4px;padding:2px 10px;font-size:0.75rem;cursor:pointer;box-shadow:none!important;">Clear</button>
-                </div>
-            </div>
-            <div id="cs-log-body" style="max-height:calc(10 * 0.76rem * 1.7 + 14px);overflow-y:auto;padding:6px 14px 8px;">
-                <div id="cs-log-entries" style="font-family:monospace;font-size:0.76rem;line-height:1.7;"></div>
-                <div id="cs-log-empty" style="font-family:monospace;font-size:0.76rem;color:#fff!important;font-style:italic;padding:2px 0;">No log entries yet.</div>
-            </div>
-        </div>
-
         <!-- ===================== TABS ===================== -->
         <div class="cs-tab-bar">
             <button class="cs-tab cs-tab--active" data-tab="local">&#128230; Local Backups</button>
             <button class="cs-tab" data-tab="cloud">&#9729; Cloud Backups</button>
+            <button class="cs-tab" data-tab="autorecovery">&#128737; Plugin Auto Recovery</button>
         </div>
 
         <div id="cs-tab-local" class="cs-tab-panel">
@@ -754,8 +804,8 @@ function cs_admin_page(): void {
             <!-- SCHEDULE CARD -->
             <div class="cs-card cs-card--blue">
                 <form method="post" action="" id="cs-schedule-form">
-                <?php wp_nonce_field('cs_nonce', 'nonce'); ?>
-                <input type="hidden" name="cs_action" value="save_schedule">
+                <?php wp_nonce_field('csbr_nonce', 'nonce'); ?>
+                <input type="hidden" name="csbr_action" value="save_schedule">
                 <div class="cs-card-stripe cs-stripe--blue" style="background:linear-gradient(135deg,#1565c0 0%,#2196f3 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">⏰ <?php echo esc_html__( 'Backup Schedule', 'cloudscale-backup-restore' ); ?></h2><button type="button" onclick="csScheduleExplain()" style="background:#1a1a1a;border:none;color:#f9a825;border-radius:999px;padding:5px 16px;font-size:0.78rem;font-weight:700;cursor:pointer;letter-spacing:0.01em;">&#128214; <?php esc_html_e( 'Explain…', 'cloudscale-backup-restore' ); ?></button></div>
 
                 <!-- Enable/disable checkbox — inline with label -->
@@ -816,6 +866,14 @@ function cs_admin_page(): void {
                     </div>
 
                     <div class="cs-field-group">
+                        <label class="cs-option-label" style="margin:0;">
+                            <input type="checkbox" name="auto_repair" value="1" <?php checked( $auto_repair ); ?>>
+                            <?php esc_html_e( 'Run Table Repairs automatically after each scheduled backup', 'cloudscale-backup-restore' ); ?>
+                        </label>
+                        <p class="cs-help"><?php esc_html_e( 'Runs OPTIMIZE TABLE on any InnoDB tables with overhead after the scheduled backup completes.', 'cloudscale-backup-restore' ); ?></p>
+                    </div>
+
+                    <div class="cs-field-group">
                         <label class="cs-field-label" for="cs-run-hour"><?php esc_html_e( 'File backup time', 'cloudscale-backup-restore' ); ?></label>
                         <div class="cs-inline">
                             <select id="cs-run-hour" name="run_hour" class="cs-input-sm">
@@ -838,13 +896,78 @@ function cs_admin_page(): void {
 
                 </fieldset>
 
+                <!-- EMAIL NOTIFICATIONS -->
+                <div class="cs-field-group" style="margin-top:16px;padding-top:14px;border-top:1px solid #e0e0e0;">
+                    <label class="cs-enable-label">
+                        <input type="checkbox" id="cs-notify-enabled" name="notify_enabled" value="1" <?php checked($notify_enabled); ?>>
+                        <?php esc_html_e( 'Email notifications', 'cloudscale-backup-restore' ); ?>
+                    </label>
+                    <p class="cs-help"><?php esc_html_e( 'Send an email after each backup or restore completes.', 'cloudscale-backup-restore' ); ?></p>
+                    <div id="cs-notify-controls" style="margin-top:10px;<?php echo $notify_enabled ? '' : 'display:none;'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded string literals, not user input ?>">
+                        <div style="margin-bottom:8px;">
+                            <label class="cs-field-label" for="cs-notify-email" style="display:inline-block;min-width:90px;"><?php esc_html_e( 'Send to', 'cloudscale-backup-restore' ); ?></label>
+                            <input type="email" id="cs-notify-email" name="notify_email"
+                                   value="<?php echo esc_attr($notify_email); ?>"
+                                   placeholder="<?php echo esc_attr(get_option('admin_email')); ?>"
+                                   style="max-width:100%;padding:4px 8px;height:32px;">
+                            <span class="cs-muted-text" style="margin-left:6px;"><?php esc_html_e( '(leave blank to use admin email)', 'cloudscale-backup-restore' ); ?></span>
+                        </div>
+                        <div style="display:flex;gap:20px;flex-wrap:wrap;">
+                            <label class="cs-option-label" style="margin:0;">
+                                <input type="radio" name="notify_on" value="both" <?php checked($notify_on, 'both'); ?>>
+                                <?php esc_html_e( 'Success &amp; failures', 'cloudscale-backup-restore' ); ?>
+                            </label>
+                            <label class="cs-option-label" style="margin:0;">
+                                <input type="radio" name="notify_on" value="failure" <?php checked($notify_on, 'failure'); ?>>
+                                <?php esc_html_e( 'Failures only', 'cloudscale-backup-restore' ); ?>
+                            </label>
+                            <label class="cs-option-label" style="margin:0;">
+                                <input type="radio" name="notify_on" value="success" <?php checked($notify_on, 'success'); ?>>
+                                <?php esc_html_e( 'Success only', 'cloudscale-backup-restore' ); ?>
+                            </label>
+                        </div>
+                        <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
+                            <button type="button" id="cs-notify-test-btn" class="button"><?php esc_html_e( 'Send Test Email', 'cloudscale-backup-restore' ); ?></button>
+                            <span id="cs-notify-test-msg" style="font-size:0.88rem;"></span>
+                        </div>
+                        <p id="cs-notify-port-warn" style="display:none;margin-top:8px;padding:8px 12px;background:#fff8e1;border:1px solid #ffe082;border-radius:4px;font-size:0.85rem;color:#5d4037;"></p>
+                    </div>
+                </div>
+
+                <!-- BACKUP ENCRYPTION -->
+                <div class="cs-field-group" style="margin-top:16px;padding-top:14px;border-top:1px solid #e0e0e0;">
+                    <label class="cs-enable-label">
+                        <input type="checkbox" id="cs-encrypt-enabled" name="encrypt_enabled" value="1" <?php checked( $enc_password !== '' ); ?>>
+                        <?php esc_html_e( 'Encrypt backups (AES-256)', 'cloudscale-backup-restore' ); ?>
+                    </label>
+                    <p class="cs-help"><?php esc_html_e( 'Password-protect every backup zip with AES-256 encryption. Required to restore encrypted backups — do not lose this password.', 'cloudscale-backup-restore' ); ?></p>
+                    <div id="cs-encrypt-controls" style="margin-top:10px;<?php echo $enc_password !== '' ? '' : 'display:none;'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded string literals, not user input ?>">
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                            <label class="cs-field-label" for="cs-encrypt-password" style="min-width:90px;"><?php esc_html_e( 'Password', 'cloudscale-backup-restore' ); ?></label>
+                            <input type="password" id="cs-encrypt-password" name="encrypt_password"
+                                   value="<?php echo esc_attr( $enc_password ); ?>"
+                                   autocomplete="new-password"
+                                   style="max-width:100%;padding:4px 8px;height:32px;">
+                            <button type="button" id="cs-encrypt-toggle" class="button button-small" style="flex-shrink:0;"><?php esc_html_e( 'Show', 'cloudscale-backup-restore' ); ?></button>
+                        </div>
+                        <div style="margin-top:8px;background:#fff8e1;border:1px solid #f9a825;border-radius:4px;padding:8px 12px;font-size:0.82rem;color:#5d4037;">
+                            &#9888; <?php esc_html_e( 'If you change or clear this password, existing encrypted backups cannot be restored. The password is stored in the WordPress database.', 'cloudscale-backup-restore' ); ?>
+                        </div>
+                        <?php if ( ! defined( 'ZipArchive::EM_AES_256' ) ): ?>
+                        <div style="margin-top:8px;background:#ffebee;border:1px solid #e53935;border-radius:4px;padding:8px 12px;font-size:0.82rem;color:#b71c1c;">
+                            &#10007; <?php esc_html_e( 'Your PHP/libzip build does not support AES-256 encryption. Upgrade libzip to enable this feature.', 'cloudscale-backup-restore' ); ?>
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+
                 <div id="cs-off-notice" class="cs-off-notice" <?php echo $enabled ? 'style="display:none"' : ''; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded static string, no user input ?>>
                     Automatic backups are <strong>off</strong>. Enable the checkbox above to configure a schedule, or run backups manually below.
                 </div>
 
-                <button type="submit" name="cs_save_schedule" class="button button-primary cs-mt"><?php esc_html_e( 'Save Schedule', 'cloudscale-backup-restore' ); ?></button>
-                <?php if ($cs_schedule_saved_msg): ?>
-                <span class="cs-saved-msg" style="display:inline;margin-left:10px">✓ <?php echo esc_html($cs_schedule_saved_msg); ?></span>
+                <button type="submit" name="csbr_save_schedule" class="button button-primary cs-mt"><?php esc_html_e( 'Save Schedule', 'cloudscale-backup-restore' ); ?></button>
+                <?php if ($csbr_schedule_saved_msg): ?>
+                <span class="cs-saved-msg" style="display:inline;margin-left:10px">✓ <?php echo esc_html($csbr_schedule_saved_msg); ?></span>
                 <?php endif; ?>
 
                 </form>
@@ -863,9 +986,9 @@ function cs_admin_page(): void {
                 <div class="cs-field-group">
                     <label class="cs-field-label" for="cs-backup-prefix"><?php esc_html_e( 'Backup filename prefix', 'cloudscale-backup-restore' ); ?></label>
                     <div class="cs-inline">
-                        <input type="text" id="cs-backup-prefix" class="cs-input-sm"
+                        <input type="text" id="cs-backup-prefix"
                                value="<?php echo esc_attr($backup_prefix); ?>"
-                               maxlength="32" style="width:140px;" placeholder="bkup">
+                               maxlength="32" style="width:390px;padding:4px 8px;height:32px;" placeholder="bkup">
                         <span class="cs-muted-text">_f12.zip</span>
                     </div>
                     <p class="cs-help">Lowercase letters, numbers, and hyphens only. Example: <code>mysite</code> produces <code>mysite_f12.zip</code>. Existing backups are unaffected.</p>
@@ -894,13 +1017,13 @@ function cs_admin_page(): void {
                             <span class="cs-ret-label">Estimated storage needed</span>
                             <span id="cs-retention-est"
                                   class="cs-ret-val <?php echo esc_attr( $ret_over ? 'cs-retention-est--over' : '' ); ?>">
-                                <?php echo esc_html(cs_format_size($ret_needed)); ?>
+                                <?php echo esc_html(csbr_format_size($ret_needed)); ?>
                             </span>
                         </div>
                         <div class="cs-ret-row">
                             <span class="cs-ret-label">Disk free space</span>
                             <span class="cs-ret-val cs-free-<?php echo esc_attr($disk_status); ?>">
-                                <?php echo $free_bytes !== false ? esc_html(cs_format_size((int)$free_bytes)) : 'Unknown'; ?>
+                                <?php echo $free_bytes !== false ? esc_html(csbr_format_size((int)$free_bytes)) : 'Unknown'; ?>
                             </span>
                         </div>
                         <?php else: ?>
@@ -922,19 +1045,19 @@ function cs_admin_page(): void {
                 <div class="cs-storage-grid">
                     <div class="cs-storage-item">
                         <span class="cs-storage-label">Backup storage used</span>
-                        <span class="cs-storage-value cs-value--blue"><?php echo esc_html(cs_format_size(cs_dir_size(CS_BACKUP_DIR))); ?></span>
+                        <span class="cs-storage-value cs-value--blue"><?php echo esc_html(csbr_format_size(csbr_dir_size(CSBR_BACKUP_DIR))); ?></span>
                     </div>
                     <div class="cs-storage-item">
                         <span class="cs-storage-label">Media uploads</span>
-                        <span class="cs-storage-value"><?php echo esc_html(cs_format_size($upload_size)); ?></span>
+                        <span class="cs-storage-value"><?php echo esc_html(csbr_format_size($upload_size)); ?></span>
                     </div>
                     <div class="cs-storage-item">
                         <span class="cs-storage-label">Plugins folder</span>
-                        <span class="cs-storage-value"><?php echo esc_html(cs_format_size($plugins_size)); ?></span>
+                        <span class="cs-storage-value"><?php echo esc_html(csbr_format_size($plugins_size)); ?></span>
                     </div>
                     <div class="cs-storage-item">
                         <span class="cs-storage-label">Themes folder</span>
-                        <span class="cs-storage-value"><?php echo esc_html(cs_format_size($themes_size)); ?></span>
+                        <span class="cs-storage-value"><?php echo esc_html(csbr_format_size($themes_size)); ?></span>
                     </div>
                 </div>
 
@@ -1102,7 +1225,7 @@ function cs_admin_page(): void {
                 </div>
                 <div class="cs-info-row">
                     <span><?php esc_html_e( 'Backup directory', 'cloudscale-backup-restore' ); ?></span>
-                    <strong class="cs-path"><?php echo esc_html(CS_BACKUP_DIR); ?></strong>
+                    <strong class="cs-path"><?php echo esc_html(CSBR_BACKUP_DIR); ?></strong>
                 </div>
 
                 <!-- Traffic-light disk row -->
@@ -1110,15 +1233,15 @@ function cs_admin_page(): void {
                     <span><?php esc_html_e( 'Disk free space', 'cloudscale-backup-restore' ); ?></span>
                     <strong class="cs-tl cs-tl--<?php echo esc_attr($disk_status); ?>">
                         <span class="cs-tl-dot"></span>
-                        <?php echo $free_bytes !== false ? esc_html(cs_format_size((int)$free_bytes)) : 'Unavailable'; ?>
+                        <?php echo $free_bytes !== false ? esc_html(csbr_format_size((int)$free_bytes)) : 'Unavailable'; ?>
                         <?php if ($total_bytes): ?>
-                            <span class="cs-disk-of">/ <?php echo esc_html(cs_format_size((int)$total_bytes)); ?></span>
+                            <span class="cs-disk-of">/ <?php echo esc_html(csbr_format_size((int)$total_bytes)); ?></span>
                         <?php endif; ?>
                     </strong>
                 </div>
                 <div class="cs-info-row">
                     <span><?php esc_html_e( 'Latest backup size', 'cloudscale-backup-restore' ); ?></span>
-                    <strong><?php echo $latest_size > 0 ? esc_html(cs_format_size($latest_size)) : '—'; ?></strong>
+                    <strong><?php echo $latest_size > 0 ? esc_html(csbr_format_size($latest_size)) : '—'; ?></strong>
                 </div>
 
                 <?php if ($free_pct !== null): ?>
@@ -1146,22 +1269,22 @@ function cs_admin_page(): void {
             <div class="cs-card-stripe" style="background:linear-gradient(135deg,#bf360c 0%,#e64a19 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#129529; <?php esc_html_e( 'Table Overhead Repair', 'cloudscale-backup-restore' ); ?></h2><button type="button" onclick="csRepairExplain()" style="background:#1a1a1a;border:none;color:#f9a825;border-radius:999px;padding:5px 16px;font-size:0.78rem;font-weight:700;cursor:pointer;letter-spacing:0.01em;">&#128214; <?php esc_html_e( 'Explain…', 'cloudscale-backup-restore' ); ?></button></div>
 
             <?php
-            if ( $cs_overhead_status === 'green' ) {
-                $cs_ohd_bg  = '#2e7d32';
-                $cs_ohd_lbl = esc_html__( 'OK', 'cloudscale-backup-restore' );
-            } elseif ( $cs_overhead_status === 'amber' ) {
-                $cs_ohd_bg  = '#e65100';
-                $cs_ohd_lbl = esc_html__( 'Warning', 'cloudscale-backup-restore' );
+            if ( $csbr_overhead_status === 'green' ) {
+                $csbr_ohd_bg  = '#2e7d32';
+                $csbr_ohd_lbl = esc_html__( 'OK', 'cloudscale-backup-restore' );
+            } elseif ( $csbr_overhead_status === 'amber' ) {
+                $csbr_ohd_bg  = '#fb8c00';
+                $csbr_ohd_lbl = esc_html__( 'Warning', 'cloudscale-backup-restore' );
             } else {
-                $cs_ohd_bg  = '#c62828';
-                $cs_ohd_lbl = esc_html__( 'High', 'cloudscale-backup-restore' );
+                $csbr_ohd_bg  = '#c62828';
+                $csbr_ohd_lbl = esc_html__( 'High', 'cloudscale-backup-restore' );
             }
-            $cs_ohd_fmt = round( $cs_overhead_mb, 1 ) . ' MB ' . esc_html__( 'overhead', 'cloudscale-backup-restore' );
+            $csbr_ohd_fmt = round( $csbr_overhead_mb, 1 ) . ' MB ' . esc_html__( 'overhead', 'cloudscale-backup-restore' );
             ?>
             <p style="margin:0 0 12px;">
-                <span style="display:inline-block;background:<?php echo esc_attr( $cs_ohd_bg ); ?>;color:#fff;font-size:0.82rem;font-weight:700;padding:4px 12px;border-radius:5px;">
-                    <?php if ( $cs_overhead_status !== 'green' ) echo '&#9888; '; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML entity ?>
-                    <?php echo $cs_ohd_lbl; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?> &mdash; <?php echo esc_html( $cs_ohd_fmt ); ?>
+                <span style="display:inline-block;background:<?php echo esc_attr( $csbr_ohd_bg ); ?>;color:#fff;font-size:0.82rem;font-weight:700;padding:4px 12px;border-radius:5px;">
+                    <?php if ( $csbr_overhead_status !== 'green' ) echo '&#9888; '; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded safe HTML entity ?>
+                    <?php echo $csbr_ohd_lbl; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?> &mdash; <?php echo esc_html( $csbr_ohd_fmt ); ?>
                 </span>
             </p>
             <p style="margin:0 0 14px;font-size:0.88rem;color:#555;line-height:1.6;">
@@ -1190,7 +1313,7 @@ function cs_admin_page(): void {
                 'free'        => $free_bytes !== false ? (int)$free_bytes : 0,
                 'latest'    => $latest_size,
             ];
-            wp_add_inline_script( 'cs-script', 'window.CS_BACKUP_SIZES = ' . wp_json_encode( $backup_sizes ) . ';', 'before' );
+            wp_add_inline_script( 'csbr-script', 'window.CSBR_SIZES = ' . wp_json_encode( $backup_sizes ) . ';', 'before' );
             $s3_diag = [
                 'aws_found'   => (bool) $aws_path,
                 'aws_version' => $aws_ver,
@@ -1198,9 +1321,9 @@ function cs_admin_page(): void {
                 'prefix'      => $s3_prefix,
                 'synced'      => $s3_remote_count !== null ? (int) $s3_remote_count : count($s3_synced),
                 'total'       => count($backups),
-                'last_fmt'    => $s3_last ? cs_human_age($s3_last) . ' ago (' . wp_date('j M Y H:i', $s3_last) . ')' : null,
+                'last_fmt'    => $s3_last ? csbr_human_age($s3_last) . ' ago (' . wp_date('j M Y H:i', $s3_last) . ')' : null,
             ];
-            wp_add_inline_script( 'cs-script', 'window.CS_S3_DIAG = ' . wp_json_encode( $s3_diag ) . ';', 'before' );
+            wp_add_inline_script( 'csbr-script', 'window.CSBR_S3_DIAG = ' . wp_json_encode( $s3_diag ) . ';', 'before' );
             $gdrive_diag = [
                 'rclone_found'   => (bool) $rclone_path,
                 'rclone_version' => $rclone_ver,
@@ -1208,9 +1331,9 @@ function cs_admin_page(): void {
                 'path'           => $gdrive_path,
                 'synced'         => $gdrive_remote_count !== null ? (int) $gdrive_remote_count : count($gdrive_synced),
                 'total'          => count($backups),
-                'last_fmt'       => $gdrive_last ? cs_human_age($gdrive_last) . ' ago (' . wp_date('j M Y H:i', $gdrive_last) . ')' : null,
+                'last_fmt'       => $gdrive_last ? csbr_human_age($gdrive_last) . ' ago (' . wp_date('j M Y H:i', $gdrive_last) . ')' : null,
             ];
-            wp_add_inline_script( 'cs-script', 'window.CS_GDRIVE_DIAG = ' . wp_json_encode( $gdrive_diag ) . ';', 'before' );
+            wp_add_inline_script( 'csbr-script', 'window.CSBR_GDRIVE_DIAG = ' . wp_json_encode( $gdrive_diag ) . ';', 'before' );
             ?>
             <div class="cs-run-grid">
                 <!-- Column 1: Core -->
@@ -1221,21 +1344,21 @@ function cs_admin_page(): void {
                         return ($md !== null ? in_array($key, $md, true) : $fallback) ? 'checked' : '';
                     };
                     ?>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-db" <?php echo esc_attr( $mc('db', true) ); ?> data-size="<?php echo (int) $db_size; ?>"> Database <code><?php echo $db_size > 0 ? esc_html(cs_format_size($db_size)) : '~unknown'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-media" <?php echo esc_attr( $mc('media', true) ); ?> data-size="<?php echo (int) $upload_size; ?>"> Media uploads <code><?php echo esc_html(cs_format_size($upload_size)); ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-plugins" <?php echo esc_attr( $mc('plugins', true) ); ?> data-size="<?php echo (int) $plugins_size; ?>"> Plugins <code><?php echo esc_html(cs_format_size($plugins_size)); ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-themes" <?php echo esc_attr( $mc('themes', true) ); ?> data-size="<?php echo (int) $themes_size; ?>"> Themes <code><?php echo esc_html(cs_format_size($themes_size)); ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-db" <?php echo esc_attr( $mc('db', true) ); ?> data-size="<?php echo (int) $db_size; ?>"> Database <code><?php echo $db_size > 0 ? esc_html(csbr_format_size($db_size)) : '~unknown'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-media" <?php echo esc_attr( $mc('media', true) ); ?> data-size="<?php echo (int) $upload_size; ?>"> Media uploads <code><?php echo esc_html(csbr_format_size($upload_size)); ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-plugins" <?php echo esc_attr( $mc('plugins', true) ); ?> data-size="<?php echo (int) $plugins_size; ?>"> Plugins <code><?php echo esc_html(csbr_format_size($plugins_size)); ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-themes" <?php echo esc_attr( $mc('themes', true) ); ?> data-size="<?php echo (int) $themes_size; ?>"> Themes <code><?php echo esc_html(csbr_format_size($themes_size)); ?></code></label>
                 </div>
                 <!-- Column 2: Other -->
                 <div class="cs-options-col cs-options-col--other">
                     <p class="cs-options-col-heading">Other</p>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-mu" <?php echo esc_attr( $mc('mu', $mu_size > 0) ); ?> data-size="<?php echo absint( $mu_size ); ?>"> Must-use plugins <code><?php echo $mu_size > 0 ? esc_html(cs_format_size($mu_size)) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-languages" <?php echo esc_attr( $mc('languages', $lang_size > 0) ); ?> data-size="<?php echo absint( $lang_size ); ?>"> Languages <code><?php echo $lang_size > 0 ? esc_html(cs_format_size($lang_size)) : '0 B'; ?></code></label>
-                    <label class="cs-option-label"><input type="checkbox" id="cs-include-dropins" <?php echo esc_attr( $mc('dropins', false) ); ?> data-size="<?php echo (int) $dropins_size; ?>"> Dropins <small>(object-cache.php…)</small> <code><?php echo $dropins_size > 0 ? esc_html(cs_format_size($dropins_size)) : '0 B'; ?></code></label>
-<label class="cs-option-label"><input type="checkbox" id="cs-include-htaccess" <?php echo esc_attr( $mc('htaccess', $htaccess_size > 0) ); ?> data-size="<?php echo absint( $htaccess_size ); ?>"> .htaccess <code><?php echo $htaccess_size > 0 ? esc_html(cs_format_size($htaccess_size)) : 'not found'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-mu" <?php echo esc_attr( $mc('mu', $mu_size > 0) ); ?> data-size="<?php echo absint( $mu_size ); ?>"> Must-use plugins <code><?php echo $mu_size > 0 ? esc_html(csbr_format_size($mu_size)) : '0 B'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-languages" <?php echo esc_attr( $mc('languages', $lang_size > 0) ); ?> data-size="<?php echo absint( $lang_size ); ?>"> Languages <code><?php echo $lang_size > 0 ? esc_html(csbr_format_size($lang_size)) : '0 B'; ?></code></label>
+                    <label class="cs-option-label"><input type="checkbox" id="cs-include-dropins" <?php echo esc_attr( $mc('dropins', false) ); ?> data-size="<?php echo (int) $dropins_size; ?>"> Dropins <small>(object-cache.php…)</small> <code><?php echo $dropins_size > 0 ? esc_html(csbr_format_size($dropins_size)) : '0 B'; ?></code></label>
+<label class="cs-option-label"><input type="checkbox" id="cs-include-htaccess" <?php echo esc_attr( $mc('htaccess', $htaccess_size > 0) ); ?> data-size="<?php echo absint( $htaccess_size ); ?>"> .htaccess <code><?php echo $htaccess_size > 0 ? esc_html(csbr_format_size($htaccess_size)) : 'not found'; ?></code></label>
                     <label class="cs-option-label cs-option-sensitive">
                         <input type="checkbox" id="cs-include-wpconfig" <?php echo esc_attr( $mc('wpconfig', false) ); ?> data-size="<?php echo (int) $wpconfig_size; ?>">
-                        wp-config.php <code><?php echo $wpconfig_size > 0 ? esc_html(cs_format_size($wpconfig_size)) : 'not found'; ?></code>
+                        wp-config.php <code><?php echo $wpconfig_size > 0 ? esc_html(csbr_format_size($wpconfig_size)) : 'not found'; ?></code>
                         <span class="cs-sensitive-badge">&#9888; credentials</span>
                     </label>
                 </div>
@@ -1249,7 +1372,7 @@ function cs_admin_page(): void {
                         <div class="cs-backup-summary-row">
                             <span class="cs-summary-label">Disk free space</span>
                             <span class="cs-summary-value cs-free-<?php echo esc_attr( $disk_status ); ?>" id="cs-free-space">
-                                <?php echo $free_bytes !== false ? esc_html( cs_format_size( (int) $free_bytes ) ) : 'Unknown'; ?>
+                                <?php echo $free_bytes !== false ? esc_html( csbr_format_size( (int) $free_bytes ) ) : 'Unknown'; ?>
                             </span>
                         </div>
                         <div class="cs-backup-summary-row" id="cs-space-warn-row" style="display:none">
@@ -1298,11 +1421,12 @@ function cs_admin_page(): void {
                         <?php if ( $s3_bucket ): ?><th class="cs-col-s3" style="width:36px!important;text-align:center;" title="<?php esc_attr_e( 'S3 sync status', 'cloudscale-backup-restore' ); ?>">S3</th><?php endif; ?>
                         <?php if ( $gdrive_remote ): ?><th style="width:36px!important;text-align:center;" title="<?php esc_attr_e( 'Google Drive sync status', 'cloudscale-backup-restore' ); ?>">GDrive</th><?php endif; ?>
                         <?php if ( $dropbox_remote ): ?><th style="width:36px!important;text-align:center;" title="<?php esc_attr_e( 'Dropbox sync status', 'cloudscale-backup-restore' ); ?>">Dropbox</th><?php endif; ?>
+                        <?php if ( $onedrive_remote ): ?><th style="width:36px!important;text-align:center;" title="<?php esc_attr_e( 'OneDrive sync status', 'cloudscale-backup-restore' ); ?>">OneDrive</th><?php endif; ?>
                     </tr>
                 </thead>
                 <?php
                 $n_to_delete     = max( 0, count( $backups ) - $retention );
-                $hist_col_count  = 7 + ( $s3_bucket ? 1 : 0 ) + ( $gdrive_remote ? 1 : 0 ) + ( $dropbox_remote ? 1 : 0 );
+                $hist_col_count  = 7 + ( $s3_bucket ? 1 : 0 ) + ( $gdrive_remote ? 1 : 0 ) + ( $dropbox_remote ? 1 : 0 ) + ( $onedrive_remote ? 1 : 0 );
                 if ( $n_to_delete > 0 ):
                 ?>
                 <tr><td colspan="<?php echo (int) $hist_col_count; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded integer literal ?>" style="padding:6px 10px!important;background:#fff3e0;border-left:3px solid #e65100;font-size:0.82rem;color:#6d3b00;">
@@ -1311,18 +1435,19 @@ function cs_admin_page(): void {
                 <?php endif; ?>
                 <tbody>
                 <?php
-                $s3_log = (array) get_option( 'cs_s3_log', [] );
+                $s3_log = (array) get_option( 'csbr_s3_log', [] );
                 foreach ( $backups as $i => $b ):
                     $is_db         = str_contains( $b['type'], 'DB' ) || $b['type'] === 'Full' || $b['type'] === 'Full+';
-                    $s3_entry      = $s3_log[ $b['name'] ] ?? null;
-                    $gdrive_entry  = $gdrive_log[ $b['name'] ] ?? null;
-                    $dropbox_entry = $dropbox_log[ $b['name'] ] ?? null;
+                    $s3_entry       = $s3_log[ $b['name'] ]       ?? null;
+                    $gdrive_entry   = $gdrive_log[ $b['name'] ]   ?? null;
+                    $dropbox_entry  = $dropbox_log[ $b['name'] ]  ?? null;
+                    $onedrive_entry = $onedrive_log[ $b['name'] ] ?? null;
                     $will_delete      = $i >= $retention;
                     $delete_soon_local = ! $will_delete && $i === $retention - 1 && count( $backups ) >= $retention;
                 ?>
                     <tr class="<?php echo esc_attr( $i === 0 ? 'cs-row-latest' : ( $delete_soon_local ? 'cs-row-delete-soon' : '' ) ); ?>" style="height:40px!important;max-height:40px!important;<?php echo $will_delete ? 'background:linear-gradient(90deg,#fff3e0 0%,#fff8f0 100%);border-left:3px solid #e65100;' : ''; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded static string ?>">
                         <td class="cs-col-actions cs-actions" style="width:72px!important;min-width:72px!important;max-width:72px!important;padding:4px 6px!important;vertical-align:middle!important;white-space:nowrap;">
-                            <a href="<?php echo esc_url( admin_url( 'admin-post.php?action=cs_download&file=' . urlencode( $b['name'] ) . '&_wpnonce=' . wp_create_nonce( 'cs_download' ) ) ); ?>" class="cs-icon-btn cs-icon-btn--blue" title="Download">
+                            <a href="<?php echo esc_url( admin_url( 'admin-post.php?action=csbr_download&file=' . urlencode( $b['name'] ) . '&_wpnonce=' . wp_create_nonce( 'csbr_download' ) ) ); ?>" class="cs-icon-btn cs-icon-btn--blue" title="Download">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                             </a>
                             <?php if ( $is_db ): ?>
@@ -1335,10 +1460,10 @@ function cs_admin_page(): void {
                             </button>
                         </td>
                         <td class="cs-col-num cs-idx" style="padding:6px 8px!important;vertical-align:middle!important;white-space:nowrap;"><?php echo (int) ( $i + 1 ); ?><?php if ( $will_delete ) echo wp_kses( '&nbsp;<span style="font-size:0.68rem;font-weight:700;background:#e65100;color:#fff;padding:1px 5px;border-radius:3px;vertical-align:middle;">&#128465; delete</span>', [ 'span' => [ 'style' => [] ] ] ); ?></td>
-                        <td class="cs-filename" style="padding:6px 8px!important;vertical-align:middle!important;" title="<?php echo esc_attr( $b['name'] ); ?>"><?php echo esc_html( $b['name'] ); ?><?php if ( $i === 0 ) echo wp_kses( '<span class="cs-latest-badge">Latest</span>', [ 'span' => [ 'class' => [] ] ] ); ?><?php if ( $delete_soon_local ) echo wp_kses( '<span class="cs-delete-soon-badge">Delete Soon</span>', [ 'span' => [ 'class' => [] ] ] ); ?></td>
-                        <td class="cs-col-size" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html( cs_format_size( $b['size'] ) ); ?></td>
+                        <td class="cs-filename" style="padding:6px 8px!important;vertical-align:middle!important;" title="<?php echo esc_attr( $b['name'] ); ?>"><?php echo esc_html( $b['name'] ); ?><?php if ( ! empty( $b['encrypted'] ) ) echo ' <span title="AES-256 encrypted" style="font-size:0.78rem;">&#128274;</span>'; ?><?php if ( $i === 0 ) echo wp_kses( '<span class="cs-latest-badge">Latest</span>', [ 'span' => [ 'class' => [] ] ] ); ?><?php if ( $delete_soon_local ) echo wp_kses( '<span class="cs-delete-soon-badge">Delete Soon</span>', [ 'span' => [ 'class' => [] ] ] ); ?></td>
+                        <td class="cs-col-size" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html( csbr_format_size( $b['size'] ) ); ?></td>
                         <td class="cs-col-meta cs-created" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html( $b['date'] ); ?></td>
-                        <td class="cs-col-age cs-age" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html( cs_human_age( $b['mtime'] ) ); ?></td>
+                        <td class="cs-col-age cs-age" style="padding:6px 8px!important;vertical-align:middle!important;"><?php echo esc_html( csbr_human_age( $b['mtime'] ) ); ?></td>
                         <td class="cs-col-type" style="padding:6px 8px!important;vertical-align:middle!important;"><span class="cs-type-badge cs-type-<?php echo esc_attr( preg_replace( '/[^a-z0-9]/', '', str_replace( '+', 'plus', strtolower( explode( ' ', $b['type'] )[0] ) ) ) ); ?>"><?php echo esc_html( $b['type'] ); ?></span></td>
                         <?php if ( $s3_bucket ): ?>
                         <td style="text-align:center;padding:4px 6px!important;vertical-align:middle!important;min-width:48px;">
@@ -1380,13 +1505,24 @@ function cs_admin_page(): void {
                             <?php endif; ?>
                         </td>
                         <?php endif; ?>
+                        <?php if ( $onedrive_remote ): ?>
+                        <td style="text-align:center;padding:4px 6px!important;vertical-align:middle!important;min-width:48px;">
+                            <?php if ( ! $onedrive_entry ): ?>
+                                <span style="color:#bbb;font-size:12px;">—</span>
+                            <?php elseif ( $onedrive_entry['ok'] ): ?>
+                                <span title="Synced to OneDrive on <?php echo esc_attr( wp_date( 'j M Y H:i', $onedrive_entry['time'] ) ); ?>" style="color:#2e7d32;font-size:14px;">&#10003;</span>
+                            <?php else: ?>
+                                <span title="<?php echo esc_attr( substr( $onedrive_entry['error'] ?? 'Sync failed', 0, 120 ) ); ?>" style="color:#c62828;font-size:12px;font-weight:700;">&#10007;</span>
+                            <?php endif; ?>
+                        </td>
+                        <?php endif; ?>
                     </tr>
                 <?php endforeach; ?>
                 </tbody>
             </table>
             </div>
             <p class="cs-help cs-mt">Showing <?php echo (int) count( $backups ); ?> backup(s). Retention limit: <?php echo (int) $retention; ?>. Oldest backups are removed automatically after each run.</p>
-            <p class="cs-help" style="margin-top:6px;word-break:break-all;">&#128193; <?php esc_html_e( 'Stored at:', 'cloudscale-backup-restore' ); ?> <code id="cs-backup-path"><?php echo esc_html( CS_BACKUP_DIR ); ?></code> <button type="button" id="cs-copy-path" onclick="csCopyBackupPath()" style="margin-left:6px;padding:2px 8px;font-size:0.75rem;cursor:pointer;vertical-align:middle;" class="button button-small">Copy</button></p>
+            <p class="cs-help" style="margin-top:6px;word-break:break-all;">&#128193; <?php esc_html_e( 'Stored at:', 'cloudscale-backup-restore' ); ?> <code id="cs-backup-path"><?php echo esc_html( CSBR_BACKUP_DIR ); ?></code> <button type="button" id="cs-copy-path" onclick="csCopyBackupPath()" style="margin-left:6px;padding:2px 8px;font-size:0.75rem;cursor:pointer;vertical-align:middle;" class="button button-small">Copy</button></p>
             <?php endif; ?>
         </div>
 
@@ -1396,22 +1532,37 @@ function cs_admin_page(): void {
             <div class="cs-card-stripe cs-stripe--red" style="background:linear-gradient(135deg,#b71c1c 0%,#e53935 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">↩ <?php echo esc_html__( 'Restore from Uploaded File', 'cloudscale-backup-restore' ); ?></h2><button type="button" onclick="csRestoreExplain()" style="background:#1a1a1a;border:none;color:#f9a825;border-radius:999px;padding:5px 16px;font-size:0.78rem;font-weight:700;cursor:pointer;letter-spacing:0.01em;">&#128214; <?php esc_html_e( 'Explain…', 'cloudscale-backup-restore' ); ?></button></div>
             <div class="cs-restore-upload-grid">
                 <div>
-                    <p>Upload a <code>.zip</code> (from this plugin) or a raw <code>.sql</code> file to restore the database.</p>
+                    <p>Upload a <code>.zip</code> (from this plugin) or a raw <code>.sql</code> file, then choose what to restore.</p>
                     <input type="file" id="cs-restore-file" accept=".zip,.sql" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;">
-                    <div style="display:flex;align-items:center;gap:10px;margin-top:8px;">
+
+                    <?php /* Step 1 row: Choose File + Upload button */ ?>
+                    <div style="display:flex;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap;">
                         <label for="cs-restore-file" id="cs-restore-file-label" class="button" style="cursor:pointer;display:inline-flex;align-items:center;gap:6px;flex-shrink:0;">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
                             <?php esc_html_e( 'Choose File', 'cloudscale-backup-restore' ); ?>
                         </label>
-                        <span id="cs-restore-file-name" style="font-size:0.85rem;color:#666;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><?php esc_html_e( 'No file chosen', 'cloudscale-backup-restore' ); ?></span>
-                        <button type="button" id="cs-restore-upload-btn" class="button button-secondary" style="display:inline-flex;align-items:center;gap:6px;flex-shrink:0;margin-left:auto;">
+                        <span id="cs-restore-file-name" style="font-size:0.85rem;color:#666;flex:1;min-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><?php esc_html_e( 'No file chosen', 'cloudscale-backup-restore' ); ?></span>
+                        <button type="button" id="cs-restore-upload-btn" class="button button-secondary" style="display:inline-flex;align-items:center;gap:6px;flex-shrink:0;min-width:200px;justify-content:center;">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                            <?php esc_html_e( 'Upload Backup File', 'cloudscale-backup-restore' ); ?>
+                        </button>
+                    </div>
+
+                    <?php /* Step 2 row: always visible; Restore button disabled until upload completes */ ?>
+                    <div id="cs-restore-ready-row" style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">
+                        <span id="cs-restore-ready-label" style="font-size:0.85rem;color:#999;flex:1;"><?php esc_html_e( 'Upload a file first', 'cloudscale-backup-restore' ); ?></span>
+                        <button type="button" id="cs-restore-delete-staged-btn" disabled style="background:none;border:none;color:#c62828;font-size:0.8rem;cursor:pointer;padding:0 4px;flex-shrink:0;opacity:0.3;" title="<?php esc_attr_e( 'Delete staged upload', 'cloudscale-backup-restore' ); ?>">&#x1F5D1;</button>
+                        <button type="button" id="cs-restore-open-modal-btn" class="button button-primary" disabled style="display:inline-flex;align-items:center;gap:6px;flex-shrink:0;min-width:200px;justify-content:center;opacity:1;cursor:not-allowed;background:#c5d8f0;border-color:#aac4e8;color:#6a96c8;box-shadow:none;">
                             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0;"><path d="M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0"/><polyline points="9 12 12 9 15 12"/><line x1="12" y1="21" x2="12" y2="9"/></svg>
-                            <?php esc_html_e( 'Restore from Upload', 'cloudscale-backup-restore' ); ?>
+                            <?php esc_html_e( 'View Restore Options', 'cloudscale-backup-restore' ); ?>
                         </button>
                     </div>
                 </div>
                 <div id="cs-restore-upload-progress" style="display:none" class="cs-progress-panel">
-                    <p id="cs-restore-upload-msg" class="cs-progress-msg">Uploading...</p>
+                    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                        <p id="cs-restore-upload-msg" class="cs-progress-msg" style="margin:0;">Uploading...</p>
+                        <button type="button" id="cs-restore-upload-cancel" class="button button-small" style="flex-shrink:0;"><?php esc_html_e( 'Cancel', 'cloudscale-backup-restore' ); ?></button>
+                    </div>
                     <div class="cs-progress-bar"><div id="cs-restore-upload-fill" class="cs-progress-fill"></div></div>
                 </div>
             </div>
@@ -1419,36 +1570,88 @@ function cs_admin_page(): void {
 
         <!-- ===================== RESTORE MODAL ===================== -->
 
+        <!-- ===================== UNIFIED RESTORE MODAL ===================== -->
         <div id="cs-restore-modal" class="cs-modal" style="display:none">
-            <div class="cs-modal-box">
+            <div class="cs-modal-box" style="max-width:580px;">
                 <h2>⚠ <?php esc_html_e( 'Restore Database', 'cloudscale-backup-restore' ); ?></h2>
                 <div class="cs-modal-body">
-                    <div class="cs-warning-box">
+                    <div class="cs-warning-box" id="cs-modal-warning-full">
                         <strong><?php esc_html_e( 'BEFORE YOU RESTORE — TAKE A SNAPSHOT', 'cloudscale-backup-restore' ); ?></strong>
                         <ul>
-                            <li>Take a server/VM snapshot in your hosting control panel or AWS console <strong>right now</strong>.</li>
-                            <li>If anything goes wrong you can roll back to the snapshot instantly.</li>
-                            <li>This restore will put the site into maintenance mode, drop and recreate all database tables, then bring the site back online.</li>
-                            <li>Active sessions will be interrupted. Users will see a maintenance page.</li>
+                            <li><?php esc_html_e( 'Take a server/VM snapshot in your hosting control panel or AWS console right now.', 'cloudscale-backup-restore' ); ?></li>
+                            <li><?php esc_html_e( 'This will put the site into maintenance mode, drop and recreate all database tables, then bring the site back online.', 'cloudscale-backup-restore' ); ?></li>
+                            <li><?php esc_html_e( 'Active sessions will be interrupted. Users will see a maintenance page.', 'cloudscale-backup-restore' ); ?></li>
                         </ul>
                     </div>
-                    <p>You are about to restore from:</p>
-                    <p><strong id="cs-modal-filename"></strong> &nbsp;|&nbsp; Created: <span id="cs-modal-date"></span></p>
+                    <div class="cs-warning-box" id="cs-modal-warning-selective" style="display:none;background:#fff8e1;border-color:#f9a825;">
+                        <strong><?php esc_html_e( 'Selective restore', 'cloudscale-backup-restore' ); ?></strong>
+                        <ul>
+                            <li><?php esc_html_e( 'Only the selected tables will be dropped and recreated from this backup.', 'cloudscale-backup-restore' ); ?></li>
+                            <li><?php esc_html_e( 'All other tables remain untouched. No maintenance mode is used.', 'cloudscale-backup-restore' ); ?></li>
+                        </ul>
+                    </div>
+                    <p style="margin:10px 0 4px;"><?php esc_html_e( 'Restoring from:', 'cloudscale-backup-restore' ); ?> <strong id="cs-modal-filename"></strong> <span id="cs-modal-date-wrap" style="color:#666;">&nbsp;|&nbsp; <?php esc_html_e( 'Created:', 'cloudscale-backup-restore' ); ?> <span id="cs-modal-date"></span></span></p>
+
+                    <div style="margin:14px 0 10px;">
+                        <p style="font-weight:600;margin:0 0 8px 0;"><?php esc_html_e( 'What would you like to restore?', 'cloudscale-backup-restore' ); ?></p>
+                        <label style="display:flex;align-items:center;gap:8px;margin-bottom:7px;cursor:pointer;">
+                            <input type="radio" name="cs-restore-mode" value="full" id="cs-mode-full" checked>
+                            <span><strong><?php esc_html_e( 'Full database', 'cloudscale-backup-restore' ); ?></strong> &mdash; <?php esc_html_e( 'drop and recreate all tables', 'cloudscale-backup-restore' ); ?></span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:8px;margin-bottom:7px;cursor:pointer;">
+                            <input type="radio" name="cs-restore-mode" value="selective" id="cs-mode-selective">
+                            <span><strong><?php esc_html_e( 'Specific tables only', 'cloudscale-backup-restore' ); ?></strong> &mdash; <?php esc_html_e( 'choose which tables to restore', 'cloudscale-backup-restore' ); ?></span>
+                        </label>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                            <input type="radio" name="cs-restore-mode" value="post" id="cs-mode-post">
+                            <span><strong><?php esc_html_e( 'Single post or page', 'cloudscale-backup-restore' ); ?></strong> &mdash; <?php esc_html_e( 'restore one post and its metadata', 'cloudscale-backup-restore' ); ?></span>
+                        </label>
+                    </div>
+
+                    <div id="cs-modal-post-section" style="display:none;margin:4px 0 12px;">
+                        <div id="cs-modal-post-loading" style="padding:10px 0;color:#666;font-size:0.88rem;">&#8987; <?php esc_html_e( 'Loading posts from backup…', 'cloudscale-backup-restore' ); ?></div>
+                        <div id="cs-modal-post-wrap" style="display:none;">
+                            <input type="text" id="cs-modal-post-search" placeholder="<?php esc_attr_e( 'Search by title or ID…', 'cloudscale-backup-restore' ); ?>" style="width:100%;box-sizing:border-box;padding:5px 8px;margin-bottom:6px;font-size:0.88rem;border:1px solid #ccc;border-radius:4px;">
+                            <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:6px;font-size:0.82rem;color:#444;">
+                                <label style="display:flex;align-items:center;gap:4px;"><?php esc_html_e( 'From', 'cloudscale-backup-restore' ); ?> <input type="date" id="cs-post-date-from" style="padding:3px 5px;border:1px solid #ccc;border-radius:4px;font-size:0.82rem;"></label>
+                                <label style="display:flex;align-items:center;gap:4px;"><?php esc_html_e( 'To', 'cloudscale-backup-restore' ); ?> <input type="date" id="cs-post-date-to" style="padding:3px 5px;border:1px solid #ccc;border-radius:4px;font-size:0.82rem;"></label>
+                                <a href="#" id="cs-post-date-clear" style="color:#666;text-decoration:none;font-size:0.8rem;"><?php esc_html_e( 'Clear dates', 'cloudscale-backup-restore' ); ?></a>
+                                <span style="margin-left:auto;"><a href="#" id="cs-post-sel-all" style="color:#1565c0;text-decoration:none;"><?php esc_html_e( 'All', 'cloudscale-backup-restore' ); ?></a> / <a href="#" id="cs-post-sel-none" style="color:#1565c0;text-decoration:none;"><?php esc_html_e( 'None', 'cloudscale-backup-restore' ); ?></a></span>
+                            </div>
+                            <div id="cs-modal-post-list" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;border-radius:4px;background:#fafafa;"></div>
+                        </div>
+                        <div id="cs-modal-post-selected" style="display:none;margin-top:8px;padding:7px 10px;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:4px;font-size:0.88rem;"></div>
+                        <div id="cs-modal-post-error" style="display:none;color:#c62828;font-size:0.88rem;margin-top:6px;"></div>
+                    </div>
+
+                    <div id="cs-modal-table-section" style="display:none;margin:4px 0 12px;">
+                        <div id="cs-modal-table-loading" style="padding:10px 0;color:#666;font-size:0.88rem;">&#8987; <?php esc_html_e( 'Loading table list…', 'cloudscale-backup-restore' ); ?></div>
+                        <div id="cs-modal-table-wrap" style="display:none;">
+                            <div style="margin-bottom:6px;">
+                                <a href="#" id="cs-modal-sel-all" style="font-size:0.82rem;"><?php esc_html_e( 'Select all', 'cloudscale-backup-restore' ); ?></a>
+                                &nbsp;&middot;&nbsp;
+                                <a href="#" id="cs-modal-sel-none" style="font-size:0.82rem;"><?php esc_html_e( 'Clear all', 'cloudscale-backup-restore' ); ?></a>
+                            </div>
+                            <div id="cs-modal-table-list" style="max-height:200px;overflow-y:auto;border:1px solid #ddd;border-radius:4px;padding:8px 12px;display:flex;flex-direction:column;gap:4px;background:#fafafa;"></div>
+                        </div>
+                        <div id="cs-modal-table-error" style="display:none;color:#c62828;font-size:0.88rem;margin-top:6px;"></div>
+                    </div>
+
                     <div class="cs-confirm-check">
                         <label>
                             <input type="checkbox" id="cs-confirm-snapshot">
-                            I have taken a server snapshot and understand this will overwrite the live database.
+                            <span id="cs-confirm-label"><?php esc_html_e( 'I have taken a server snapshot and understand this will overwrite the live database.', 'cloudscale-backup-restore' ); ?></span>
                         </label>
                     </div>
                 </div>
-                <div class="cs-modal-footer">
-                    <button type="button" id="cs-modal-cancel" class="button"><?php esc_html_e( 'Cancel — keep current database', 'cloudscale-backup-restore' ); ?></button>
+                <div class="cs-modal-footer" id="cs-restore-footer">
+                    <button type="button" id="cs-modal-cancel" class="button"><?php esc_html_e( 'Cancel', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" id="cs-modal-confirm" class="button button-primary cs-btn-danger" disabled><?php esc_html_e( 'Restore Now', 'cloudscale-backup-restore' ); ?></button>
                 </div>
                 <div id="cs-modal-progress" style="display:none" class="cs-modal-progress">
-                    <p id="cs-modal-progress-msg" class="cs-progress-msg">Enabling maintenance mode...</p>
+                    <p id="cs-modal-progress-msg" class="cs-progress-msg"><?php esc_html_e( 'Enabling maintenance mode...', 'cloudscale-backup-restore' ); ?></p>
                     <div class="cs-progress-bar"><div id="cs-modal-fill" class="cs-progress-fill"></div></div>
-                    <p class="cs-help">Do not close this window.</p>
+                    <p class="cs-help"><?php esc_html_e( 'Do not close this window.', 'cloudscale-backup-restore' ); ?></p>
                 </div>
             </div>
         </div>
@@ -1495,7 +1698,6 @@ function cs_admin_page(): void {
                             </label>
                             <?php endforeach; ?>
                         </div>
-                        <p class="cs-help">On each selected day: AMI snapshot (if configured), then S3 sync, then Google Drive sync — in that order.</p>
                     </div>
 
                     <div class="cs-field-group">
@@ -1520,6 +1722,7 @@ function cs_admin_page(): void {
                         $s3_configured       = ! empty( $s3_bucket );
                         $gdrive_configured   = ! empty( $gdrive_remote );
                         $dropbox_configured  = ! empty( $dropbox_remote );
+                        $onedrive_configured = ! empty( $onedrive_remote );
                         ?>
                         <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px;">
                             <label class="cs-option-label" style="margin:0;<?php echo ! $ami_configured ? 'opacity:0.55;' : ''; ?>">
@@ -1541,6 +1744,11 @@ function cs_admin_page(): void {
                                 <input type="checkbox" id="cs-cloud-dropbox-enabled" <?php checked($dropbox_sync_enabled); ?> <?php echo ! $dropbox_configured ? 'disabled' : ''; ?>>
                                 &#128194; Dropbox Backup
                                 <?php if ( ! $dropbox_configured ): ?><span style="font-size:0.72rem;color:#999;margin-left:6px;">— Not configured</span><?php endif; ?>
+                            </label>
+                            <label class="cs-option-label" style="margin:0;<?php echo ! $onedrive_configured ? 'opacity:0.55;' : ''; ?>">
+                                <input type="checkbox" id="cs-cloud-onedrive-enabled" <?php checked($onedrive_sync_enabled); ?> <?php echo ! $onedrive_configured ? 'disabled' : ''; ?>>
+                                &#128462; OneDrive Backup
+                                <?php if ( ! $onedrive_configured ): ?><span style="font-size:0.72rem;color:#999;margin-left:6px;">— Not configured</span><?php endif; ?>
                             </label>
                         </div>
                         <p class="cs-help">Providers must be configured in their cards below before they can be enabled here.</p>
@@ -1608,13 +1816,13 @@ function cs_admin_page(): void {
                 </div>
                 <div class="cs-info-row">
                     <span>Last sync</span>
-                    <strong><?php echo $gdrive_last ? esc_html(cs_human_age($gdrive_last) . ' (' . wp_date('j M Y H:i', $gdrive_last) . ')') : esc_html__('Never', 'cloudscale-backup-restore'); ?></strong>
+                    <strong><?php echo $gdrive_last ? esc_html(csbr_human_age($gdrive_last) . ' (' . wp_date('j M Y H:i', $gdrive_last) . ')') : esc_html__('Never', 'cloudscale-backup-restore'); ?></strong>
                 </div>
                 <?php if ($gdrive_last_failed_entry): ?>
                 <div class="cs-info-row" style="align-items:flex-start;">
                     <span style="color:#c62828;padding-top:1px;"><?php esc_html_e( 'Sync error', 'cloudscale-backup-restore' ); ?></span>
                     <span style="color:#c62828;font-weight:700;display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;overflow-wrap:anywhere;word-break:break-word;">
-                        <span><?php echo esc_html( cs_human_age( $gdrive_last_failed_entry['time'] ) . ' (' . wp_date( 'j M Y H:i', $gdrive_last_failed_entry['time'] ) . ')' ); ?></span>
+                        <span><?php echo esc_html( csbr_human_age( $gdrive_last_failed_entry['time'] ) . ' (' . wp_date( 'j M Y H:i', $gdrive_last_failed_entry['time'] ) . ')' ); ?></span>
                         <?php
                         $_err_raw   = substr( $gdrive_last_failed_entry['error'] ?? 'Sync failed', 0, 400 );
                         $_err_clean = preg_replace( '/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} \S+ : /', '', $_err_raw );
@@ -1671,15 +1879,77 @@ function cs_admin_page(): void {
                 </div>
                 <div class="cs-info-row">
                     <span><?php esc_html_e( 'Last sync', 'cloudscale-backup-restore' ); ?></span>
-                    <strong><?php echo $dropbox_last ? esc_html( cs_human_age( $dropbox_last ) . ' (' . wp_date( 'j M Y H:i', $dropbox_last ) . ')' ) : esc_html__( 'Never', 'cloudscale-backup-restore' ); ?></strong>
+                    <strong><?php echo $dropbox_last ? esc_html( csbr_human_age( $dropbox_last ) . ' (' . wp_date( 'j M Y H:i', $dropbox_last ) . ')' ) : esc_html__( 'Never', 'cloudscale-backup-restore' ); ?></strong>
                 </div>
                 <?php if ($dropbox_last_failed_entry): ?>
                 <div class="cs-info-row" style="align-items:flex-start;">
                     <span style="color:#c62828;padding-top:1px;"><?php esc_html_e( 'Sync error', 'cloudscale-backup-restore' ); ?></span>
                     <span style="color:#c62828;font-weight:700;display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;overflow-wrap:anywhere;word-break:break-word;">
-                        <span><?php echo esc_html( cs_human_age( $dropbox_last_failed_entry['time'] ) . ' (' . wp_date( 'j M Y H:i', $dropbox_last_failed_entry['time'] ) . ')' ); ?></span>
+                        <span><?php echo esc_html( csbr_human_age( $dropbox_last_failed_entry['time'] ) . ' (' . wp_date( 'j M Y H:i', $dropbox_last_failed_entry['time'] ) . ')' ); ?></span>
                         <?php
                         $_err_raw   = substr( $dropbox_last_failed_entry['error'] ?? 'Sync failed', 0, 400 );
+                        $_err_clean = preg_replace( '/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} \S+ : /', '', $_err_raw );
+                        $_err_parts = preg_split( '/ \d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} \S+ : /', $_err_clean, 3 );
+                        ?>
+                        <span style="font-weight:normal;"><?php echo esc_html( $_err_parts[0] ?? '' ); ?></span>
+                        <?php if ( ! empty( $_err_parts[1] ) ): ?><span style="font-weight:normal;"><?php echo esc_html( $_err_parts[1] ); ?></span><?php endif; ?>
+                    </span>
+                </div>
+                <?php endif; ?>
+                <?php endif; ?>
+            </div>
+
+            <!-- ONEDRIVE BACKUP CARD -->
+            <div class="cs-card cs-card--onedrive">
+                <div class="cs-card-stripe" style="background:linear-gradient(135deg,#0078d4 0%,#00bcf2 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
+                    <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128462; <?php echo esc_html__( 'OneDrive Backup', 'cloudscale-backup-restore' ); ?></h2>
+                    <button type="button" onclick="csOneDriveExplain()" style="background:#1a1a1a;border:none;color:#f9a825;border-radius:999px;padding:5px 16px;font-size:0.78rem;font-weight:700;cursor:pointer;letter-spacing:0.01em;">&#128214; <?php esc_html_e( 'Explain…', 'cloudscale-backup-restore' ); ?></button>
+                </div>
+
+                <div class="cs-field-row cs-mt">
+                    <label for="cs-onedrive-remote"><strong><?php esc_html_e( 'rclone remote name', 'cloudscale-backup-restore' ); ?></strong></label>
+                    <input type="text" id="cs-onedrive-remote" class="regular-text" placeholder="[Enter Remote Name]"
+                           value="<?php echo esc_attr( $onedrive_remote ); ?>">
+                    <p class="cs-help"><?php esc_html_e( 'The remote name you gave when running', 'cloudscale-backup-restore' ); ?> <code>rclone config</code>, e.g. <code>onedrive</code>.</p>
+                </div>
+
+                <div class="cs-field-row">
+                    <label for="cs-onedrive-path"><strong><?php esc_html_e( 'Destination folder', 'cloudscale-backup-restore' ); ?></strong></label>
+                    <input type="text" id="cs-onedrive-path" class="regular-text" placeholder="[Enter Folder Path]"
+                           value="<?php echo esc_attr( $onedrive_path ); ?>">
+                    <p class="cs-help"><?php esc_html_e( 'Folder path inside OneDrive. Trailing slash required. Leave blank to copy to the root.', 'cloudscale-backup-restore' ); ?></p>
+                </div>
+
+                <div style="margin-top:12px;">
+                    <button type="button" onclick="csOneDriveSave()" class="button button-primary"><?php esc_html_e( 'Save OneDrive Settings', 'cloudscale-backup-restore' ); ?></button>
+                    <button type="button" onclick="csOneDriveTest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Test Connection', 'cloudscale-backup-restore' ); ?></button>
+                    <button type="button" onclick="csOneDriveDiagnose()" class="button" style="margin-left:8px;background:#e65100!important;color:#fff!important;border-color:#bf360c!important;"><?php esc_html_e( 'Diagnose', 'cloudscale-backup-restore' ); ?></button>
+                    <button type="button" onclick="csOneDriveSyncLatest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Copy Last Backup to Cloud', 'cloudscale-backup-restore' ); ?></button>
+                </div>
+                <div style="min-height:1.5em;margin-top:5px;">
+                    <span id="cs-onedrive-msg" style="font-size:0.85rem;font-weight:600;"></span>
+                </div>
+
+                <?php if ( $onedrive_remote ): ?>
+                <div class="cs-info-row cs-mt">
+                    <span><?php esc_html_e( 'Destination', 'cloudscale-backup-restore' ); ?></span>
+                    <strong><code><?php echo esc_html( rtrim( $onedrive_remote, ':' ) . ':' . ltrim( $onedrive_path, '/' ) ); ?></code></strong>
+                </div>
+                <div class="cs-info-row">
+                    <span><?php esc_html_e( 'Backups in OneDrive', 'cloudscale-backup-restore' ); ?></span>
+                    <strong id="cs-onedrive-count-val"><?php echo $onedrive_remote_count !== null ? (int) $onedrive_remote_count : (int) count( $onedrive_synced ); ?> in OneDrive &nbsp;&middot;&nbsp; <?php echo (int) count( $backups ); ?> local</strong>
+                </div>
+                <div class="cs-info-row">
+                    <span><?php esc_html_e( 'Last sync', 'cloudscale-backup-restore' ); ?></span>
+                    <strong><?php echo $onedrive_last ? esc_html( csbr_human_age( $onedrive_last ) . ' (' . wp_date( 'j M Y H:i', $onedrive_last ) . ')' ) : esc_html__( 'Never', 'cloudscale-backup-restore' ); ?></strong>
+                </div>
+                <?php if ( $onedrive_last_failed_entry ): ?>
+                <div class="cs-info-row" style="align-items:flex-start;">
+                    <span style="color:#c62828;padding-top:1px;"><?php esc_html_e( 'Sync error', 'cloudscale-backup-restore' ); ?></span>
+                    <span style="color:#c62828;font-weight:700;display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;overflow-wrap:anywhere;word-break:break-word;">
+                        <span><?php echo esc_html( csbr_human_age( $onedrive_last_failed_entry['time'] ) . ' (' . wp_date( 'j M Y H:i', $onedrive_last_failed_entry['time'] ) . ')' ); ?></span>
+                        <?php
+                        $_err_raw   = substr( $onedrive_last_failed_entry['error'] ?? 'Sync failed', 0, 400 );
                         $_err_clean = preg_replace( '/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} \S+ : /', '', $_err_raw );
                         $_err_parts = preg_split( '/ \d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} \S+ : /', $_err_clean, 3 );
                         ?>
@@ -1733,13 +2003,13 @@ function cs_admin_page(): void {
                 </div>
                 <div class="cs-info-row">
                     <span>Last S3 sync</span>
-                    <strong><?php echo $s3_last ? esc_html(cs_human_age($s3_last) . ' (' . wp_date('j M Y H:i', $s3_last) . ')') : esc_html__('Never', 'cloudscale-backup-restore'); ?></strong>
+                    <strong><?php echo $s3_last ? esc_html(csbr_human_age($s3_last) . ' (' . wp_date('j M Y H:i', $s3_last) . ')') : esc_html__('Never', 'cloudscale-backup-restore'); ?></strong>
                 </div>
                 <?php if ($s3_last_failed_entry): ?>
                 <div class="cs-info-row" style="align-items:flex-start;">
                     <span style="color:#c62828;padding-top:1px;"><?php esc_html_e( 'Sync error', 'cloudscale-backup-restore' ); ?></span>
                     <span style="color:#c62828;font-weight:700;display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;overflow-wrap:anywhere;word-break:break-word;">
-                        <span><?php echo esc_html( cs_human_age( $s3_last_failed_entry['time'] ) . ' (' . wp_date( 'j M Y H:i', $s3_last_failed_entry['time'] ) . ')' ); ?></span>
+                        <span><?php echo esc_html( csbr_human_age( $s3_last_failed_entry['time'] ) . ' (' . wp_date( 'j M Y H:i', $s3_last_failed_entry['time'] ) . ')' ); ?></span>
                         <?php
                         $_err_raw   = substr( $s3_last_failed_entry['error'] ?? 'Sync failed', 0, 400 );
                         $_err_clean = preg_replace( '/^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}:\d{2} \S+ : /', '', $_err_raw );
@@ -1825,6 +2095,7 @@ function cs_admin_page(): void {
                     <option value="ami">&#128247; AWS EC2 AMI Snapshots</option>
                     <option value="gdrive">&#128196; <?php esc_html_e( 'Google Drive', 'cloudscale-backup-restore' ); ?></option>
                     <option value="dropbox">&#128194; Dropbox</option>
+                    <option value="onedrive">&#9729; OneDrive</option>
                 </select>
                 <!-- Per-provider action bars — shown/hidden by JS -->
                 <div id="cs-hist-act-s3" class="cs-hist-act" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -1841,6 +2112,11 @@ function cs_admin_page(): void {
                     <button type="button" onclick="csDropboxHistoryRefresh()" class="button" id="cs-db-refresh-btn" style="background:#1565c0!important;color:#fff!important;border-color:#1565c0!important;">&#8635; <?php esc_html_e( 'Refresh', 'cloudscale-backup-restore' ); ?></button>
                     <span id="cs-db-golden-count" style="font-size:0.82rem;color:#f57f17;font-weight:600;">&#11088; <?php echo (int) $dropbox_golden_count; ?> / 4 golden&emsp;<?php echo (int) $dropbox_nongolden_count; ?> / <?php echo (int) $ami_max; ?> <?php esc_html_e( 'max backups', 'cloudscale-backup-restore' ); ?></span>
                     <span id="cs-db-msg" style="font-size:0.85rem;font-weight:600;"></span>
+                </div>
+                <div id="cs-hist-act-onedrive" class="cs-hist-act" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;">
+                    <button type="button" onclick="csOneDriveHistoryRefresh()" class="button" id="cs-od-refresh-btn" style="background:#1565c0!important;color:#fff!important;border-color:#1565c0!important;">&#8635; <?php esc_html_e( 'Refresh', 'cloudscale-backup-restore' ); ?></button>
+                    <span id="cs-od-golden-count" style="font-size:0.82rem;color:#f57f17;font-weight:600;">&#11088; <?php echo (int) $onedrive_golden_count; ?> / 4 golden&emsp;<?php echo (int) $onedrive_nongolden_count; ?> / <?php echo (int) $ami_max; ?> <?php esc_html_e( 'max backups', 'cloudscale-backup-restore' ); ?></span>
+                    <span id="cs-od-msg" style="font-size:0.85rem;font-weight:600;"></span>
                 </div>
                 <div id="cs-hist-act-ami" class="cs-hist-act" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;">
                     <button type="button" onclick="csAmiResetAndRefresh()" class="button" id="cs-ami-refresh-all" style="background:#1565c0!important;color:#fff!important;border-color:#1565c0!important;">&#8635; <?php esc_html_e( 'Refresh', 'cloudscale-backup-restore' ); ?></button>
@@ -1883,7 +2159,7 @@ function cs_admin_page(): void {
                             <td><?php echo esc_html( $sf['time'] ? wp_date( 'j M Y H:i', $sf['time'] ) : '—' ); ?></td>
                             <td id="cs-s3h-actions-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
                                 <button type="button" onclick="csS3HistorySetGolden('<?php echo $sf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-s3h-golden-btn-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $sf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $sf_golden ? __( 'Remove Golden Image', 'cloudscale-backup-restore' ) : __( 'Mark as Golden Image', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $sf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
-                                <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'cs_s3_download', 'file' => $sf_name, 'nonce' => wp_create_nonce( 'cs_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-backup-restore' ); ?></a>
+                                <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'csbr_s3_download', 'file' => $sf_name, 'nonce' => wp_create_nonce( 'csbr_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-backup-restore' ); ?></a>
                                 <button type="button" onclick="csS3HistoryDelete('<?php echo $sf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-backup-restore' ); ?></button>
                             </td>
                         </tr>
@@ -1930,7 +2206,7 @@ function cs_admin_page(): void {
                             <td><?php echo esc_html( $gf['time'] ? wp_date( 'j M Y H:i', $gf['time'] ) : '—' ); ?></td>
                             <td id="cs-gd-actions-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
                                 <button type="button" onclick="csGDriveHistorySetGolden('<?php echo $gf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-gd-golden-btn-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $gf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $gf_golden ? __( 'Remove Golden Image', 'cloudscale-backup-restore' ) : __( 'Mark as Golden Image', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $gf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
-                                <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'cs_gdrive_download', 'file' => $gf_name, 'nonce' => wp_create_nonce( 'cs_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-backup-restore' ); ?></a>
+                                <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'csbr_gdrive_download', 'file' => $gf_name, 'nonce' => wp_create_nonce( 'csbr_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-backup-restore' ); ?></a>
                                 <button type="button" onclick="csGDriveHistoryDelete('<?php echo $gf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-backup-restore' ); ?></button>
                             </td>
                         </tr>
@@ -1976,7 +2252,7 @@ function cs_admin_page(): void {
                             <td><?php echo esc_html( $dbf['time'] ? wp_date( 'j M Y H:i', $dbf['time'] ) : '—' ); ?></td>
                             <td id="cs-db-actions-<?php echo $dbf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
                                 <button type="button" onclick="csDropboxHistorySetGolden('<?php echo $dbf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-db-golden-btn-<?php echo $dbf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $dbf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $dbf_golden ? __( 'Remove Golden Image', 'cloudscale-backup-restore' ) : __( 'Mark as Golden Image', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $dbf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
-                                <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'cs_dropbox_download', 'file' => $dbf_name, 'nonce' => wp_create_nonce( 'cs_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-backup-restore' ); ?></a>
+                                <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'csbr_dropbox_download', 'file' => $dbf_name, 'nonce' => wp_create_nonce( 'csbr_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-backup-restore' ); ?></a>
                                 <button type="button" onclick="csDropboxHistoryDelete('<?php echo $dbf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-backup-restore' ); ?></button>
                             </td>
                         </tr>
@@ -1985,6 +2261,50 @@ function cs_admin_page(): void {
                 </table>
                 </div>
                 <p class="cs-empty" id="cs-db-empty" <?php echo ! empty( $dropbox_history ) ? 'style="display:none"' : ''; ?>><?php esc_html_e( 'No Dropbox backups found. Click "Sync from Dropbox" to query your Dropbox live.', 'cloudscale-backup-restore' ); ?></p>
+            </div>
+
+            <!-- ONEDRIVE PANE -->
+            <div id="cs-hist-pane-onedrive" class="cs-hist-pane" style="display:none">
+                <p class="cs-help" style="margin:0 0 12px;"><?php esc_html_e( 'Queries OneDrive live via rclone — picks up all backups including ones made before this screen existed, and removes any you deleted directly in OneDrive.', 'cloudscale-backup-restore' ); ?></p>
+                <div class="cs-table-wrap" <?php echo empty( $onedrive_history ) ? 'style="display:none"' : ''; ?> id="cs-od-table-wrap">
+                <table class="widefat cs-table" style="font-size:0.82rem;" id="cs-od-table">
+                    <thead><tr>
+                        <th><?php esc_html_e( 'File Name', 'cloudscale-backup-restore' ); ?></th>
+                        <th style="width:120px;"><?php esc_html_e( 'Tag', 'cloudscale-backup-restore' ); ?></th>
+                        <th style="width:80px;"><?php esc_html_e( 'Size', 'cloudscale-backup-restore' ); ?></th>
+                        <th style="width:130px;"><?php esc_html_e( 'Created', 'cloudscale-backup-restore' ); ?></th>
+                        <th style="width:180px;"><?php esc_html_e( 'Actions', 'cloudscale-backup-restore' ); ?></th>
+                    </tr></thead>
+                    <tbody id="cs-od-tbody">
+                    <?php $od_first_key = array_key_first( $onedrive_history ); ?>
+                    <?php foreach ( $onedrive_history as $odf_key => $odf ): ?>
+                        <?php
+                        $odf_name        = $odf['name'] ?? $odf_key;
+                        $odf_golden      = ! empty( $odf['golden'] );
+                        $odf_tag         = $odf['tag'] ?? '';
+                        $odf_key_e       = esc_attr( preg_replace( '/[^a-zA-Z0-9_\-]/', '_', $odf_name ) );
+                        $odf_js          = esc_js( $odf_name );
+                        $odf_delete_soon = ! $odf_golden && $odf_name === $onedrive_delete_soon_name;
+                        ?>
+                        <tr id="cs-od-row-<?php echo $odf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>"<?php if ( $odf_golden ): ?> class="cs-row-golden"<?php elseif ( $odf_delete_soon ): ?> class="cs-row-delete-soon"<?php endif; ?>>
+                            <td><?php echo esc_html( $odf_name ); ?><span class="cs-od-golden-star"<?php if ( ! $odf_golden ): ?> style="display:none;"<?php endif; ?>> &#11088;</span><?php if ( $odf_key === $od_first_key ) echo wp_kses( '<span class="cs-latest-badge">Latest</span>', [ 'span' => [ 'class' => [] ] ] ); ?><?php if ( $odf_delete_soon ) echo wp_kses( '<span class="cs-delete-soon-badge">Delete Soon</span>', [ 'span' => [ 'class' => [] ] ] ); ?></td>
+                            <td id="cs-od-tag-cell-<?php echo $odf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;">
+                                <span class="cs-od-tag-text"><?php if ( $odf_tag ): ?><?php echo esc_html( $odf_tag ); ?><?php else: ?><span class="cs-muted-text">No tag</span><?php endif; ?></span>
+                                <button type="button" onclick="csOneDriveHistoryTagEdit('<?php echo $odf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>','<?php echo esc_js( $odf_tag ); ?>')" class="button button-small" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;">Edit</button>
+                            </td>
+                            <td><?php echo esc_html( $odf['size_fmt'] ?? '—' ); ?></td>
+                            <td><?php echo esc_html( $odf['time'] ? wp_date( 'j M Y H:i', $odf['time'] ) : '—' ); ?></td>
+                            <td id="cs-od-actions-<?php echo $odf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
+                                <button type="button" onclick="csOneDriveHistorySetGolden('<?php echo $odf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-od-golden-btn-<?php echo $odf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $odf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $odf_golden ? __( 'Remove Golden Image', 'cloudscale-backup-restore' ) : __( 'Mark as Golden Image', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $odf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
+                                <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'csbr_onedrive_download', 'file' => $odf_name, 'nonce' => wp_create_nonce( 'csbr_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-backup-restore' ); ?></a>
+                                <button type="button" onclick="csOneDriveHistoryDelete('<?php echo $odf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-backup-restore' ); ?></button>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                    </tbody>
+                </table>
+                </div>
+                <p class="cs-empty" id="cs-od-empty" <?php echo ! empty( $onedrive_history ) ? 'style="display:none"' : ''; ?>><?php esc_html_e( 'No OneDrive backups found. Click "Refresh" to query your OneDrive live.', 'cloudscale-backup-restore' ); ?></p>
             </div>
 
             <!-- AMI PANE -->
@@ -2061,6 +2381,25 @@ function cs_admin_page(): void {
 
         </div><!-- /cs-tab-cloud -->
 
+        <?php csbr_par_render_tab(); ?>
+
+        <!-- ===================== ACTIVITY LOG ===================== -->
+        <div id="cs-log-panel" style="margin-top:18px;border:1px solid #37474f;border-radius:6px;background:#1e272e;overflow:hidden;">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 14px;background:#263238;">
+                <span style="color:#fff!important;font-family:monospace;font-size:0.82rem;font-weight:700;">&#128196; Activity Log</span>
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <span id="cs-log-status" style="font-size:0.72rem;color:#aaa!important;"></span>
+                    <button id="cs-log-copy" type="button" style="background:#37474f!important;border:none!important;color:#fff!important;border-radius:4px;padding:2px 10px;font-size:0.75rem;cursor:pointer;box-shadow:none!important;">&#128203; Copy</button>
+                    <button id="cs-log-refresh" type="button" style="background:#37474f!important;border:none!important;color:#fff!important;border-radius:4px;padding:2px 10px;font-size:0.75rem;cursor:pointer;box-shadow:none!important;">&#8635; Refresh</button>
+                    <button id="cs-log-clear" type="button" style="background:#37474f!important;border:none!important;color:#fff!important;border-radius:4px;padding:2px 10px;font-size:0.75rem;cursor:pointer;box-shadow:none!important;">Clear</button>
+                </div>
+            </div>
+            <div id="cs-log-body" style="max-height:calc(10 * 0.76rem * 1.7 + 14px);overflow-y:auto;padding:6px 14px 8px;">
+                <div id="cs-log-entries" style="font-family:monospace;font-size:0.76rem;line-height:1.7;"></div>
+                <div id="cs-log-empty" style="font-family:monospace;font-size:0.76rem;color:#fff!important;font-style:italic;padding:2px 0;">No log entries yet.</div>
+            </div>
+        </div>
+
     </div><!-- /cs-wrap -->
     <?php
 }
@@ -2069,12 +2408,12 @@ function cs_admin_page(): void {
 // AJAX — Run backup
 // ============================================================
 
-add_action('wp_ajax_cs_run_backup', function (): void {
+add_action('wp_ajax_csbr_run_backup', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    cs_ensure_backup_dir();
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    csbr_ensure_backup_dir();
 
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_ajax_referer() above; boolean !empty() checkbox checks only
     $include_db        = !empty($_POST['include_db']);
@@ -2098,14 +2437,14 @@ add_action('wp_ajax_cs_run_backup', function (): void {
     ignore_user_abort(true);
 
     try {
-        $filename = cs_create_backup(
+        $filename = csbr_create_backup(
             $include_db, $include_media, $include_plugins, $include_themes,
             $include_mu, $include_languages, $include_dropins, $include_htaccess, $include_wpconfig
         );
-        cs_enforce_retention();
-        $s3      = $GLOBALS['cs_last_s3_result']      ?? ['skipped' => true];
-        $gdrive  = $GLOBALS['cs_last_gdrive_result']  ?? ['skipped' => true];
-        $dropbox = $GLOBALS['cs_last_dropbox_result'] ?? ['skipped' => true];
+        csbr_enforce_retention();
+        $s3      = $GLOBALS['csbr_last_s3_result']      ?? ['skipped' => true];
+        $gdrive  = $GLOBALS['csbr_last_gdrive_result']  ?? ['skipped' => true];
+        $dropbox = $GLOBALS['csbr_last_dropbox_result'] ?? ['skipped' => true];
         $s3_msg = '';
         if (!isset($s3['skipped'])) {
             $s3_msg = $s3['ok']
@@ -2143,10 +2482,10 @@ add_action('wp_ajax_cs_run_backup', function (): void {
 // AJAX — Async backup: start (returns job ID immediately)
 // ============================================================
 
-add_action( 'wp_ajax_cs_start_backup', function (): void {
+add_action( 'wp_ajax_csbr_start_backup', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    cs_ensure_backup_dir();
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    csbr_ensure_backup_dir();
 
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
     $opts = [
@@ -2166,8 +2505,8 @@ add_action( 'wp_ajax_cs_start_backup', function (): void {
         wp_send_json_error( 'Select at least one option.' );
     }
 
-    $job_id = 'cs_bkjob_' . bin2hex( random_bytes( 8 ) );
-    cs_set_job( $job_id, [ 'status' => 'queued', 'started' => time(), 'opts' => $opts ] );
+    $job_id = 'csbr_bkjob_' . bin2hex( random_bytes( 8 ) );
+    csbr_set_job( $job_id, [ 'status' => 'queued', 'started' => time(), 'opts' => $opts ] );
 
     // Register the backup to run after the HTTP response is sent, then send the response.
     // register_shutdown_function fires after wp_die()/exit, at which point fastcgi_finish_request()
@@ -2176,7 +2515,7 @@ add_action( 'wp_ajax_cs_start_backup', function (): void {
         if ( function_exists( 'fastcgi_finish_request' ) ) fastcgi_finish_request();
         set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged
         ignore_user_abort( true );
-        cs_execute_backup_job( $job_id, $opts );
+        csbr_execute_backup_job( $job_id, $opts );
     } );
 
     wp_send_json_success( [ 'job_id' => $job_id ] );
@@ -2186,22 +2525,78 @@ add_action( 'wp_ajax_cs_start_backup', function (): void {
 // AJAX — Async backup: poll status
 // ============================================================
 
-add_action( 'wp_ajax_cs_backup_status', function (): void {
+add_action( 'wp_ajax_csbr_backup_status', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
 
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
     $job_id = sanitize_key( $_POST['job_id'] ?? '' );
-    if ( ! $job_id || ( ! str_starts_with( $job_id, 'cs_bkjob_' ) && ! str_starts_with( $job_id, 'cs_syncjob_' ) ) ) {
+    if ( ! $job_id || ( ! str_starts_with( $job_id, 'csbr_bkjob_' ) && ! str_starts_with( $job_id, 'csbr_syncjob_' ) ) ) {
         wp_send_json_error( 'Invalid job ID.' );
     }
 
-    $data = cs_get_job( $job_id );
+    $data = csbr_get_job( $job_id );
     if ( $data === false ) {
         wp_send_json_error( 'Job not found or expired.' );
     }
 
     wp_send_json_success( $data );
+} );
+
+// ============================================================
+// Email notifications
+// ============================================================
+
+/**
+ * Send a backup/restore notification email if notifications are enabled.
+ *
+ * Respects the csbr_notify_on option: 'both', 'success', or 'failure'.
+ * Falls back to the site admin email when csbr_notify_email is blank.
+ *
+ * @since 3.2.251
+ * @param bool   $success       True on success, false on failure.
+ * @param string $subject_extra Short descriptor appended to the subject line.
+ * @param string $body          Plain-text email body.
+ * @return void
+ */
+function csbr_send_backup_notification( bool $success, string $subject_extra, string $body ): void {
+    if ( ! get_option( 'csbr_notify_enabled', false ) ) {
+        return;
+    }
+    $notify_on = (string) get_option( 'csbr_notify_on', 'both' );
+    if ( $notify_on === 'success' && ! $success ) {
+        csbr_log( '[CloudScale Backup & Restore] Email notification skipped (notify_on=success, this was a failure).' );
+        return;
+    }
+    if ( $notify_on === 'failure' && $success ) {
+        csbr_log( '[CloudScale Backup & Restore] Email notification skipped (notify_on=failure, this was a success).' );
+        return;
+    }
+    $to = (string) get_option( 'csbr_notify_email', '' );
+    if ( ! is_email( $to ) ) {
+        $to = (string) get_option( 'admin_email' );
+    }
+    if ( ! is_email( $to ) ) {
+        csbr_log( '[CloudScale Backup & Restore] Email notification skipped — no valid email address configured.' );
+        return;
+    }
+    $site    = get_bloginfo( 'name' ) ?: home_url();
+    $status  = $success ? 'Success' : 'Failed';
+    $subject = '[' . $site . '] Backup ' . $status . ': ' . $subject_extra;
+    csbr_log( '[CloudScale Backup & Restore] Sending notification email to ' . $to . ' — subject: ' . $subject );
+    $sent = wp_mail( $to, $subject, $body );
+    if ( $sent ) {
+        csbr_log( '[CloudScale Backup & Restore] Notification email sent to ' . $to );
+    } else {
+        csbr_log( '[CloudScale Backup & Restore] ERROR: wp_mail() returned false for notification email to ' . $to . ' — check wp_mail_failed log entries and server mail configuration.' );
+    }
+}
+
+// Log wp_mail failures to the activity log so they are visible in the UI.
+add_action( 'wp_mail_failed', function ( $error ): void {
+    if ( $error instanceof WP_Error ) {
+        csbr_log( '[CloudScale Backup & Restore] wp_mail_failed: ' . $error->get_error_message() . ' (code: ' . $error->get_error_code() . ')' );
+    }
 } );
 
 // ============================================================
@@ -2211,42 +2606,55 @@ add_action( 'wp_ajax_cs_backup_status', function (): void {
 /**
  * Run the actual backup job after the HTTP response has been flushed to the browser.
  *
- * @since 3.2.189
+ * @since 3.2.251
  */
-function cs_execute_backup_job( string $job_id, array $opts ): void {
-    $data = cs_get_job( $job_id );
+function csbr_execute_backup_job( string $job_id, array $opts ): void {
+    $data = csbr_get_job( $job_id );
     if ( $data === false ) return;
-    cs_set_job( $job_id, array_merge( $data, [ 'status' => 'running' ] ) );
+    // Abort if a restore is in progress — running a backup mid-restore would corrupt both operations.
+    if ( get_transient( 'csbr_restore_active' ) ) {
+        csbr_log( '[CloudScale Backup & Restore] Backup job ' . $job_id . ' skipped — a restore is currently in progress.' );
+        csbr_set_job( $job_id, array_merge( $data, [ 'status' => 'failed', 'error' => 'Skipped: restore in progress.' ] ) );
+        return;
+    }
+    csbr_set_job( $job_id, array_merge( $data, [ 'status' => 'running' ] ) );
     try {
         // Cloud space pre-check: estimate from the most recent local backup zip.
         // If any enabled rclone provider has less free space than that estimate, abort early.
-        $existing_zips = glob( CS_BACKUP_DIR . '*.zip' ) ?: [];
+        $existing_zips = glob( CSBR_BACKUP_DIR . '*.zip' ) ?: [];
         if ( $existing_zips ) {
             rsort( $existing_zips );
             $est_size     = (int) filesize( $existing_zips[0] );
             $est_mb       = round( $est_size / 1048576, 1 );
             $space_errors = [];
-            if ( get_option( 'cs_dropbox_sync_enabled', false ) && get_option( 'cs_dropbox_remote', '' ) ) {
-                $free = cs_rclone_free_bytes( get_option( 'cs_dropbox_remote', '' ) );
+            if ( get_option( 'csbr_dropbox_sync_enabled', false ) && get_option( 'csbr_dropbox_remote', '' ) ) {
+                $free = csbr_rclone_free_bytes( get_option( 'csbr_dropbox_remote', '' ) );
                 if ( $free !== null && $free < $est_size ) {
                     $space_errors[] = 'Dropbox has ' . round( $free / 1048576, 1 ) . ' MB free (last backup was ' . $est_mb . ' MB).';
                 }
             }
-            if ( get_option( 'cs_gdrive_sync_enabled', true ) && get_option( 'cs_gdrive_remote', '' ) ) {
-                $free = cs_rclone_free_bytes( get_option( 'cs_gdrive_remote', '' ) );
+            if ( get_option( 'csbr_gdrive_sync_enabled', true ) && get_option( 'csbr_gdrive_remote', '' ) ) {
+                $free = csbr_rclone_free_bytes( get_option( 'csbr_gdrive_remote', '' ) );
                 if ( $free !== null && $free < $est_size ) {
                     $space_errors[] = 'Google Drive has ' . round( $free / 1048576, 1 ) . ' MB free (last backup was ' . $est_mb . ' MB).';
                 }
             }
+            if ( get_option( 'csbr_onedrive_sync_enabled', false ) && get_option( 'csbr_onedrive_remote', '' ) ) {
+                $free = csbr_rclone_free_bytes( get_option( 'csbr_onedrive_remote', '' ) );
+                if ( $free !== null && $free < $est_size ) {
+                    $space_errors[] = 'OneDrive has ' . round( $free / 1048576, 1 ) . ' MB free (last backup was ' . $est_mb . ' MB).';
+                }
+            }
             if ( $space_errors ) {
                 $msg = 'Not enough cloud storage space — ' . implode( ' ', $space_errors ) . ' Free up space or disable that provider before backing up.';
-                cs_log( '[CloudScale Backup] Backup aborted — ' . $msg );
-                cs_set_job( $job_id, [ 'status' => 'error', 'message' => $msg ] );
+                csbr_log( '[CloudScale Backup & Restore] Backup aborted — ' . $msg );
+                csbr_set_job( $job_id, [ 'status' => 'error', 'message' => $msg ] );
+                csbr_send_backup_notification( false, 'Insufficient cloud storage', "Backup failed — insufficient cloud storage.\n\nError: {$msg}\n\nSite: " . home_url() . "\n" );
                 wp_die();
             }
         }
 
-        $filename = cs_create_backup(
+        $filename = csbr_create_backup(
             ! empty( $opts['include_db'] ),
             ! empty( $opts['include_media'] ),
             ! empty( $opts['include_plugins'] ),
@@ -2257,11 +2665,12 @@ function cs_execute_backup_job( string $job_id, array $opts ): void {
             ! empty( $opts['include_htaccess'] ),
             ! empty( $opts['include_wpconfig'] )
         );
-        cs_enforce_retention();
+        csbr_enforce_retention();
 
-        $s3      = $GLOBALS['cs_last_s3_result']      ?? [ 'skipped' => true ];
-        $gdrive  = $GLOBALS['cs_last_gdrive_result']  ?? [ 'skipped' => true ];
-        $dropbox = $GLOBALS['cs_last_dropbox_result'] ?? [ 'skipped' => true ];
+        $s3       = $GLOBALS['csbr_last_s3_result']       ?? [ 'skipped' => true ];
+        $gdrive   = $GLOBALS['csbr_last_gdrive_result']   ?? [ 'skipped' => true ];
+        $dropbox  = $GLOBALS['csbr_last_dropbox_result']  ?? [ 'skipped' => true ];
+        $onedrive = $GLOBALS['csbr_last_onedrive_result'] ?? [ 'skipped' => true ];
 
         $s3_msg = '';
         if ( ! isset( $s3['skipped'] ) ) {
@@ -2275,20 +2684,40 @@ function cs_execute_backup_job( string $job_id, array $opts ): void {
         if ( ! isset( $dropbox['skipped'] ) ) {
             $dropbox_msg = $dropbox['ok'] ? '✓ Synced to Dropbox: ' . $dropbox['dest'] : '⚠ Dropbox sync failed: ' . $dropbox['error'];
         }
+        $onedrive_msg = '';
+        if ( ! isset( $onedrive['skipped'] ) ) {
+            $onedrive_msg = $onedrive['ok'] ? '✓ Synced to OneDrive: ' . $onedrive['dest'] : '⚠ OneDrive sync failed: ' . $onedrive['error'];
+        }
 
-        cs_set_job( $job_id, [
-            'status'      => 'complete',
-            'filename'    => $filename,
-            's3_ok'       => $s3['ok']      ?? null,
-            's3_msg'      => $s3_msg,
-            'gdrive_ok'   => $gdrive['ok']  ?? null,
-            'gdrive_msg'  => $gdrive_msg,
-            'dropbox_ok'  => $dropbox['ok'] ?? null,
-            'dropbox_msg' => $dropbox_msg,
+        csbr_set_job( $job_id, [
+            'status'        => 'complete',
+            'filename'      => $filename,
+            's3_ok'         => $s3['ok']       ?? null,
+            's3_msg'        => $s3_msg,
+            'gdrive_ok'     => $gdrive['ok']   ?? null,
+            'gdrive_msg'    => $gdrive_msg,
+            'dropbox_ok'    => $dropbox['ok']  ?? null,
+            'dropbox_msg'   => $dropbox_msg,
+            'onedrive_ok'   => $onedrive['ok'] ?? null,
+            'onedrive_msg'  => $onedrive_msg,
         ] );
 
+        // Save completion timestamp so the dashboard widget uses the same reference
+        // point as cloud sync log entries (all recorded after the zip is created).
+        update_option( 'csbr_last_backup_time', time(), false );
+
+        $cloud_lines = array_filter( [ $s3_msg, $gdrive_msg, $dropbox_msg, $onedrive_msg ] );
+        $notify_body  = "Backup completed successfully.\n\nFile: " . basename( $filename ) . "\nSize: " . csbr_format_size( (int) filesize( $filename ) ) . "\n";
+        if ( $cloud_lines ) {
+            $notify_body .= "\nCloud sync:\n" . implode( "\n", $cloud_lines ) . "\n";
+        }
+        $notify_body .= "\nSite: " . home_url() . "\n";
+        csbr_send_backup_notification( true, basename( $filename ), $notify_body );
+
     } catch ( Exception $e ) {
-        cs_set_job( $job_id, [ 'status' => 'error', 'message' => $e->getMessage() ] );
+        csbr_log( '[CloudScale Backup & Restore] EXCEPTION in backup job ' . $job_id . ': ' . $e->getMessage() );
+        csbr_set_job( $job_id, [ 'status' => 'error', 'message' => $e->getMessage() ] );
+        csbr_send_backup_notification( false, 'Error', "Backup failed.\n\nError: " . $e->getMessage() . "\n\nSite: " . home_url() . "\n" );
     }
 }
 
@@ -2296,15 +2725,15 @@ function cs_execute_backup_job( string $job_id, array $opts ): void {
 // AJAX — Delete backup
 // ============================================================
 
-add_action('wp_ajax_cs_delete_backup', function (): void {
+add_action('wp_ajax_csbr_delete_backup', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $file = sanitize_file_name( wp_unslash( $_POST['file'] ?? '' ) );
-    $path = CS_BACKUP_DIR . $file;
-    if (file_exists($path) && strpos(realpath($path), realpath(CS_BACKUP_DIR)) === 0) {
+    $path = CSBR_BACKUP_DIR . $file;
+    if (file_exists($path) && strpos(realpath($path), realpath(CSBR_BACKUP_DIR)) === 0) {
         wp_delete_file( $path );
         wp_send_json_success('Deleted.');
     }
@@ -2312,32 +2741,99 @@ add_action('wp_ajax_cs_delete_backup', function (): void {
 });
 
 // ============================================================
+// Restore source helpers (shared by history + staged upload)
+// ============================================================
+
+/**
+ * Resolve a restore source to an absolute path from either a backup-dir filename
+ * or a staged-upload key. Calls wp_send_json_error() and exits on failure.
+ *
+ * @since 3.2.251
+ * @param array $post POST data containing 'file' or 'staged_key'.
+ * @return array{path:string,filename:string,ext:string,staged:bool,staged_key:string}
+ */
+function csbr_resolve_restore_source( array $post ): array {
+    if ( ! empty( $post['staged_key'] ) ) {
+        $key    = sanitize_text_field( wp_unslash( $post['staged_key'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- caller verifies nonce
+        $staged = get_transient( 'csbr_staged_' . $key );
+        if ( ! $staged || empty( $staged['path'] ) || ! file_exists( $staged['path'] ) ) {
+            wp_send_json_error( 'Staged file not found or expired. Please re-upload.' );
+        }
+        return [
+            'path'       => $staged['path'],
+            'filename'   => $staged['filename'],
+            'ext'        => $staged['ext'],
+            'staged'     => true,
+            'staged_key' => $key,
+        ];
+    }
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- caller verifies nonce
+    $file = sanitize_file_name( wp_unslash( $post['file'] ?? '' ) );
+    $path = CSBR_BACKUP_DIR . $file;
+    if ( ! file_exists( $path ) || strpos( realpath( $path ), realpath( CSBR_BACKUP_DIR ) ) !== 0 ) {
+        wp_send_json_error( 'Backup file not found.' );
+    }
+    return [
+        'path'       => $path,
+        'filename'   => $file,
+        'ext'        => strtolower( pathinfo( $file, PATHINFO_EXTENSION ) ),
+        'staged'     => false,
+        'staged_key' => '',
+    ];
+}
+
+/**
+ * Delete a staged upload file and its transient.
+ *
+ * Called by the user-triggered delete button (csbr_delete_staged AJAX action).
+ * Restore handlers no longer call this — staged files persist for the full
+ * 2-hour transient window so the same upload can be used for multiple restores.
+ *
+ * @since 3.2.251
+ * @param array $source Return value of csbr_resolve_restore_source().
+ * @return void
+ */
+function csbr_cleanup_staged( array $source ): void {
+    if ( $source['staged'] && file_exists( $source['path'] ) ) {
+        wp_delete_file( $source['path'] );
+        delete_transient( 'csbr_staged_' . $source['staged_key'] );
+    }
+}
+
+// ============================================================
 // AJAX — Restore from stored backup
 // ============================================================
 
-add_action('wp_ajax_cs_restore_backup', function (): void {
-    if ( ! current_user_can( 'manage_options' ) ) {
-        wp_send_json_error( 'Forbidden', 403 );
-    }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+add_action('wp_ajax_csbr_restore_backup', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
     ignore_user_abort(true);
 
-    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
-    $file = sanitize_file_name( wp_unslash( $_POST['file'] ?? '' ) );
-    $path = CS_BACKUP_DIR . $file;
-
-    if (!file_exists($path) || strpos(realpath($path), realpath(CS_BACKUP_DIR)) !== 0) {
-        wp_send_json_error('Backup file not found.');
-    }
+    $source   = csbr_resolve_restore_source( $_POST ); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified above
+    $src_size = file_exists( $source['path'] ) ? CloudScale_Backup_Utils::format_size( (int) filesize( $source['path'] ) ) : 'unknown size';
+    csbr_log( '[CloudScale Backup & Restore] Full restore initiated — file: ' . ( $source['filename'] ?? '?' ) . ' (' . $src_size . ')' );
 
     try {
-        cs_maintenance_on();
-        cs_restore_from_zip($path);
-        cs_maintenance_off();
+        set_transient( 'csbr_restore_active', 1, 10 * MINUTE_IN_SECONDS );
+        csbr_log( '[CloudScale Backup & Restore] Maintenance mode ON' );
+        csbr_maintenance_on();
+        if ( $source['ext'] === 'sql' ) {
+            csbr_restore_sql_file( $source['path'] );
+        } else {
+            csbr_restore_from_zip( $source['path'] );
+        }
+        csbr_maintenance_off();
+        csbr_log( '[CloudScale Backup & Restore] Maintenance mode OFF — restore complete' );
+        delete_transient( 'csbr_restore_active' );
+        csbr_send_backup_notification( true, 'Restore completed', "Restore completed successfully.\n\nFile: {$source['filename']}\n\nSite: " . home_url() . "\n" );
         wp_send_json_success('Database restored successfully. Maintenance mode disabled. Site is back online.');
     } catch (Exception $e) {
-        cs_maintenance_off(); // Always remove maintenance mode even on failure
+        csbr_maintenance_off();
+        delete_transient( 'csbr_restore_active' );
+        csbr_log( '[CloudScale Backup & Restore] Maintenance mode OFF — restore failed' );
+        csbr_log( '[CloudScale Backup & Restore] EXCEPTION in full restore: ' . $e->getMessage() . ' — file: ' . ( $source['filename'] ?? '?' ) );
+        csbr_send_backup_notification( false, 'Restore failed', "Restore failed.\n\nFile: {$source['filename']}\nError: " . $e->getMessage() . "\n\nSite: " . home_url() . "\n" );
         wp_send_json_error('Restore failed: ' . $e->getMessage() . ' — Maintenance mode has been disabled.');
     }
 });
@@ -2346,15 +2842,15 @@ add_action('wp_ajax_cs_restore_backup', function (): void {
 // AJAX — Restore from upload
 // ============================================================
 
-add_action('wp_ajax_cs_restore_upload', function (): void {
+add_action('wp_ajax_csbr_restore_upload', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
     ignore_user_abort(true);
 
-    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.InputNotValidated -- nonce verified via check_ajax_referer( 'cs_nonce', 'nonce' ); tmp_name is a server path, not user input; file extension is validated below
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.InputNotValidated -- nonce verified via check_ajax_referer( 'csbr_nonce', 'nonce' ); tmp_name is a server path, not user input; file extension is validated below
     if (empty($_FILES['backup_file'])) {
         wp_send_json_error('No file uploaded.');
     }
@@ -2367,20 +2863,579 @@ add_action('wp_ajax_cs_restore_upload', function (): void {
         wp_send_json_error('Only .zip or .sql files accepted.');
     }
 
+    $uploaded_name = sanitize_file_name( wp_unslash( $_FILES['backup_file']['name'] ?? '' ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.NonceVerification.Missing -- nonce verified via check_ajax_referer() above; sanitized via sanitize_file_name()
+    $up_size       = file_exists( $tmp ) ? CloudScale_Backup_Utils::format_size( (int) filesize( $tmp ) ) : 'unknown size';
+    csbr_log( '[CloudScale Backup & Restore] Restore-from-upload initiated — file: ' . $uploaded_name . ' (' . $up_size . ')' );
+
     try {
-        cs_maintenance_on();
+        set_transient( 'csbr_restore_active', 1, 10 * MINUTE_IN_SECONDS );
+        csbr_log( '[CloudScale Backup & Restore] Maintenance mode ON' );
+        csbr_maintenance_on();
         if ($ext === 'zip') {
-            cs_restore_from_zip($tmp);
+            csbr_restore_from_zip($tmp);
         } else {
-            cs_restore_sql_file($tmp);
+            csbr_restore_sql_file($tmp);
         }
-        cs_maintenance_off();
+        csbr_maintenance_off();
+        csbr_log( '[CloudScale Backup & Restore] Maintenance mode OFF — restore complete' );
+        delete_transient( 'csbr_restore_active' );
+        csbr_send_backup_notification( true, 'Restore from upload completed', "Restore from uploaded file completed successfully.\n\nFile: {$uploaded_name}\n\nSite: " . home_url() . "\n" );
         wp_send_json_success('Database restored. Maintenance mode disabled. Site is back online.');
     } catch (Exception $e) {
-        cs_maintenance_off();
+        csbr_maintenance_off();
+        delete_transient( 'csbr_restore_active' );
+        csbr_log( '[CloudScale Backup & Restore] Maintenance mode OFF — restore failed' );
+        csbr_log( '[CloudScale Backup & Restore] EXCEPTION in restore-from-upload: ' . $e->getMessage() );
+        csbr_send_backup_notification( false, 'Restore from upload failed', "Restore from uploaded file failed.\n\nError: " . $e->getMessage() . "\n\nSite: " . home_url() . "\n" );
         wp_send_json_error('Restore failed: ' . $e->getMessage());
     }
 });
+
+// ============================================================
+// AJAX — Chunked upload: receive one 2 MB slice, assemble on final chunk
+// ====================================================================
+add_action( 'wp_ajax_csbr_upload_chunk', function (): void {
+	if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+	check_ajax_referer( 'csbr_nonce', 'nonce' );
+
+	// phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput -- nonce verified above
+	$upload_key   = sanitize_key( wp_unslash( $_POST['upload_key'] ?? '' ) );
+	$chunk_index  = max( 0, intval( $_POST['chunk_index'] ?? 0 ) );
+	$total_chunks = max( 1, intval( $_POST['total_chunks'] ?? 1 ) );
+	$orig_name    = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
+	// phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput
+
+	if ( ! $upload_key || ! $orig_name ) {
+		wp_send_json_error( 'Missing parameters.' );
+	}
+
+	$ext = strtolower( pathinfo( $orig_name, PATHINFO_EXTENSION ) );
+	if ( ! in_array( $ext, [ 'zip', 'sql' ], true ) ) {
+		wp_send_json_error( 'Only .zip and .sql files are accepted.' );
+	}
+
+	// phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+	if ( empty( $_FILES['chunk_data']['tmp_name'] ) || ! is_uploaded_file( $_FILES['chunk_data']['tmp_name'] ) ) {
+		wp_send_json_error( 'No chunk data received.' );
+	}
+	$tmp        = $_FILES['chunk_data']['tmp_name']; // Server-controlled PHP temp path — not user-supplied data.
+	$chunk_size = $_FILES['chunk_data']['size'] ?? 0;
+	// phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotValidated, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+
+	// Log upload start on first chunk.
+	if ( 0 === $chunk_index ) {
+		CloudScale_Backup_Utils::log( "[CloudScale Backup & Restore] Upload started: {$orig_name} ({$total_chunks} chunk(s))" );
+	}
+
+	// Save chunk to a dedicated temp directory.
+	$chunk_dir = WP_CONTENT_DIR . '/csbr-staging/chunks/' . $upload_key . '/';
+	if ( ! is_dir( $chunk_dir ) ) {
+		wp_mkdir_p( $chunk_dir );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- WP Filesystem unavailable; protecting staging dir
+		file_put_contents( $chunk_dir . '.htaccess', "Deny from all\n" );
+	}
+
+	$chunk_path = $chunk_dir . sprintf( 'chunk_%05d', $chunk_index );
+	// Use WP Filesystem to move the uploaded chunk out of the PHP temp dir.
+	global $wp_filesystem;
+	if ( empty( $wp_filesystem ) ) {
+		require_once ABSPATH . 'wp-admin/includes/file.php';
+		WP_Filesystem();
+	}
+	if ( ! $wp_filesystem->move( $tmp, $chunk_path, true ) ) {
+		CloudScale_Backup_Utils::log( "[CloudScale Backup & Restore] Upload error: failed to save chunk {$chunk_index} of {$orig_name}" );
+		wp_send_json_error( 'Failed to save chunk.' );
+	}
+
+	// Not the last chunk — acknowledge and wait for more.
+	if ( $chunk_index < $total_chunks - 1 ) {
+		wp_send_json_success( [ 'chunk' => $chunk_index, 'assembled' => false ] );
+	}
+
+	// Last chunk: assemble all pieces into the staging file.
+	$stage_dir = WP_CONTENT_DIR . '/csbr-staging/';
+	if ( ! is_dir( $stage_dir ) ) {
+		wp_mkdir_p( $stage_dir );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- WP Filesystem unavailable
+		file_put_contents( $stage_dir . '.htaccess', "Deny from all\n" );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- WP Filesystem unavailable
+		file_put_contents( $stage_dir . 'index.php', "<?php // Silence\n" );
+	}
+
+	$key         = wp_generate_password( 32, false );
+	$staged_path = $stage_dir . $key . '.' . $ext;
+
+	// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming binary assembly
+	$out = fopen( $staged_path, 'wb' );
+	if ( ! $out ) {
+		CloudScale_Backup_Utils::log( "[CloudScale Backup & Restore] Upload error: could not create staged file for {$orig_name}" );
+		wp_send_json_error( 'Could not create staged file.' );
+	}
+	$ok         = true;
+	$total_size = 0;
+	for ( $i = 0; $i < $total_chunks; $i++ ) {
+		$cf = $chunk_dir . sprintf( 'chunk_%05d', $i );
+		if ( ! file_exists( $cf ) ) { $ok = false; break; }
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming binary assembly
+		$in = fopen( $cf, 'rb' );
+		if ( $in ) {
+			$total_size += stream_copy_to_stream( $in, $out );
+			fclose( $in ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- paired fopen above
+		}
+		wp_delete_file( $cf );
+	}
+	fclose( $out ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- paired fopen above
+	@rmdir( $chunk_dir ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- best-effort cleanup
+
+	if ( ! $ok ) {
+		wp_delete_file( $staged_path );
+		CloudScale_Backup_Utils::log( "[CloudScale Backup & Restore] Upload error: missing chunk(s) assembling {$orig_name}" );
+		wp_send_json_error( 'One or more chunks missing — upload incomplete.' );
+	}
+
+	$size_fmt = CloudScale_Backup_Utils::format_size( $total_size );
+	CloudScale_Backup_Utils::log( "[CloudScale Backup & Restore] Upload complete: {$orig_name} ({$size_fmt}, {$total_chunks} chunk(s)) — staged for restore" );
+
+	set_transient( 'csbr_staged_' . $key, [
+		'path'     => $staged_path,
+		'filename' => $orig_name,
+		'ext'      => $ext,
+		'time'     => time(),
+	], 1800 );
+
+	wp_send_json_success( [
+		'key'      => $key,
+		'filename' => $orig_name,
+		'ext'      => $ext,
+		'assembled' => true,
+	] );
+} );
+
+// AJAX — Log a client-side event (network errors, cancellations) to the activity log
+// ==================================================================================
+add_action( 'wp_ajax_csbr_log_event', function (): void {
+	if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+	check_ajax_referer( 'csbr_nonce', 'nonce' );
+	// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- sanitize_text_field handles it
+	$msg = sanitize_text_field( wp_unslash( $_POST['message'] ?? '' ) );
+	if ( $msg ) {
+		CloudScale_Backup_Utils::log( '[CloudScale Backup & Restore] ' . $msg );
+	}
+	wp_send_json_success();
+} );
+
+// AJAX — Delete a staged upload file + transient
+// ============================================================
+// AJAX — Send test notification email
+// ============================================================
+
+add_action( 'wp_ajax_csbr_send_test_email', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+
+    $to = sanitize_email( wp_unslash( $_POST['email'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified above
+    if ( ! is_email( $to ) ) {
+        $to = (string) get_option( 'admin_email' );
+    }
+    if ( ! is_email( $to ) ) {
+        wp_send_json_error( [ 'msg' => 'No valid email address.', 'port_warning' => '' ] );
+    }
+
+    // Check outbound SMTP port availability before attempting to send.
+    $smtp_ports = [ 587 => 'STARTTLS', 465 => 'SSL', 25 => 'plain' ];
+    $open_ports = [];
+    $port_log   = [];
+    foreach ( $smtp_ports as $port => $label ) {
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fsockopen -- raw TCP port probe; no WP equivalent for non-HTTP sockets
+        $sock = @fsockopen( 'smtp.gmail.com', $port, $errno, $errstr, 3 ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- expected to fail when port is blocked
+        if ( $sock ) {
+            $open_ports[] = $port . ' (' . $label . ')';
+            fclose( $sock ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closing a network socket, not a file
+            $port_log[] = 'port ' . $port . ' open';
+        } else {
+            $port_log[] = 'port ' . $port . ' blocked';
+        }
+    }
+
+    // Detect whether a local MTA is running (postfix / sendmail / exim).
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_pgrep -- read-only process list probe; no exec/shell_exec
+    $mta_running  = false;
+    $mta_procs    = [ 'postfix', 'master', 'sendmail', 'exim', 'exim4' ];
+    foreach ( $mta_procs as $proc ) {
+        // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- read-only pgrep; suppressed per plugin policy
+        exec( 'pgrep -x ' . escapeshellarg( $proc ) . ' 2>/dev/null', $pgrep_out, $pgrep_rc ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec
+        if ( 0 === $pgrep_rc ) {
+            $mta_running = true;
+            break;
+        }
+    }
+
+    // If an MTA is running, check whether it has a relay configured.
+    // Without a relayhost, Postfix attempts direct delivery via port 25 — blocked on AWS EC2.
+    $mta_has_relay = false;
+    if ( $mta_running ) {
+        // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- read-only postconf query
+        exec( 'postconf -h relayhost 2>/dev/null', $relay_out, $relay_rc ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec
+        $relayhost = trim( $relay_out[0] ?? '' );
+        $mta_has_relay = ( '' !== $relayhost );
+    }
+
+    $port_warning = '';
+    if ( empty( $open_ports ) ) {
+        $port_warning = 'All outbound SMTP ports (587, 465, 25) appear blocked on this server. '
+                      . 'AWS EC2 restricts port 25 by default; 587/465 may also be filtered. '
+                      . 'Install a SMTP plugin (e.g. WP Mail SMTP) to route mail through an external provider.';
+        csbr_log( '[CloudScale Backup & Restore] Test email — SMTP port check: all ports blocked (' . implode( ', ', $port_log ) . ')' );
+    } elseif ( ! $mta_running ) {
+        $port_warning = 'Outbound SMTP ports are reachable (' . implode( ', ', $open_ports ) . ') but no local mail agent '
+                      . '(Postfix / Sendmail / Exim) is running on this server. WordPress hands the email to the system '
+                      . 'sendmail binary which has nowhere to deliver it, so the email is silently dropped. '
+                      . 'Install the WP Mail SMTP plugin and configure it to send directly via port 587 — your server can reach it.';
+        csbr_log( '[CloudScale Backup & Restore] Test email — SMTP ports open but no local MTA detected (' . implode( ', ', $port_log ) . ')' );
+    } elseif ( ! $mta_has_relay ) {
+        $port_warning = 'Postfix is running but has no relay configured. It will attempt direct delivery via port 25, '
+                      . 'which AWS EC2 blocks at the infrastructure level regardless of security group rules. '
+                      . 'Configure a relay (e.g. Gmail SMTP or Amazon SES) so Postfix sends via port 587 instead. '
+                      . 'The email has been accepted into the Postfix queue but will not be delivered.';
+        csbr_log( '[CloudScale Backup & Restore] Test email — Postfix running but no relayhost configured; port 25 delivery will fail (' . implode( ', ', $port_log ) . ')' );
+    } else {
+        csbr_log( '[CloudScale Backup & Restore] Test email — SMTP port check: ' . implode( ', ', $port_log ) . '; relayhost=' . $relayhost );
+    }
+
+    $site    = get_bloginfo( 'name' ) ?: home_url();
+    $subject = '[' . $site . '] TEST: Backup notification test';
+    $body    = "This is a test notification from CloudScale Backup & Restore.\n\n"
+             . "If you received this, email notifications are working correctly.\n\n"
+             . "Site: " . home_url() . "\n"
+             . "Sent to: " . $to . "\n";
+
+    csbr_log( '[CloudScale Backup & Restore] Test email requested — sending to ' . $to );
+    $sent = wp_mail( $to, $subject, $body );
+    if ( $sent ) {
+        $sent_msg = 'Test email dispatched to ' . $to;
+        if ( $port_warning ) {
+            $sent_msg .= ' — but see warning below';
+        }
+        csbr_log( '[CloudScale Backup & Restore] Test email accepted by mail transport for ' . $to );
+        wp_send_json_success( [ 'msg' => $sent_msg, 'port_warning' => $port_warning ] );
+    } else {
+        csbr_log( '[CloudScale Backup & Restore] ERROR: Test email — wp_mail() returned false for ' . $to . ' (' . implode( ', ', $port_log ) . ')' );
+        wp_send_json_error( [ 'msg' => 'wp_mail() returned false — check Activity Log.', 'port_warning' => $port_warning ] );
+    }
+} );
+
+// ================================================
+add_action( 'wp_ajax_csbr_delete_staged', function (): void {
+	if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+	check_ajax_referer( 'csbr_nonce', 'nonce' );
+	$key = sanitize_key( wp_unslash( $_POST['staged_key'] ?? '' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified above
+	if ( ! $key ) { wp_send_json_error( 'Missing key.' ); }
+	$data = get_transient( 'csbr_staged_' . $key );
+	if ( $data && ! empty( $data['path'] ) && file_exists( $data['path'] ) ) {
+		wp_delete_file( $data['path'] );
+	}
+	delete_transient( 'csbr_staged_' . $key );
+	CloudScale_Backup_Utils::log( '[CloudScale Backup & Restore] Staged upload deleted by user.' );
+	wp_send_json_success();
+} );
+
+// AJAX — Stage an uploaded file (two-step upload → modal flow)
+// ============================================================
+
+add_action( 'wp_ajax_csbr_stage_upload', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.InputNotValidated -- nonce verified above; tmp_name is a server path; ext validated below
+    if ( empty( $_FILES['backup_file'] ) || empty( $_FILES['backup_file']['tmp_name'] ) ) {
+        wp_send_json_error( 'No file uploaded.' );
+    }
+    $tmp_name  = $_FILES['backup_file']['tmp_name'];
+    $orig_name = sanitize_file_name( wp_unslash( $_FILES['backup_file']['name'] ?? '' ) );
+    // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized, WordPress.Security.ValidatedSanitizedInput.InputNotValidated
+
+    $ext = strtolower( pathinfo( $orig_name, PATHINFO_EXTENSION ) );
+    if ( ! in_array( $ext, [ 'zip', 'sql' ], true ) ) {
+        wp_send_json_error( 'Only .zip and .sql files are accepted.' );
+    }
+    if ( ! is_uploaded_file( $tmp_name ) ) {
+        wp_send_json_error( 'Invalid upload.' );
+    }
+
+    $stage_dir = WP_CONTENT_DIR . '/csbr-staging/';
+    if ( ! is_dir( $stage_dir ) ) {
+        wp_mkdir_p( $stage_dir );
+        file_put_contents( $stage_dir . '.htaccess', "Deny from all\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- WP Filesystem unavailable here; protecting staging dir
+        file_put_contents( $stage_dir . 'index.php', "<?php // Silence\n" ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- WP Filesystem unavailable here
+    }
+
+    $key         = wp_generate_password( 32, false );
+    $staged_path = $stage_dir . $key . '.' . $ext;
+    // Use WP Filesystem to move the uploaded file out of the PHP temp dir.
+    global $wp_filesystem;
+    if ( empty( $wp_filesystem ) ) {
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        WP_Filesystem();
+    }
+    if ( ! $wp_filesystem->move( $tmp_name, $staged_path, true ) ) {
+        wp_send_json_error( 'Failed to stage uploaded file.' );
+    }
+
+    set_transient( 'csbr_staged_' . $key, [
+        'path'     => $staged_path,
+        'filename' => $orig_name,
+        'ext'      => $ext,
+        'time'     => time(),
+    ], 1800 );
+
+    wp_send_json_success( [
+        'key'      => $key,
+        'filename' => $orig_name,
+        'ext'      => $ext,
+    ] );
+} );
+
+// ============================================================
+// AJAX — List tables in a backup zip (for selective restore)
+// ============================================================
+
+add_action( 'wp_ajax_csbr_list_backup_tables', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+
+    $source = csbr_resolve_restore_source( $_POST ); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified above
+
+    if ( $source['ext'] === 'sql' ) {
+        $sql = file_get_contents( $source['path'] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading staged/backup SQL file; WP Filesystem API not appropriate
+        if ( empty( $sql ) ) { wp_send_json_error( 'SQL file is empty.' ); }
+    } else {
+        $zip = new ZipArchive();
+        if ( $zip->open( $source['path'] ) !== true ) { wp_send_json_error( 'Cannot open backup zip.' ); }
+        $enc_pwd = (string) get_option( 'csbr_encrypt_password', '' );
+        if ( $enc_pwd !== '' ) { $zip->setPassword( $enc_pwd ); }
+        $sql = $zip->getFromName( 'database.sql' );
+        $zip->close();
+        if ( empty( $sql ) ) { wp_send_json_error( 'No database.sql in this backup.' ); }
+    }
+
+    $tables = csbr_list_tables_in_dump( $sql );
+    if ( empty( $tables ) ) { wp_send_json_error( 'No tables found in this backup.' ); }
+    wp_send_json_success( [ 'tables' => $tables ] );
+} );
+
+// ============================================================
+// AJAX — Selective restore (chosen tables only)
+// ============================================================
+
+add_action( 'wp_ajax_csbr_restore_selective', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
+    ignore_user_abort( true );
+
+    $source = csbr_resolve_restore_source( $_POST ); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified above
+
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified above; sanitized via array_map below
+    $raw_tables = isset( $_POST['tables'] ) && is_array( $_POST['tables'] ) ? wp_unslash( $_POST['tables'] ) : [];
+    $tables     = array_values( array_filter( array_map( 'sanitize_text_field', $raw_tables ) ) );
+    if ( empty( $tables ) ) { wp_send_json_error( 'No tables selected.' ); }
+
+    if ( $source['ext'] === 'sql' ) {
+        $sql = file_get_contents( $source['path'] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading staged/backup SQL file
+        if ( empty( $sql ) ) { wp_send_json_error( 'SQL file is empty.' ); }
+    } else {
+        $zip = new ZipArchive();
+        if ( $zip->open( $source['path'] ) !== true ) { wp_send_json_error( 'Cannot open backup zip.' ); }
+        $enc_pwd = (string) get_option( 'csbr_encrypt_password', '' );
+        if ( $enc_pwd !== '' ) { $zip->setPassword( $enc_pwd ); }
+        $sql = $zip->getFromName( 'database.sql' );
+        $zip->close();
+        if ( empty( $sql ) ) { wp_send_json_error( 'No database.sql in this backup.' ); }
+    }
+
+    $filtered = csbr_filter_sql_for_tables( $sql, $tables );
+    if ( empty( trim( $filtered ) ) ) {
+        wp_send_json_error( 'None of the selected tables were found in this backup.' );
+    }
+
+    try {
+        csbr_execute_sql_string( $filtered );
+        $label = implode( ', ', $tables );
+        csbr_send_backup_notification( true, 'Selective restore completed', "Selective restore completed.\n\nFile: {$source['filename']}\nTables restored: {$label}\n\nSite: " . home_url() . "\n" );
+        wp_send_json_success( 'Restored ' . count( $tables ) . ' table(s): ' . $label );
+    } catch ( Exception $e ) {
+        csbr_log( '[CloudScale Backup & Restore] EXCEPTION in selective restore: ' . $e->getMessage() . ' — file: ' . ( $source['filename'] ?? '?' ) );
+        csbr_send_backup_notification( false, 'Selective restore failed', "Selective restore failed.\n\nFile: {$source['filename']}\nError: " . $e->getMessage() . "\n\nSite: " . home_url() . "\n" );
+        wp_send_json_error( 'Selective restore failed: ' . $e->getMessage() );
+    }
+} );
+
+// ============================================================
+// AJAX — List posts/pages in a backup (for post-level restore)
+// ============================================================
+
+add_action( 'wp_ajax_csbr_list_backup_posts', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backup files
+
+    $source = csbr_resolve_restore_source( $_POST ); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified above
+    csbr_log( '[CloudScale Backup & Restore] Listing posts from backup: ' . ( $source['filename'] ?? '?' ) );
+
+    try {
+        $sql = csbr_get_sql_from_source( $source );
+    } catch ( Exception $e ) {
+        csbr_log( '[CloudScale Backup & Restore] EXCEPTION reading backup SQL for post list: ' . $e->getMessage() );
+        wp_send_json_error( $e->getMessage() );
+    }
+
+    // Find posts table — prefer the shortest name ending in 'posts' (e.g. wp_posts,
+    // not wp_aioseo_posts or wp_pmxi_posts which also end in 'posts').
+    $posts_table   = '';
+    $posts_table_l = PHP_INT_MAX;
+    foreach ( csbr_list_tables_in_dump( $sql ) as $t ) {
+        if ( substr( $t, -5 ) === 'posts' && strlen( $t ) < $posts_table_l ) {
+            $posts_table   = $t;
+            $posts_table_l = strlen( $t );
+        }
+    }
+    if ( ! $posts_table ) { wp_send_json_error( 'No posts table found in this backup.' ); }
+
+    // Filter to posts table SQL first, then derive column indices from the smaller string
+    // (avoids PCRE backtrack limits on large full-dump strings).
+    $posts_sql = csbr_filter_sql_for_tables( $sql, [ $posts_table ] );
+    $cols      = csbr_get_table_column_indices( $posts_sql, $posts_table );
+    $idx_id  = $cols['ID'] ?? 0;
+    $idx_dat = $cols['post_date'] ?? 2;
+    $idx_ttl = $cols['post_title'] ?? 5;
+    $idx_sta = $cols['post_status'] ?? 7;
+    $idx_typ = $cols['post_type'] ?? 20;
+    $max_idx = max( $idx_id, $idx_dat, $idx_ttl, $idx_sta, $idx_typ );
+
+    $posts = [];
+    $skip_types   = [ 'revision', 'attachment', 'nav_menu_item', 'custom_css', 'customize_changeset', 'oembed_cache', 'wp_block', 'wp_template', 'wp_template_part', 'wp_global_styles', 'wp_navigation' ];
+    $skip_statuses = [ 'auto-draft', 'inherit' ];
+
+    foreach ( csbr_split_sql( $posts_sql ) as $stmt ) {
+        $s = ltrim( $stmt );
+        if ( ! preg_match( '/^INSERT\s+(?:IGNORE\s+)?INTO\s+`' . preg_quote( $posts_table, '/' ) . '`/i', $s ) ) { continue; }
+        foreach ( csbr_parse_insert_row_strings( $stmt ) as $row ) {
+            $vals = csbr_parse_row_columns( $row );
+            if ( count( $vals ) <= $max_idx ) { continue; }
+            $typ = $vals[ $idx_typ ];
+            $sta = $vals[ $idx_sta ];
+            if ( in_array( $typ, $skip_types, true ) || in_array( $sta, $skip_statuses, true ) ) { continue; }
+            $posts[] = [
+                'id'     => (int) $vals[ $idx_id ],
+                'title'  => $vals[ $idx_ttl ] !== '' ? $vals[ $idx_ttl ] : '(no title)',
+                'type'   => $typ,
+                'status' => $sta,
+                'date'   => substr( $vals[ $idx_dat ], 0, 10 ),
+            ];
+        }
+    }
+
+    usort( $posts, static fn( $a, $b ) => strcmp( $b['date'], $a['date'] ) );
+    wp_send_json_success( [ 'posts' => $posts ] );
+} );
+
+// ============================================================
+// AJAX — Restore a single post + its postmeta from a backup
+// ============================================================
+
+add_action( 'wp_ajax_csbr_restore_post', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backup files
+
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified above
+    $post_id = intval( wp_unslash( $_POST['post_id'] ?? 0 ) );
+    if ( $post_id < 1 ) { wp_send_json_error( 'Invalid post ID.' ); }
+
+    $source = csbr_resolve_restore_source( $_POST ); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified above
+    csbr_log( '[CloudScale Backup & Restore] Restoring post ID ' . $post_id . ' from backup: ' . ( $source['filename'] ?? '?' ) );
+
+    try {
+        $sql = csbr_get_sql_from_source( $source );
+    } catch ( Exception $e ) {
+        csbr_log( '[CloudScale Backup & Restore] EXCEPTION reading backup SQL for post restore (ID ' . $post_id . '): ' . $e->getMessage() );
+        wp_send_json_error( $e->getMessage() );
+    }
+
+    // Find posts + postmeta table names — prefer shortest match to avoid plugin shadow tables
+    // (e.g. wp_aioseo_posts also ends in 'posts'; wp_posts is always shorter).
+    $posts_table    = '';
+    $postmeta_table = '';
+    $posts_table_l  = PHP_INT_MAX;
+    $meta_table_l   = PHP_INT_MAX;
+    foreach ( csbr_list_tables_in_dump( $sql ) as $t ) {
+        if ( substr( $t, -8 ) === 'postmeta' && strlen( $t ) < $meta_table_l ) {
+            $postmeta_table = $t;
+            $meta_table_l   = strlen( $t );
+        } elseif ( substr( $t, -5 ) === 'posts' && strlen( $t ) < $posts_table_l ) {
+            $posts_table   = $t;
+            $posts_table_l = strlen( $t );
+        }
+    }
+    if ( ! $posts_table ) { wp_send_json_error( 'No posts table found in this backup.' ); }
+
+    $restore_sql = '';
+
+    // -- wp_posts row --
+    $posts_filtered = csbr_filter_sql_for_tables( $sql, [ $posts_table ] );
+    $cols           = csbr_get_table_column_indices( $posts_filtered, $posts_table );
+    $idx_id         = $cols['ID'] ?? 0;
+
+    foreach ( csbr_split_sql( $posts_filtered ) as $stmt ) {
+        if ( ! preg_match( '/^INSERT\s+(?:IGNORE\s+)?INTO\s+`' . preg_quote( $posts_table, '/' ) . '`/i', ltrim( $stmt ) ) ) { continue; }
+        $col_clause = csbr_get_insert_column_clause( $stmt );
+        $matching   = [];
+        foreach ( csbr_parse_insert_row_strings( $stmt ) as $row ) {
+            $vals = csbr_parse_row_columns( $row );
+            if ( isset( $vals[ $idx_id ] ) && (int) $vals[ $idx_id ] === $post_id ) {
+                $matching[] = '(' . $row . ')';
+            }
+        }
+        if ( $matching ) {
+            $restore_sql .= 'REPLACE INTO `' . $posts_table . '`' . $col_clause . ' VALUES ' . implode( ',', $matching ) . ";\n";
+        }
+    }
+
+    if ( ! $restore_sql ) {
+        wp_send_json_error( "Post ID {$post_id} was not found in this backup." );
+    }
+
+    // -- wp_postmeta rows --
+    if ( $postmeta_table ) {
+        $meta_filtered = csbr_filter_sql_for_tables( $sql, [ $postmeta_table ] );
+        $meta_cols     = csbr_get_table_column_indices( $meta_filtered, $postmeta_table );
+        $idx_meta_pid  = $meta_cols['post_id'] ?? 1;
+
+        foreach ( csbr_split_sql( $meta_filtered ) as $stmt ) {
+            if ( ! preg_match( '/^INSERT\s+(?:IGNORE\s+)?INTO\s+`' . preg_quote( $postmeta_table, '/' ) . '`/i', ltrim( $stmt ) ) ) { continue; }
+            $col_clause = csbr_get_insert_column_clause( $stmt );
+            $matching   = [];
+            foreach ( csbr_parse_insert_row_strings( $stmt ) as $row ) {
+                $vals = csbr_parse_row_columns( $row );
+                if ( isset( $vals[ $idx_meta_pid ] ) && (int) $vals[ $idx_meta_pid ] === $post_id ) {
+                    $matching[] = '(' . $row . ')';
+                }
+            }
+            if ( $matching ) {
+                $restore_sql .= 'REPLACE INTO `' . $postmeta_table . '`' . $col_clause . ' VALUES ' . implode( ',', $matching ) . ";\n";
+            }
+        }
+    }
+
+    try {
+        csbr_execute_sql_string( $restore_sql );
+        csbr_log( '[CloudScale Backup & Restore] Post ID ' . $post_id . ' restored successfully from ' . ( $source['filename'] ?? '?' ) );
+        wp_send_json_success( "Post ID {$post_id} and its metadata have been restored." );
+    } catch ( Exception $e ) {
+        csbr_log( '[CloudScale Backup & Restore] EXCEPTION executing post restore SQL (ID ' . $post_id . '): ' . $e->getMessage() );
+        wp_send_json_error( 'Post restore failed: ' . $e->getMessage() );
+    }
+} );
 
 // Schedule is now saved via plain HTML form POST (see page handler above)
 
@@ -2388,16 +3443,16 @@ add_action('wp_ajax_cs_restore_upload', function (): void {
 // AJAX — Save manual backup defaults
 // ============================================================
 
-add_action('wp_ajax_cs_save_manual_defaults', function (): void {
+add_action('wp_ajax_csbr_save_manual_defaults', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     $valid = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'htaccess', 'wpconfig'];
-    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_ajax_referer( 'cs_nonce', 'nonce' ); values validated via array_intersect() against a whitelist
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_ajax_referer( 'csbr_nonce', 'nonce' ); values validated via array_intersect() against a whitelist
     $raw   = isset($_POST['components']) && is_array($_POST['components']) ? wp_unslash( $_POST['components'] ) : [];
     $clean = array_values(array_intersect($raw, $valid));
-    update_option('cs_manual_defaults', $clean);
+    update_option('csbr_manual_defaults', $clean);
     wp_send_json_success('Defaults saved');
 });
 
@@ -2405,24 +3460,24 @@ add_action('wp_ajax_cs_save_manual_defaults', function (): void {
 // AJAX — Save retention
 // ============================================================
 
-add_action('wp_ajax_cs_test_s3', function (): void {
+add_action('wp_ajax_csbr_test_s3', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    $bucket = get_option('cs_s3_bucket', '');
-    $prefix = get_option('cs_s3_prefix', 'backups/');
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    $bucket = get_option('csbr_s3_bucket', '');
+    $prefix = get_option('csbr_s3_prefix', 'backups/');
     if (!$bucket) {
         wp_send_json_error('No bucket configured. Save your S3 settings first.');
     }
-    $aws = cs_find_aws();
+    $aws = csbr_find_aws();
     if (!$aws) {
         wp_send_json_error('AWS CLI not found on server.');
     }
     $prefix = trim($prefix, '/');
     $dest   = 's3://' . rtrim($bucket, '/') . '/' . ($prefix ? $prefix . '/' : '') . 'cloudscale-test.txt';
     $content = "CloudScale Backup connection test\nWritten: " . gmdate('Y-m-d H:i:s T') . "\nBucket: " . $bucket . "\n";
-    $tmp = tempnam(sys_get_temp_dir(), 'cs_test_');
+    $tmp = tempnam(sys_get_temp_dir(), 'csbr_test_');
     file_put_contents($tmp, $content); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- temp file for CLI upload test; WP Filesystem API not appropriate for temp file operations
     $real_tmp = realpath($tmp) ?: $tmp;
     $cmd = escapeshellarg($aws) . ' s3 cp ' . escapeshellarg($real_tmp) . ' ' . escapeshellarg($dest) . ' 2>&1';
@@ -2436,48 +3491,48 @@ add_action('wp_ajax_cs_test_s3', function (): void {
     wp_send_json_success('Test file written to ' . $dest);
 });
 
-add_action('wp_ajax_cs_save_s3', function (): void {
+add_action('wp_ajax_csbr_save_s3', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $bucket = sanitize_text_field( wp_unslash( $_POST['bucket'] ?? '' ) );
     $prefix = sanitize_text_field( wp_unslash( $_POST['prefix'] ?? 'backups/' ) );
     // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
     // Ensure prefix ends with /
     $prefix = rtrim($prefix, '/') . '/';
-    update_option('cs_s3_bucket', $bucket);
-    update_option('cs_s3_prefix', $prefix);
+    update_option('csbr_s3_bucket', $bucket);
+    update_option('csbr_s3_prefix', $prefix);
     wp_send_json_success(['bucket' => $bucket, 'prefix' => $prefix]);
 });
 
 // S3 auto-retry — single WP-Cron event scheduled 5 min after a failed sync
-add_action('cs_s3_retry', function (string $filename): void {
-    $path = CS_BACKUP_DIR . $filename;
+add_action('csbr_s3_retry', function (string $filename): void {
+    $path = CSBR_BACKUP_DIR . $filename;
     if (!file_exists($path)) {
-        cs_log('[CloudScale Backup] S3 retry: file no longer exists: ' . $filename);
+        csbr_log('[CloudScale Backup & Restore] S3 retry: file no longer exists: ' . $filename);
         return;
     }
-    cs_log('[CloudScale Backup] S3 retry attempt for ' . $filename);
-    cs_sync_to_s3($path, false); // false = no further retries on second failure
+    csbr_log('[CloudScale Backup & Restore] S3 retry attempt for ' . $filename);
+    csbr_sync_to_s3($path, false); // false = no further retries on second failure
 });
 
-add_action('wp_ajax_cs_s3_sync_file', function (): void {
+add_action('wp_ajax_csbr_s3_sync_file', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     if (!$filename || !str_ends_with($filename, '.zip')) {
         wp_send_json_error('Invalid filename.');
     }
-    $path = CS_BACKUP_DIR . $filename;
+    $path = CSBR_BACKUP_DIR . $filename;
     if (!file_exists($path)) {
         wp_send_json_error('File not found on server.');
     }
-    $result = cs_sync_to_s3($path);
+    $result = csbr_sync_to_s3($path);
     if (isset($result['skipped'])) {
         wp_send_json_error('S3 not configured — set a bucket name in the AWS S3 Remote Backup settings.');
     }
@@ -2492,11 +3547,11 @@ add_action('wp_ajax_cs_s3_sync_file', function (): void {
 // AJAX — AMI snapshot operations
 // ============================================================
 
-add_action('wp_ajax_cs_save_ami', function (): void {
+add_action('wp_ajax_csbr_save_ami', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $prefix          = sanitize_text_field( wp_unslash( $_POST['prefix'] ?? '' ) );
     $reboot          = !empty( $_POST['reboot'] );
@@ -2507,44 +3562,46 @@ add_action('wp_ajax_cs_save_ami', function (): void {
     if ($region_override && !preg_match('/^[a-z0-9-]+$/', $region_override)) {
         wp_send_json_error('Invalid region format. Example: af-south-1');
     }
-    update_option('cs_ami_prefix', $prefix);
-    update_option('cs_ami_reboot', $reboot);
-    update_option('cs_ami_region_override', $region_override);
-    update_option('cs_ami_max', $ami_max);
+    update_option('csbr_ami_prefix', $prefix);
+    update_option('csbr_ami_reboot', $reboot);
+    update_option('csbr_ami_region_override', $region_override);
+    update_option('csbr_ami_max', $ami_max);
     wp_send_json_success(['prefix' => $prefix, 'reboot' => $reboot, 'region' => $region_override, 'ami_max' => $ami_max]);
 });
 
-add_action('wp_ajax_cs_save_cloud_schedule', function (): void {
+add_action('wp_ajax_csbr_save_cloud_schedule', function (): void {
     if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_ajax_referer() above; intval()/!empty() used for boolean/integer fields
     $raw_days   = array_filter(explode(',', sanitize_text_field( wp_unslash( $_POST['ami_schedule_days'] ?? '' ) )));
     $clean_days = array_values(array_filter(array_map('intval', $raw_days), fn($d) => $d >= 1 && $d <= 7));
-    update_option('cs_ami_schedule_days',   $clean_days);
-    update_option('cs_cloud_backup_delay',  max(15, intval( wp_unslash( $_POST['cloud_backup_delay'] ?? 30 ) )));
-    update_option('cs_ami_max',             max(1, min(999, intval( wp_unslash( $_POST['cloud_max'] ?? 10 ) ))));
-    update_option('cs_s3_sync_enabled',        !empty($_POST['s3_sync_enabled']));
-    update_option('cs_gdrive_sync_enabled',    !empty($_POST['gdrive_sync_enabled']));
-    update_option('cs_dropbox_sync_enabled',   !empty($_POST['dropbox_sync_enabled']));
-    update_option('cs_ami_sync_enabled',       !empty($_POST['ami_sync_enabled']));
-    update_option('cs_cloud_schedule_enabled', !empty($_POST['cloud_schedule_enabled']));
-    wp_cache_delete('cs_ami_schedule_days',       'options');
-    wp_cache_delete('cs_cloud_backup_delay',      'options');
-    wp_cache_delete('cs_ami_max',                 'options');
-    wp_cache_delete('cs_s3_sync_enabled',         'options');
-    wp_cache_delete('cs_gdrive_sync_enabled',     'options');
-    wp_cache_delete('cs_dropbox_sync_enabled',    'options');
-    wp_cache_delete('cs_ami_sync_enabled',        'options');
-    wp_cache_delete('cs_cloud_schedule_enabled',  'options');
+    update_option('csbr_ami_schedule_days',   $clean_days);
+    update_option('csbr_cloud_backup_delay',  max(15, intval( wp_unslash( $_POST['cloud_backup_delay'] ?? 30 ) )));
+    update_option('csbr_ami_max',             max(1, min(999, intval( wp_unslash( $_POST['cloud_max'] ?? 10 ) ))));
+    update_option('csbr_s3_sync_enabled',        !empty($_POST['s3_sync_enabled']));
+    update_option('csbr_gdrive_sync_enabled',    !empty($_POST['gdrive_sync_enabled']));
+    update_option('csbr_dropbox_sync_enabled',   !empty($_POST['dropbox_sync_enabled']));
+    update_option('csbr_onedrive_sync_enabled',  !empty($_POST['onedrive_sync_enabled']));
+    update_option('csbr_ami_sync_enabled',       !empty($_POST['ami_sync_enabled']));
+    update_option('csbr_cloud_schedule_enabled', !empty($_POST['cloud_schedule_enabled']));
+    wp_cache_delete('csbr_ami_schedule_days',       'options');
+    wp_cache_delete('csbr_cloud_backup_delay',      'options');
+    wp_cache_delete('csbr_ami_max',                 'options');
+    wp_cache_delete('csbr_s3_sync_enabled',         'options');
+    wp_cache_delete('csbr_gdrive_sync_enabled',     'options');
+    wp_cache_delete('csbr_dropbox_sync_enabled',    'options');
+    wp_cache_delete('csbr_onedrive_sync_enabled',   'options');
+    wp_cache_delete('csbr_ami_sync_enabled',        'options');
+    wp_cache_delete('csbr_cloud_schedule_enabled',  'options');
     wp_cache_delete('alloptions',                'options');
     // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
-    cs_reschedule();
+    csbr_reschedule();
     wp_send_json_success('Saved');
 });
 
-add_action('wp_ajax_cs_save_gdrive', function (): void {
+add_action('wp_ajax_csbr_save_gdrive', function (): void {
     if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $remote = sanitize_text_field( wp_unslash( $_POST['remote'] ?? '' ) );
     $path   = sanitize_text_field( wp_unslash( $_POST['path']   ?? 'cloudscale-backups/' ) );
@@ -2552,17 +3609,17 @@ add_action('wp_ajax_cs_save_gdrive', function (): void {
     if ($remote && !preg_match('/^[a-zA-Z0-9_\-]+$/', $remote)) {
         wp_send_json_error('Invalid remote name. Use only letters, numbers, hyphens and underscores.');
     }
-    update_option('cs_gdrive_remote', $remote);
-    update_option('cs_gdrive_path',   $path);
+    update_option('csbr_gdrive_remote', $remote);
+    update_option('csbr_gdrive_path',   $path);
     wp_send_json_success(['remote' => $remote, 'path' => $path]);
 });
 
-add_action('wp_ajax_cs_test_gdrive', function (): void {
+add_action('wp_ajax_csbr_test_gdrive', function (): void {
     if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    $remote = get_option('cs_gdrive_remote', '');
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    $remote = get_option('csbr_gdrive_remote', '');
     if (!$remote) { wp_send_json_error('No remote configured — save settings first.'); }
-    $rclone = cs_find_rclone();
+    $rclone = csbr_find_rclone();
     if (!$rclone) { wp_send_json_error('rclone not found on server.'); }
     $cmd = escapeshellarg($rclone) . ' lsd ' . escapeshellarg($remote . ':') . ' --max-depth 1 2>&1';
     $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
@@ -2572,22 +3629,22 @@ add_action('wp_ajax_cs_test_gdrive', function (): void {
     wp_send_json_success('Connected to ' . esc_html($remote));
 });
 
-add_action('wp_ajax_cs_sync_latest_s3', function (): void {
+add_action('wp_ajax_csbr_sync_latest_s3', function (): void {
     if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    $latest = cs_get_latest_backup_path();
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    $latest = csbr_get_latest_backup_path();
     if (!$latest) { wp_send_json_error('No local backups found.'); }
-    $result = cs_sync_to_s3($latest);
+    $result = csbr_sync_to_s3($latest);
     if (isset($result['skipped'])) { wp_send_json_error('S3 not configured — save bucket settings first.'); }
     $result['ok'] ? wp_send_json_success('Synced: ' . basename($latest)) : wp_send_json_error($result['error'] ?? 'Sync failed.');
 });
 
-add_action('wp_ajax_cs_sync_latest_gdrive', function (): void {
+add_action('wp_ajax_csbr_sync_latest_gdrive', function (): void {
     if (!current_user_can('manage_options')) { wp_send_json_error('Forbidden', 403); }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    $latest = cs_get_latest_backup_path();
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    $latest = csbr_get_latest_backup_path();
     if (!$latest) { wp_send_json_error('No local backups found.'); }
-    $result = cs_sync_to_gdrive($latest);
+    $result = csbr_sync_to_gdrive($latest);
     if (isset($result['skipped'])) { wp_send_json_error('Google Drive not configured — save remote settings first.'); }
     $result['ok'] ? wp_send_json_success('Synced: ' . basename($latest)) : wp_send_json_error($result['error'] ?? 'Sync failed.');
 });
@@ -2596,9 +3653,9 @@ add_action('wp_ajax_cs_sync_latest_gdrive', function (): void {
 // AJAX — Dropbox handlers
 // ============================================================
 
-add_action( 'wp_ajax_cs_save_dropbox', function (): void {
+add_action( 'wp_ajax_csbr_save_dropbox', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $remote = sanitize_text_field( wp_unslash( $_POST['remote'] ?? '' ) );
     $path   = sanitize_text_field( wp_unslash( $_POST['path']   ?? 'cloudscale-backups/' ) );
@@ -2606,17 +3663,17 @@ add_action( 'wp_ajax_cs_save_dropbox', function (): void {
     if ( $remote && ! preg_match( '/^[a-zA-Z0-9_\-]+$/', $remote ) ) {
         wp_send_json_error( 'Invalid remote name. Use only letters, numbers, hyphens and underscores.' );
     }
-    update_option( 'cs_dropbox_remote', $remote );
-    update_option( 'cs_dropbox_path',   $path );
+    update_option( 'csbr_dropbox_remote', $remote );
+    update_option( 'csbr_dropbox_path',   $path );
     wp_send_json_success( [ 'remote' => $remote, 'path' => $path ] );
 } );
 
-add_action( 'wp_ajax_cs_test_dropbox', function (): void {
+add_action( 'wp_ajax_csbr_test_dropbox', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    $remote = get_option( 'cs_dropbox_remote', '' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    $remote = get_option( 'csbr_dropbox_remote', '' );
     if ( ! $remote ) { wp_send_json_error( 'No remote configured — save settings first.' ); }
-    $rclone = cs_find_rclone();
+    $rclone = csbr_find_rclone();
     if ( ! $rclone ) { wp_send_json_error( 'rclone not found on server.' ); }
     $cmd = escapeshellarg( $rclone ) . ' lsd ' . escapeshellarg( $remote . ':' ) . ' --max-depth 1 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
@@ -2627,13 +3684,54 @@ add_action( 'wp_ajax_cs_test_dropbox', function (): void {
     wp_send_json_success( 'Connected to ' . esc_html( $remote ) );
 } );
 
-add_action( 'wp_ajax_cs_sync_latest_dropbox', function (): void {
+add_action( 'wp_ajax_csbr_sync_latest_dropbox', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    $latest = cs_get_latest_backup_path();
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    $latest = csbr_get_latest_backup_path();
     if ( ! $latest ) { wp_send_json_error( 'No local backups found.' ); }
-    $result = cs_sync_to_dropbox( $latest );
+    $result = csbr_sync_to_dropbox( $latest );
     if ( isset( $result['skipped'] ) ) { wp_send_json_error( 'Dropbox not configured — save remote settings first.' ); }
+    $result['ok'] ? wp_send_json_success( 'Synced: ' . basename( $latest ) ) : wp_send_json_error( $result['error'] ?? 'Sync failed.' );
+} );
+
+add_action( 'wp_ajax_csbr_save_onedrive', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified above
+    $remote = sanitize_text_field( wp_unslash( $_POST['remote'] ?? '' ) );
+    $path   = sanitize_text_field( wp_unslash( $_POST['path']   ?? 'cloudscale-backups/' ) );
+    // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
+    if ( $remote && ! preg_match( '/^[a-zA-Z0-9_\-]+$/', $remote ) ) {
+        wp_send_json_error( 'Invalid remote name. Use only letters, numbers, hyphens and underscores.' );
+    }
+    update_option( 'csbr_onedrive_remote', $remote );
+    update_option( 'csbr_onedrive_path',   $path );
+    wp_send_json_success( [ 'remote' => $remote, 'path' => $path ] );
+} );
+
+add_action( 'wp_ajax_csbr_test_onedrive', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    $remote = get_option( 'csbr_onedrive_remote', '' );
+    if ( ! $remote ) { wp_send_json_error( 'No remote configured — save settings first.' ); }
+    $rclone = csbr_find_rclone();
+    if ( ! $rclone ) { wp_send_json_error( 'rclone not found on server.' ); }
+    $cmd = escapeshellarg( $rclone ) . ' lsd ' . escapeshellarg( $remote . ':' ) . ' --max-depth 1 2>&1';
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    if ( $out && preg_match( '/error|failed|denied|invalid/i', $out ) ) {
+        wp_send_json_error( 'Connection failed: ' . substr( $out, 0, 200 ) );
+    }
+    wp_send_json_success( 'Connected to ' . esc_html( $remote ) );
+} );
+
+add_action( 'wp_ajax_csbr_sync_latest_onedrive', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    $latest = csbr_get_latest_backup_path();
+    if ( ! $latest ) { wp_send_json_error( 'No local backups found.' ); }
+    $result = csbr_sync_to_onedrive( $latest );
+    if ( isset( $result['skipped'] ) ) { wp_send_json_error( 'OneDrive not configured — save remote settings first.' ); }
     $result['ok'] ? wp_send_json_success( 'Synced: ' . basename( $latest ) ) : wp_send_json_error( $result['error'] ?? 'Sync failed.' );
 } );
 
@@ -2648,17 +3746,17 @@ add_action( 'wp_ajax_cs_sync_latest_dropbox', function (): void {
  * then runs the upload in the same PHP-FPM process — no HTTP loopback needed.
  * This bypasses CloudFront/CDN routing entirely.
  *
- * @since 3.2.189
+ * @since 3.2.251
  */
-function cs_start_async_sync( string $provider_action ): void {
+function csbr_start_async_sync( string $provider_action ): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    $latest = cs_get_latest_backup_path();
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    $latest = csbr_get_latest_backup_path();
     if ( ! $latest ) wp_send_json_error( 'No local backups found.' );
 
-    $job_id = 'cs_syncjob_' . bin2hex( random_bytes( 8 ) );
-    cs_set_job( $job_id, [ 'status' => 'queued', 'started' => time() ] );
-    cs_log( "[CloudScale Backup] Sync job queued: {$job_id} ({$provider_action}) for " . basename( $latest ) );
+    $job_id = 'csbr_syncjob_' . bin2hex( random_bytes( 8 ) );
+    csbr_set_job( $job_id, [ 'status' => 'queued', 'started' => time() ] );
+    csbr_log( "[CloudScale Backup & Restore] Sync job queued: {$job_id} ({$provider_action}) for " . basename( $latest ) );
 
     // Run the upload after the HTTP response is flushed to the browser.
     // register_shutdown_function fires after wp_send_json_success/wp_die, then
@@ -2667,7 +3765,7 @@ function cs_start_async_sync( string $provider_action ): void {
         if ( function_exists( 'fastcgi_finish_request' ) ) fastcgi_finish_request();
         set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged
         ignore_user_abort( true );
-        cs_execute_sync_job( $job_id, $provider_action, $latest );
+        csbr_execute_sync_job( $job_id, $provider_action, $latest );
     } );
 
     wp_send_json_success( [ 'job_id' => $job_id ] );
@@ -2676,34 +3774,35 @@ function cs_start_async_sync( string $provider_action ): void {
 /**
  * Execute a cloud sync job — called after the HTTP response has been flushed.
  *
- * @since 3.2.189
+ * @since 3.2.251
  */
-function cs_execute_sync_job( string $job_id, string $provider_action, string $latest ): void {
+function csbr_execute_sync_job( string $job_id, string $provider_action, string $latest ): void {
     $map = [
-        'cs_do_sync_job_s3'      => [ 'cs_sync_to_s3',     'S3' ],
-        'cs_do_sync_job_gdrive'  => [ 'cs_sync_to_gdrive',  'Google Drive' ],
-        'cs_do_sync_job_dropbox' => [ 'cs_sync_to_dropbox', 'Dropbox' ],
+        'csbr_do_sync_job_s3'       => [ 'csbr_sync_to_s3',       'S3' ],
+        'csbr_do_sync_job_gdrive'   => [ 'csbr_sync_to_gdrive',   'Google Drive' ],
+        'csbr_do_sync_job_dropbox'  => [ 'csbr_sync_to_dropbox',  'Dropbox' ],
+        'csbr_do_sync_job_onedrive' => [ 'csbr_sync_to_onedrive', 'OneDrive' ],
     ];
     if ( ! isset( $map[ $provider_action ] ) ) {
-        cs_set_job( $job_id, [ 'status' => 'error', 'message' => 'Unknown provider action.' ] );
+        csbr_set_job( $job_id, [ 'status' => 'error', 'message' => 'Unknown provider action.' ] );
         return;
     }
     [ $sync_fn, $label ] = $map[ $provider_action ];
 
-    cs_set_job( $job_id, [ 'status' => 'running', 'started' => time() ] );
-    cs_log( "[CloudScale Backup] {$label} sync starting: " . basename( $latest ) . ' (' . round( filesize( $latest ) / 1048576, 1 ) . ' MB)' );
+    csbr_set_job( $job_id, [ 'status' => 'running', 'started' => time() ] );
+    csbr_log( "[CloudScale Backup & Restore] {$label} sync starting: " . basename( $latest ) . ' (' . round( filesize( $latest ) / 1048576, 1 ) . ' MB)' );
 
     $result = $sync_fn( $latest );
 
     if ( isset( $result['skipped'] ) ) {
-        cs_log( "[CloudScale Backup] {$label} sync skipped: not configured." );
-        cs_set_job( $job_id, [ 'status' => 'error', 'message' => $label . ' not configured.' ] );
+        csbr_log( "[CloudScale Backup & Restore] {$label} sync skipped: not configured." );
+        csbr_set_job( $job_id, [ 'status' => 'error', 'message' => $label . ' not configured.' ] );
     } elseif ( $result['ok'] ) {
-        cs_log( "[CloudScale Backup] {$label} sync complete: " . basename( $latest ) );
-        cs_set_job( $job_id, [ 'status' => 'complete', 'message' => 'Synced: ' . basename( $latest ) ] );
+        csbr_log( "[CloudScale Backup & Restore] {$label} sync complete: " . basename( $latest ) );
+        csbr_set_job( $job_id, [ 'status' => 'complete', 'message' => 'Synced: ' . basename( $latest ) ] );
     } else {
-        cs_log( "[CloudScale Backup] {$label} sync failed: " . ( $result['error'] ?? 'unknown error' ) );
-        cs_set_job( $job_id, [ 'status' => 'error', 'message' => $result['error'] ?? 'Sync failed.' ] );
+        csbr_log( "[CloudScale Backup & Restore] {$label} sync failed: " . ( $result['error'] ?? 'unknown error' ) );
+        csbr_set_job( $job_id, [ 'status' => 'error', 'message' => $result['error'] ?? 'Sync failed.' ] );
     }
 }
 
@@ -2711,37 +3810,44 @@ function cs_execute_sync_job( string $job_id, string $provider_action, string $l
 // AJAX — Async S3 sync
 // ============================================================
 
-add_action( 'wp_ajax_cs_start_sync_s3',     function (): void { cs_start_async_sync( 'cs_do_sync_job_s3' ); } );
-add_action( 'wp_ajax_cs_do_sync_job_s3',    function (): void { cs_do_async_sync( 'cs_sync_to_s3', 'S3' ); } );
+add_action( 'wp_ajax_csbr_start_sync_s3',     function (): void { csbr_start_async_sync( 'csbr_do_sync_job_s3' ); } );
+add_action( 'wp_ajax_csbr_do_sync_job_s3',    function (): void { csbr_do_async_sync( 'csbr_sync_to_s3', 'S3' ); } );
 
 // ============================================================
 // AJAX — Async GDrive sync
 // ============================================================
 
-add_action( 'wp_ajax_cs_start_sync_gdrive',  function (): void { cs_start_async_sync( 'cs_do_sync_job_gdrive' ); } );
-add_action( 'wp_ajax_cs_do_sync_job_gdrive', function (): void { cs_do_async_sync( 'cs_sync_to_gdrive', 'Google Drive' ); } );
+add_action( 'wp_ajax_csbr_start_sync_gdrive',  function (): void { csbr_start_async_sync( 'csbr_do_sync_job_gdrive' ); } );
+add_action( 'wp_ajax_csbr_do_sync_job_gdrive', function (): void { csbr_do_async_sync( 'csbr_sync_to_gdrive', 'Google Drive' ); } );
 
 // ============================================================
 // AJAX — Async Dropbox sync
 // ============================================================
 
-add_action( 'wp_ajax_cs_start_sync_dropbox',  function (): void { cs_start_async_sync( 'cs_do_sync_job_dropbox' ); } );
-add_action( 'wp_ajax_cs_do_sync_job_dropbox', function (): void { cs_do_async_sync( 'cs_sync_to_dropbox', 'Dropbox' ); } );
+add_action( 'wp_ajax_csbr_start_sync_dropbox',   function (): void { csbr_start_async_sync( 'csbr_do_sync_job_dropbox' ); } );
+add_action( 'wp_ajax_csbr_do_sync_job_dropbox',  function (): void { csbr_do_async_sync( 'csbr_sync_to_dropbox',  'Dropbox' ); } );
+
+// ============================================================
+// AJAX — Async OneDrive sync
+// ============================================================
+
+add_action( 'wp_ajax_csbr_start_sync_onedrive',  function (): void { csbr_start_async_sync( 'csbr_do_sync_job_onedrive' ); } );
+add_action( 'wp_ajax_csbr_do_sync_job_onedrive', function (): void { csbr_do_async_sync( 'csbr_sync_to_onedrive', 'OneDrive' ); } );
 
 // ============================================================
 // AJAX — Batch job status (single request covers all pending sync jobs)
 // ============================================================
 
-add_action( 'wp_ajax_cs_batch_job_status', function (): void {
+add_action( 'wp_ajax_csbr_batch_job_status', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified via check_ajax_referer() above
     $raw     = sanitize_text_field( wp_unslash( $_POST['job_ids'] ?? '' ) );
     $ids     = array_filter( array_map( 'sanitize_key', explode( ',', $raw ) ) );
     $results = [];
     foreach ( $ids as $id ) {
-        if ( ! str_starts_with( $id, 'cs_syncjob_' ) && ! str_starts_with( $id, 'cs_bkjob_' ) ) continue;
-        $data         = cs_get_job( $id );
+        if ( ! str_starts_with( $id, 'csbr_syncjob_' ) && ! str_starts_with( $id, 'csbr_bkjob_' ) ) continue;
+        $data         = csbr_get_job( $id );
         $results[$id] = $data !== false ? $data : [ 'status' => 'not_found' ];
     }
     wp_send_json_success( $results );
@@ -2751,13 +3857,13 @@ add_action( 'wp_ajax_cs_batch_job_status', function (): void {
 // AJAX — Cloud space check (pre-backup warning)
 // ============================================================
 
-add_action( 'wp_ajax_cs_cloud_space_check', function (): void {
+add_action( 'wp_ajax_csbr_cloud_space_check', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
     $only = sanitize_key( $_POST['provider'] ?? '' ); // optional: limit to one provider
 
-    $zips     = glob( CS_BACKUP_DIR . '*.zip' ) ?: [];
+    $zips     = glob( CSBR_BACKUP_DIR . '*.zip' ) ?: [];
     $est_size = 0;
     if ( $zips ) {
         rsort( $zips );
@@ -2766,8 +3872,8 @@ add_action( 'wp_ajax_cs_cloud_space_check', function (): void {
 
     $providers = [];
 
-    if ( ( ! $only || $only === 'dropbox' ) && get_option( 'cs_dropbox_sync_enabled', false ) && get_option( 'cs_dropbox_remote', '' ) ) {
-        $free = cs_rclone_free_bytes( get_option( 'cs_dropbox_remote', '' ) );
+    if ( ( ! $only || $only === 'dropbox' ) && get_option( 'csbr_dropbox_sync_enabled', false ) && get_option( 'csbr_dropbox_remote', '' ) ) {
+        $free = csbr_rclone_free_bytes( get_option( 'csbr_dropbox_remote', '' ) );
         $providers['dropbox'] = [
             'label'   => 'Dropbox',
             'free_mb' => $free !== null ? round( $free / 1048576, 1 ) : null,
@@ -2776,8 +3882,8 @@ add_action( 'wp_ajax_cs_cloud_space_check', function (): void {
         ];
     }
 
-    if ( ( ! $only || $only === 'gdrive' ) && get_option( 'cs_gdrive_sync_enabled', true ) && get_option( 'cs_gdrive_remote', '' ) ) {
-        $free = cs_rclone_free_bytes( get_option( 'cs_gdrive_remote', '' ) );
+    if ( ( ! $only || $only === 'gdrive' ) && get_option( 'csbr_gdrive_sync_enabled', true ) && get_option( 'csbr_gdrive_remote', '' ) ) {
+        $free = csbr_rclone_free_bytes( get_option( 'csbr_gdrive_remote', '' ) );
         $providers['gdrive'] = [
             'label'   => 'Google Drive',
             'free_mb' => $free !== null ? round( $free / 1048576, 1 ) : null,
@@ -2793,17 +3899,17 @@ add_action( 'wp_ajax_cs_cloud_space_check', function (): void {
 // AJAX — Activity log viewer
 // ============================================================
 
-add_action( 'wp_ajax_cs_get_activity_log', function (): void {
+add_action( 'wp_ajax_csbr_get_activity_log', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     $since   = (int) wp_unslash( $_POST['since'] ?? 0 );
-    $entries = (array) get_option( 'cs_activity_log', [] );
+    $entries = (array) get_option( 'csbr_activity_log', [] );
     // Also pull any pending individual log entries written by concurrent background workers.
     global $wpdb;
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
     $rows = $wpdb->get_results( "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'cs\_log\_%' ORDER BY option_name LIMIT 200", ARRAY_A );
     foreach ( $rows as $row ) {
-        $val = maybe_unserialize( $row['option_value'] ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_maybe_unserialize -- value written only by this plugin via cs_log()
+        $val = maybe_unserialize( $row['option_value'] ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_maybe_unserialize -- value written only by this plugin via csbr_log()
         if ( is_array( $val ) && isset( $val['t'], $val['m'] ) ) {
             $entries[] = $val;
         }
@@ -2815,10 +3921,10 @@ add_action( 'wp_ajax_cs_get_activity_log', function (): void {
     wp_send_json_success( [ 'entries' => array_slice( $entries, -100 ), 'server_time' => time() ] );
 } );
 
-add_action( 'wp_ajax_cs_clear_activity_log', function (): void {
+add_action( 'wp_ajax_csbr_clear_activity_log', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    update_option( 'cs_activity_log', [], false );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    update_option( 'csbr_activity_log', [], false );
     global $wpdb;
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
     $wpdb->query( "DELETE FROM {$wpdb->options} WHERE option_name LIKE 'cs\_log\_%'" );
@@ -2829,15 +3935,15 @@ add_action( 'wp_ajax_cs_clear_activity_log', function (): void {
 // AJAX — Delete oldest cloud backup (space recovery)
 // ============================================================
 
-add_action( 'wp_ajax_cs_delete_oldest_cloud', function (): void {
+add_action( 'wp_ajax_csbr_delete_oldest_cloud', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) wp_send_json_error( 'Forbidden', 403 );
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_ajax_referer( 'cs_nonce', 'nonce' ); sanitize_key() and (float) cast sanitise inputs
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_ajax_referer( 'csbr_nonce', 'nonce' ); sanitize_key() and (float) cast sanitise inputs
     $provider  = sanitize_key( $_POST['provider'] ?? '' );
     $need_mb   = (float) wp_unslash( $_POST['need_mb'] ?? 0 );  // how much space the backup needs
     $need_bytes = $need_mb > 0 ? (int) ( $need_mb * 1048576 ) : 0;
 
-    $remote = $provider === 'dropbox' ? get_option( 'cs_dropbox_remote', '' ) : get_option( 'cs_gdrive_remote', '' );
+    $remote = $provider === 'dropbox' ? get_option( 'csbr_dropbox_remote', '' ) : get_option( 'csbr_gdrive_remote', '' );
 
     // Delete oldest backups one by one until there is enough free space (or no more to delete).
     $deleted = [];
@@ -2845,11 +3951,11 @@ add_action( 'wp_ajax_cs_delete_oldest_cloud', function (): void {
     $target     = (int) ( $need_bytes * 1.15 ); // 15% buffer so we don't stop right at the edge
     for ( $i = 0; $i < $max_loops; $i++ ) {
         // Check current free space
-        $free = $remote ? cs_rclone_free_bytes( $remote ) : null;
+        $free = $remote ? csbr_rclone_free_bytes( $remote ) : null;
         if ( $need_bytes > 0 && $free !== null && $free >= $target ) {
             break; // enough space now (with buffer)
         }
-        $result = cs_delete_oldest_cloud_backup( $provider );
+        $result = csbr_delete_oldest_cloud_backup( $provider );
         if ( ! $result['ok'] ) {
             if ( empty( $deleted ) ) {
                 wp_send_json_error( $result['error'] ?? 'Delete failed.' );
@@ -2860,7 +3966,7 @@ add_action( 'wp_ajax_cs_delete_oldest_cloud', function (): void {
         if ( $need_bytes === 0 ) break; // single-delete mode if no target size given
     }
 
-    $free     = $remote ? cs_rclone_free_bytes( $remote ) : null;
+    $free     = $remote ? csbr_rclone_free_bytes( $remote ) : null;
     $free_mb  = $free !== null ? round( $free / 1048576, 1 ) : null;
     wp_send_json_success( [
         'ok'      => true,
@@ -2873,19 +3979,19 @@ add_action( 'wp_ajax_cs_delete_oldest_cloud', function (): void {
 /**
  * Delete the oldest non-golden backup from a cloud provider to reclaim space.
  *
- * @since 3.2.189
+ * @since 3.2.251
  * @param string $provider 'dropbox' or 'gdrive'.
  * @return array{ok: bool, deleted?: string, error?: string}
  */
-function cs_delete_oldest_cloud_backup( string $provider ): array {
-    $rclone = cs_find_rclone();
+function csbr_delete_oldest_cloud_backup( string $provider ): array {
+    $rclone = csbr_find_rclone();
     if ( ! $rclone ) return [ 'ok' => false, 'error' => 'rclone not found.' ];
 
     if ( $provider === 'dropbox' ) {
-        $remote = get_option( 'cs_dropbox_remote', '' );
+        $remote = get_option( 'csbr_dropbox_remote', '' );
         if ( ! $remote ) return [ 'ok' => false, 'error' => 'Dropbox not configured.' ];
-        $dest_path = ltrim( get_option( 'cs_dropbox_path', 'cloudscale-backups/' ), '/' );
-        $history   = (array) get_option( 'cs_dropbox_history', [] );
+        $dest_path = ltrim( get_option( 'csbr_dropbox_path', 'cloudscale-backups/' ), '/' );
+        $history   = (array) get_option( 'csbr_dropbox_history', [] );
         $regular   = array_filter( $history, fn( $e ) => empty( $e['golden'] ) );
         if ( empty( $regular ) ) return [ 'ok' => false, 'error' => 'No non-golden Dropbox backups to delete.' ];
         uasort( $regular, fn( $a, $b ) => ( $a['time'] ?? 0 ) <=> ( $b['time'] ?? 0 ) );
@@ -2896,16 +4002,16 @@ function cs_delete_oldest_cloud_backup( string $provider ): array {
         $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         if ( $out && ! preg_match( '/object not found/i', $out ) ) return [ 'ok' => false, 'error' => 'Delete failed: ' . $out ];
         unset( $history[ $key ] );
-        update_option( 'cs_dropbox_history', $history, false );
-        cs_log( '[CloudScale Backup] Manually deleted oldest Dropbox backup: ' . $name );
+        update_option( 'csbr_dropbox_history', $history, false );
+        csbr_log( '[CloudScale Backup & Restore] Manually deleted oldest Dropbox backup: ' . $name );
         return [ 'ok' => true, 'deleted' => $name ];
 
     } elseif ( $provider === 'gdrive' ) {
-        $remote    = get_option( 'cs_gdrive_remote', '' );
+        $remote    = get_option( 'csbr_gdrive_remote', '' );
         if ( ! $remote ) return [ 'ok' => false, 'error' => 'Google Drive not configured.' ];
-        $dest_path   = ltrim( get_option( 'cs_gdrive_path', 'cloudscale-backups/' ), '/' );
+        $dest_path   = ltrim( get_option( 'csbr_gdrive_path', 'cloudscale-backups/' ), '/' );
         $remote_path = rtrim( $remote, ':' ) . ':' . $dest_path;
-        $history     = (array) get_option( 'cs_gdrive_history', [] );
+        $history     = (array) get_option( 'csbr_gdrive_history', [] );
         $regular     = array_filter( $history, fn( $e ) => empty( $e['golden'] ) );
         if ( $regular ) {
             uasort( $regular, fn( $a, $b ) => ( $a['time'] ?? 0 ) <=> ( $b['time'] ?? 0 ) );
@@ -2926,60 +4032,60 @@ function cs_delete_oldest_cloud_backup( string $provider ): array {
         $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         if ( $out && ! preg_match( '/object not found/i', $out ) ) return [ 'ok' => false, 'error' => 'Delete failed: ' . $out ];
         unset( $history[ $name ] );
-        update_option( 'cs_gdrive_history', $history, false );
-        cs_log( '[CloudScale Backup] Manually deleted oldest Google Drive backup: ' . $name );
+        update_option( 'csbr_gdrive_history', $history, false );
+        csbr_log( '[CloudScale Backup & Restore] Manually deleted oldest Google Drive backup: ' . $name );
         return [ 'ok' => true, 'deleted' => $name ];
     }
 
     return [ 'ok' => false, 'error' => 'Unknown provider.' ];
 }
 
-add_action( 'wp_ajax_cs_dropbox_refresh_history', function (): void {
+add_action( 'wp_ajax_csbr_dropbox_refresh_history', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    if ( ! get_option( 'cs_dropbox_remote', '' ) ) { wp_send_json_error( 'Dropbox not configured.' ); }
-    $hist = cs_dropbox_refresh_history();
-    update_option( 'cs_dropbox_remote_count', count( $hist ), false );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    if ( ! get_option( 'csbr_dropbox_remote', '' ) ) { wp_send_json_error( 'Dropbox not configured.' ); }
+    $hist = csbr_dropbox_refresh_history();
+    update_option( 'csbr_dropbox_remote_count', count( $hist ), false );
     wp_send_json_success( [ 'files' => array_values( $hist ), 'count' => count( $hist ) ] );
 } );
 
-add_action( 'wp_ajax_cs_dropbox_set_golden', function (): void {
+add_action( 'wp_ajax_csbr_dropbox_set_golden', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
-    $history  = (array) get_option( 'cs_dropbox_history', [] );
+    $history  = (array) get_option( 'csbr_dropbox_history', [] );
     if ( ! isset( $history[$filename] ) ) { wp_send_json_error( 'File not found in history.' ); }
     $history[$filename]['golden'] = empty( $history[$filename]['golden'] );
-    update_option( 'cs_dropbox_history', $history, false );
+    update_option( 'csbr_dropbox_history', $history, false );
     wp_send_json_success( [ 'golden' => $history[$filename]['golden'] ] );
 } );
 
-add_action( 'wp_ajax_cs_dropbox_set_tag', function (): void {
+add_action( 'wp_ajax_csbr_dropbox_set_tag', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     $tag      = substr( sanitize_text_field( wp_unslash( $_POST['tag'] ?? '' ) ), 0, 40 );
     // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
-    $history = (array) get_option( 'cs_dropbox_history', [] );
+    $history = (array) get_option( 'csbr_dropbox_history', [] );
     if ( ! isset( $history[$filename] ) ) { wp_send_json_error( 'File not found in history.' ); }
     $history[$filename]['tag'] = $tag;
-    update_option( 'cs_dropbox_history', $history, false );
+    update_option( 'csbr_dropbox_history', $history, false );
     wp_send_json_success( [ 'tag' => $tag ] );
 } );
 
-add_action( 'wp_ajax_cs_dropbox_delete_remote', function (): void {
+add_action( 'wp_ajax_csbr_dropbox_delete_remote', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     if ( ! $filename ) { wp_send_json_error( 'Invalid filename.' ); }
-    $remote = get_option( 'cs_dropbox_remote', '' );
+    $remote = get_option( 'csbr_dropbox_remote', '' );
     if ( ! $remote ) { wp_send_json_error( 'Dropbox not configured.' ); }
-    $rclone = cs_find_rclone();
+    $rclone = csbr_find_rclone();
     if ( ! $rclone ) { wp_send_json_error( 'rclone not found.' ); }
-    $dest_path = ltrim( get_option( 'cs_dropbox_path', 'cloudscale-backups/' ), '/' );
+    $dest_path = ltrim( get_option( 'csbr_dropbox_path', 'cloudscale-backups/' ), '/' );
     $rpath     = rtrim( $remote, ':' ) . ':' . rtrim( $dest_path, '/' ) . '/' . $filename;
     $cmd       = escapeshellarg( $rclone ) . ' deletefile ' . escapeshellarg( $rpath ) . ' 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
@@ -2987,16 +4093,19 @@ add_action( 'wp_ajax_cs_dropbox_delete_remote', function (): void {
     if ( $out && preg_match( '/error|failed|no such/i', $out ) ) {
         wp_send_json_error( 'Delete failed: ' . substr( $out, 0, 200 ) );
     }
-    $history = (array) get_option( 'cs_dropbox_history', [] );
+    $history = (array) get_option( 'csbr_dropbox_history', [] );
     unset( $history[$filename] );
-    update_option( 'cs_dropbox_history', $history, false );
-    update_option( 'cs_dropbox_remote_count', count( $history ), false );
+    update_option( 'csbr_dropbox_history', $history, false );
+    update_option( 'csbr_dropbox_remote_count', count( $history ), false );
     wp_send_json_success( 'Deleted.' );
 } );
 
-add_action( 'wp_ajax_cs_repair_tables', function (): void {
-    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+/**
+ * Runs OPTIMIZE TABLE on all InnoDB tables with overhead.
+ *
+ * @return int Number of tables optimized.
+ */
+function csbr_run_table_repair(): int {
     global $wpdb;
     $tables = $wpdb->get_col( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
         $wpdb->prepare(
@@ -3010,22 +4119,29 @@ add_action( 'wp_ajax_cs_repair_tables', function (): void {
         $wpdb->query( 'OPTIMIZE TABLE `' . esc_sql( $table ) . '`' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
         $count++;
     }
+    return $count;
+}
+
+add_action( 'wp_ajax_csbr_repair_tables', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    $count = csbr_run_table_repair();
     wp_send_json_success( $count . ' table' . ( $count === 1 ? '' : 's' ) . ' optimized.' );
 } );
 
-add_action( 'admin_post_cs_dropbox_download', function (): void {
+add_action( 'admin_post_csbr_dropbox_download', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) { wp_die( esc_html__( 'Forbidden', 'cloudscale-backup-restore' ), 403 ); }
     // phpcs:disable WordPress.Security.NonceVerification.Recommended, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified below
     $nonce    = sanitize_text_field( wp_unslash( $_GET['nonce']   ?? '' ) );
     $filename = sanitize_file_name( wp_unslash( $_GET['file']    ?? '' ) );
     // phpcs:enable WordPress.Security.NonceVerification.Recommended, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-    if ( ! wp_verify_nonce( $nonce, 'cs_nonce' ) ) { wp_die( esc_html__( 'Invalid nonce.', 'cloudscale-backup-restore' ), 403 ); }
+    if ( ! wp_verify_nonce( $nonce, 'csbr_nonce' ) ) { wp_die( esc_html__( 'Invalid nonce.', 'cloudscale-backup-restore' ), 403 ); }
     if ( ! $filename || ! str_ends_with( $filename, '.zip' ) ) { wp_die( esc_html__( 'Invalid filename.', 'cloudscale-backup-restore' ), 400 ); }
-    $remote = get_option( 'cs_dropbox_remote', '' );
+    $remote = get_option( 'csbr_dropbox_remote', '' );
     if ( ! $remote ) { wp_die( esc_html__( 'Dropbox not configured.', 'cloudscale-backup-restore' ) ); }
-    $rclone    = cs_find_rclone();
+    $rclone    = csbr_find_rclone();
     if ( ! $rclone ) { wp_die( esc_html__( 'rclone not found on server.', 'cloudscale-backup-restore' ) ); }
-    $dest_path = ltrim( get_option( 'cs_dropbox_path', 'cloudscale-backups/' ), '/' );
+    $dest_path = ltrim( get_option( 'csbr_dropbox_path', 'cloudscale-backups/' ), '/' );
     $rpath     = rtrim( $remote, ':' ) . ':' . rtrim( $dest_path, '/' ) . '/' . $filename;
     $tmp       = wp_tempnam( $filename );
     $cmd       = escapeshellarg( $rclone ) . ' copyto ' . escapeshellarg( $rpath ) . ' ' . escapeshellarg( $tmp ) . ' 2>&1';
@@ -3036,37 +4152,127 @@ add_action( 'admin_post_cs_dropbox_download', function (): void {
         wp_die( esc_html__( 'Download failed:', 'cloudscale-backup-restore' ) . ' ' . esc_html( $out ) );
     }
     header( 'Content-Type: application/zip' );
-    header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
+    header( 'Content-Disposition: attachment; filename="' . str_replace( [ "\r", "\n", '"', '\\' ], '', $filename ) . '"' );
     header( 'Content-Length: ' . filesize( $tmp ) );
     readfile( $tmp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- streaming binary download; WP_Filesystem has no streaming equivalent
     wp_delete_file( $tmp );
     exit;
 } );
 
-add_action('wp_ajax_cs_create_ami', function (): void {
+add_action( 'wp_ajax_csbr_onedrive_refresh_history', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    if ( ! get_option( 'csbr_onedrive_remote', '' ) ) { wp_send_json_error( 'OneDrive not configured.' ); }
+    $hist = csbr_onedrive_refresh_history();
+    update_option( 'csbr_onedrive_remote_count', count( $hist ), false );
+    wp_send_json_success( [ 'files' => array_values( $hist ), 'count' => count( $hist ) ] );
+} );
+
+add_action( 'wp_ajax_csbr_onedrive_set_golden', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
+    $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
+    $history  = (array) get_option( 'csbr_onedrive_history', [] );
+    if ( ! isset( $history[$filename] ) ) { wp_send_json_error( 'File not found in history.' ); }
+    $history[$filename]['golden'] = empty( $history[$filename]['golden'] );
+    update_option( 'csbr_onedrive_history', $history, false );
+    wp_send_json_success( [ 'golden' => $history[$filename]['golden'] ] );
+} );
+
+add_action( 'wp_ajax_csbr_onedrive_set_tag', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
+    $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
+    $tag      = substr( sanitize_text_field( wp_unslash( $_POST['tag'] ?? '' ) ), 0, 40 );
+    // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
+    $history = (array) get_option( 'csbr_onedrive_history', [] );
+    if ( ! isset( $history[$filename] ) ) { wp_send_json_error( 'File not found in history.' ); }
+    $history[$filename]['tag'] = $tag;
+    update_option( 'csbr_onedrive_history', $history, false );
+    wp_send_json_success( [ 'tag' => $tag ] );
+} );
+
+add_action( 'wp_ajax_csbr_onedrive_delete_remote', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Forbidden', 403 ); }
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
+    $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
+    if ( ! $filename ) { wp_send_json_error( 'Invalid filename.' ); }
+    $remote = get_option( 'csbr_onedrive_remote', '' );
+    if ( ! $remote ) { wp_send_json_error( 'OneDrive not configured.' ); }
+    $rclone = csbr_find_rclone();
+    if ( ! $rclone ) { wp_send_json_error( 'rclone not found.' ); }
+    $dest_path = ltrim( get_option( 'csbr_onedrive_path', 'cloudscale-backups/' ), '/' );
+    $rpath     = rtrim( $remote, ':' ) . ':' . rtrim( $dest_path, '/' ) . '/' . $filename;
+    $cmd       = escapeshellarg( $rclone ) . ' deletefile ' . escapeshellarg( $rpath ) . ' 2>&1';
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    if ( $out && preg_match( '/error|failed|no such/i', $out ) ) {
+        wp_send_json_error( 'Delete failed: ' . substr( $out, 0, 200 ) );
+    }
+    $history = (array) get_option( 'csbr_onedrive_history', [] );
+    unset( $history[$filename] );
+    update_option( 'csbr_onedrive_history', $history, false );
+    update_option( 'csbr_onedrive_remote_count', count( $history ), false );
+    wp_send_json_success( 'Deleted.' );
+} );
+
+add_action( 'admin_post_csbr_onedrive_download', function (): void {
+    if ( ! current_user_can( 'manage_options' ) ) { wp_die( esc_html__( 'Forbidden', 'cloudscale-backup-restore' ), 403 ); }
+    // phpcs:disable WordPress.Security.NonceVerification.Recommended, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified below
+    $nonce    = sanitize_text_field( wp_unslash( $_GET['nonce']   ?? '' ) );
+    $filename = sanitize_file_name( wp_unslash( $_GET['file']    ?? '' ) );
+    // phpcs:enable WordPress.Security.NonceVerification.Recommended, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+    if ( ! wp_verify_nonce( $nonce, 'csbr_nonce' ) ) { wp_die( esc_html__( 'Invalid nonce.', 'cloudscale-backup-restore' ), 403 ); }
+    if ( ! $filename || ! str_ends_with( $filename, '.zip' ) ) { wp_die( esc_html__( 'Invalid filename.', 'cloudscale-backup-restore' ), 400 ); }
+    $remote = get_option( 'csbr_onedrive_remote', '' );
+    if ( ! $remote ) { wp_die( esc_html__( 'OneDrive not configured.', 'cloudscale-backup-restore' ) ); }
+    $rclone    = csbr_find_rclone();
+    if ( ! $rclone ) { wp_die( esc_html__( 'rclone not found on server.', 'cloudscale-backup-restore' ) ); }
+    $dest_path = ltrim( get_option( 'csbr_onedrive_path', 'cloudscale-backups/' ), '/' );
+    $rpath     = rtrim( $remote, ':' ) . ':' . rtrim( $dest_path, '/' ) . '/' . $filename;
+    $tmp       = wp_tempnam( $filename );
+    $cmd       = escapeshellarg( $rclone ) . ' copyto ' . escapeshellarg( $rpath ) . ' ' . escapeshellarg( $tmp ) . ' 2>&1';
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    if ( $out || ! file_exists( $tmp ) || filesize( $tmp ) === 0 ) {
+        wp_delete_file( $tmp );
+        wp_die( esc_html__( 'Download failed:', 'cloudscale-backup-restore' ) . ' ' . esc_html( $out ) );
+    }
+    header( 'Content-Type: application/zip' );
+    header( 'Content-Disposition: attachment; filename="' . str_replace( [ "\r", "\n", '"', '\\' ], '', $filename ) . '"' );
+    header( 'Content-Length: ' . filesize( $tmp ) );
+    readfile( $tmp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- streaming binary download; WP_Filesystem has no streaming equivalent
+    wp_delete_file( $tmp );
+    exit;
+} );
+
+add_action('wp_ajax_csbr_create_ami', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     set_time_limit(120); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to allow AMI create-image API call to complete
 
-    $instance_id = cs_get_instance_id();
+    $instance_id = csbr_get_instance_id();
     if (!$instance_id) {
         wp_send_json_error('Cannot detect EC2 instance ID. Is this server running on EC2 with IMDS enabled?');
     }
 
-    $aws = cs_find_aws();
+    $aws = csbr_find_aws();
     if (!$aws) {
         wp_send_json_error('AWS CLI not found on server.');
     }
 
-    $prefix = get_option('cs_ami_prefix', '');
+    $prefix = get_option('csbr_ami_prefix', '');
     if (!$prefix) {
         wp_send_json_error('Set an AMI name prefix in settings first.');
     }
 
-    $reboot  = (bool) get_option('cs_ami_reboot', false);
-    $region  = cs_get_instance_region();
+    $reboot  = (bool) get_option('csbr_ami_reboot', false);
+    $region  = csbr_get_instance_region();
     $tz      = wp_timezone();
     $now     = new DateTime('now', $tz);
     // AWS AMI names allow: a-z A-Z 0-9 ( ) . - / _ only, max 128 chars
@@ -3095,7 +4301,7 @@ add_action('wp_ajax_cs_create_ami', function (): void {
     $result = json_decode($out, true);
     $ami_id = $result['ImageId'] ?? null;
 
-    $log = (array) get_option('cs_ami_log', []);
+    $log = (array) get_option('csbr_ami_log', []);
 
     if ($ami_id) {
         $entry = [
@@ -3108,16 +4314,16 @@ add_action('wp_ajax_cs_create_ami', function (): void {
             'state'       => 'pending',
         ];
         $log[] = $entry;
-        // Enforce cs_ami_max — deregister and prune oldest successful entries beyond the limit
-        $log = cs_ami_enforce_max($log, $aws, $region);
+        // Enforce csbr_ami_max — deregister and prune oldest successful entries beyond the limit
+        $log = csbr_ami_enforce_max($log, $aws, $region);
 
         $msg = 'AMI creation started: ' . $ami_id . ' (' . $ami_name . ')';
         if ($reboot) $msg .= ' — instance will reboot shortly';
 
         // Schedule the first state poll in 10 minutes if not already queued
-        if (!wp_next_scheduled('cs_ami_poll')) {
-            wp_schedule_single_event(time() + CS_BACKUP_AMI_POLL_INTERVAL, 'cs_ami_poll');
-            cs_log('[CloudScale Backup] AMI poll: first check scheduled in ' . (CS_BACKUP_AMI_POLL_INTERVAL / 60) . ' min for ' . $ami_id);
+        if (!wp_next_scheduled('csbr_ami_poll')) {
+            wp_schedule_single_event(time() + CSBR_AMI_POLL_INTERVAL, 'csbr_ami_poll');
+            csbr_log('[CloudScale Backup & Restore] AMI poll: first check scheduled in ' . (CSBR_AMI_POLL_INTERVAL / 60) . ' min for ' . $ami_id);
         }
 
         wp_send_json_success(['message' => $msg, 'ami_id' => $ami_id, 'name' => $ami_name]);
@@ -3130,9 +4336,9 @@ add_action('wp_ajax_cs_create_ami', function (): void {
         ];
         $log[] = $entry;
         if (count($log) > 20) $log = array_slice($log, -20);
-        update_option('cs_ami_log', $log, false);
+        update_option('csbr_ami_log', $log, false);
 
-        cs_log('[CloudScale Backup] AMI creation failed: ' . $out);
+        csbr_log('[CloudScale Backup & Restore] AMI creation failed: ' . $out);
         wp_send_json_error('AMI creation failed: ' . $out);
     }
 });
@@ -3150,8 +4356,8 @@ add_action('wp_ajax_cs_create_ami', function (): void {
  * @param string $region AWS region, or empty string to let the CLI use its default.
  * @return array Updated AMI log array with pruned entries removed.
  */
-function cs_ami_enforce_max(array $log, string $aws, string $region): array {
-    $ami_max      = max(1, intval(get_option('cs_ami_max', 10)));
+function csbr_ami_enforce_max(array $log, string $aws, string $region): array {
+    $ami_max      = max(1, intval(get_option('csbr_ami_max', 10)));
     // Golden images are never pruned and do not count towards the quota.
     $golden_entries = array_values(array_filter($log, fn($e) => !empty($e['ok']) && !empty($e['ami_id']) && !empty($e['golden'])));
     $ok_entries     = array_values(array_filter($log, fn($e) => !empty($e['ok']) && !empty($e['ami_id']) &&  empty($e['golden'])));
@@ -3180,11 +4386,11 @@ function cs_ami_enforce_max(array $log, string $aws, string $region): array {
             $already_gone = str_contains($out, 'InvalidAMIID') || str_contains($out, 'does not exist');
             if ($out === '' || $already_gone) {
                 // Deregistered (or already gone) — drop local record
-                cs_log('[CloudScale Backup] AMI auto-deregistered: ' . $ami_id . ' (' . ($old['name'] ?? '') . ')');
+                csbr_log('[CloudScale Backup & Restore] AMI auto-deregistered: ' . $ami_id . ' (' . ($old['name'] ?? '') . ')');
             } else {
                 // Deregistration failed — still drop from local log to enforce the count limit,
                 // but mark it so the user knows manual cleanup in AWS may be needed.
-                cs_log('[CloudScale Backup] AMI auto-deregister FAILED for ' . $ami_id . ': ' . $out . ' — removed from local log; may need manual removal in AWS console');
+                csbr_log('[CloudScale Backup & Restore] AMI auto-deregister FAILED for ' . $ami_id . ': ' . $out . ' — removed from local log; may need manual removal in AWS console');
             }
         }
 
@@ -3194,7 +4400,7 @@ function cs_ami_enforce_max(array $log, string $aws, string $region): array {
     // Keep at most 20 failed entries
     $fail_entries = array_slice($fail_entries, -20);
     $log = array_values(array_merge($golden_entries, $ok_entries, $fail_entries));
-    update_option('cs_ami_log', $log, false);
+    update_option('csbr_ami_log', $log, false);
     return $log;
 }
 
@@ -3212,24 +4418,24 @@ function cs_ami_enforce_max(array $log, string $aws, string $region): array {
  *
  * @since 2.74.0
  */
-function cs_do_create_ami(): array {
-    $instance_id = cs_get_instance_id();
+function csbr_do_create_ami(): array {
+    $instance_id = csbr_get_instance_id();
     if (!$instance_id) {
         return ['ok' => false, 'ami_id' => null, 'name' => '', 'error' => 'EC2 instance ID not detected.'];
     }
 
-    $aws = cs_find_aws();
+    $aws = csbr_find_aws();
     if (!$aws) {
         return ['ok' => false, 'ami_id' => null, 'name' => '', 'error' => 'AWS CLI not found on server.'];
     }
 
-    $prefix = get_option('cs_ami_prefix', '');
+    $prefix = get_option('csbr_ami_prefix', '');
     if (!$prefix) {
         return ['ok' => false, 'ami_id' => null, 'name' => '', 'error' => 'No AMI name prefix configured.'];
     }
 
-    $reboot  = (bool) get_option('cs_ami_reboot', false);
-    $region  = cs_get_instance_region();
+    $reboot  = (bool) get_option('csbr_ami_reboot', false);
+    $region  = csbr_get_instance_region();
     $tz      = wp_timezone();
     $now     = new DateTime('now', $tz);
 
@@ -3254,7 +4460,7 @@ function cs_do_create_ami(): array {
     $result = json_decode($out, true);
     $ami_id = $result['ImageId'] ?? null;
 
-    $log = (array) get_option('cs_ami_log', []);
+    $log = (array) get_option('csbr_ami_log', []);
 
     if ($ami_id) {
         $log[] = [
@@ -3266,10 +4472,10 @@ function cs_do_create_ami(): array {
             'reboot'      => $reboot,
             'state'       => 'pending',
         ];
-        cs_ami_enforce_max($log, $aws, $region);
+        csbr_ami_enforce_max($log, $aws, $region);
 
-        if (!wp_next_scheduled('cs_ami_poll')) {
-            wp_schedule_single_event(time() + CS_BACKUP_AMI_POLL_INTERVAL, 'cs_ami_poll');
+        if (!wp_next_scheduled('csbr_ami_poll')) {
+            wp_schedule_single_event(time() + CSBR_AMI_POLL_INTERVAL, 'csbr_ami_poll');
         }
 
         return ['ok' => true, 'ami_id' => $ami_id, 'name' => $ami_name];
@@ -3281,19 +4487,19 @@ function cs_do_create_ami(): array {
             'error' => substr($out, 0, 500),
         ];
         if (count($log) > 20) { $log = array_slice($log, -20); }
-        update_option('cs_ami_log', $log, false);
+        update_option('csbr_ami_log', $log, false);
 
         return ['ok' => false, 'ami_id' => null, 'name' => $ami_name, 'error' => $out];
     }
 }
 
-add_action('wp_ajax_cs_ami_status', function (): void {
+add_action('wp_ajax_csbr_ami_status', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
 
-    $aws = cs_find_aws();
+    $aws = csbr_find_aws();
     if (!$aws) {
         wp_send_json_error('AWS CLI not found.');
     }
@@ -3302,7 +4508,7 @@ add_action('wp_ajax_cs_ami_status', function (): void {
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $specific_ami = isset($_POST['ami_id']) ? sanitize_text_field( wp_unslash( $_POST['ami_id'] ) ) : '';
 
-    $log = (array) get_option('cs_ami_log', []);
+    $log = (array) get_option('csbr_ami_log', []);
 
     if ($specific_ami) {
         // Look up the specific AMI
@@ -3325,7 +4531,7 @@ add_action('wp_ajax_cs_ami_status', function (): void {
         wp_send_json_error('No AMI found in log. Create one first.');
     }
 
-    $region = cs_get_instance_region();
+    $region = csbr_get_instance_region();
     $region_flag = $region ? ' --region ' . escapeshellarg($region) : '';
     $cmd = escapeshellarg($aws) . ' ec2 describe-images'
          . ' --image-ids ' . escapeshellarg($target['ami_id'])
@@ -3343,7 +4549,7 @@ add_action('wp_ajax_cs_ami_status', function (): void {
             }
         }
         unset($e);
-        update_option('cs_ami_log', $log, false);
+        update_option('csbr_ami_log', $log, false);
 
         if ($specific_ami) {
             wp_send_json_success(['ami_id' => $target['ami_id'], 'name' => $target['name'] ?? '', 'state' => $state, 'golden' => ! empty( $target['golden'] ), 'tag' => $target['tag'] ?? '']);
@@ -3355,11 +4561,11 @@ add_action('wp_ajax_cs_ami_status', function (): void {
     }
 });
 
-add_action('wp_ajax_cs_deregister_ami', function (): void {
+add_action('wp_ajax_csbr_deregister_ami', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
 
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $ami_id = sanitize_text_field( wp_unslash( $_POST['ami_id'] ?? '' ) );
@@ -3367,12 +4573,12 @@ add_action('wp_ajax_cs_deregister_ami', function (): void {
         wp_send_json_error('Invalid AMI ID.');
     }
 
-    $aws = cs_find_aws();
+    $aws = csbr_find_aws();
     if (!$aws) {
         wp_send_json_error('AWS CLI not found.');
     }
 
-    $region = cs_get_instance_region();
+    $region = csbr_get_instance_region();
     $region_flag = $region ? ' --region ' . escapeshellarg($region) : '';
     $cmd = escapeshellarg($aws) . ' ec2 deregister-image'
          . ' --image-id ' . escapeshellarg($ami_id)
@@ -3384,7 +4590,7 @@ add_action('wp_ajax_cs_deregister_ami', function (): void {
     // deregister-image returns empty output on success
     if ($out === '' || str_contains($out, '"return": true') || str_contains($out, 'Return')) {
         // Mark as pending_delete in log and schedule a check in 15 minutes
-        $log = (array) get_option('cs_ami_log', []);
+        $log = (array) get_option('csbr_ami_log', []);
         foreach ($log as &$entry) {
             if (($entry['ami_id'] ?? '') === $ami_id) {
                 $entry['state'] = 'pending_delete';
@@ -3392,16 +4598,16 @@ add_action('wp_ajax_cs_deregister_ami', function (): void {
             }
         }
         unset($entry);
-        update_option('cs_ami_log', $log, false);
+        update_option('csbr_ami_log', $log, false);
 
         // Schedule a cron check in 15 minutes to confirm deletion and clean up
-        if (!wp_next_scheduled('cs_ami_delete_check', [$ami_id])) {
-            wp_schedule_single_event(time() + 900, 'cs_ami_delete_check', [$ami_id]);
+        if (!wp_next_scheduled('csbr_ami_delete_check', [$ami_id])) {
+            wp_schedule_single_event(time() + 900, 'csbr_ami_delete_check', [$ami_id]);
         }
 
         wp_send_json_success('AMI ' . $ami_id . ' deregistered. Status will update automatically in 15 minutes.');
     } else {
-        cs_log('[CloudScale Backup] AMI deregister failed: ' . $out);
+        csbr_log('[CloudScale Backup & Restore] AMI deregister failed: ' . $out);
         wp_send_json_error('Deregister failed: ' . $out);
     }
 });
@@ -3414,14 +4620,14 @@ add_action('wp_ajax_cs_deregister_ami', function (): void {
  * WP-Cron callback: verify an AMI has been deleted in AWS 15 minutes after deregistration.
  *
  * Removes the log entry if AWS confirms the image is gone; updates the state if it still exists.
- * Scheduled by the cs_deregister_ami AJAX handler immediately after a successful deregister call.
+ * Scheduled by the csbr_deregister_ami AJAX handler immediately after a successful deregister call.
  *
  * @since 3.2.54
  * @param string $ami_id The AWS AMI ID to check (e.g. 'ami-0abc1234').
  * @return void
  */
-add_action('cs_ami_delete_check', function (string $ami_id): void {
-    $log = (array) get_option('cs_ami_log', []);
+add_action('csbr_ami_delete_check', function (string $ami_id): void {
+    $log = (array) get_option('csbr_ami_log', []);
 
     // Find the entry
     $entry_idx = null;
@@ -3433,13 +4639,13 @@ add_action('cs_ami_delete_check', function (string $ami_id): void {
     }
     if ($entry_idx === null) return; // already removed from log
 
-    $aws = cs_find_aws();
+    $aws = csbr_find_aws();
     if (!$aws) {
-        cs_log('[CloudScale Backup] AMI delete check: AWS CLI not found for ' . $ami_id);
+        csbr_log('[CloudScale Backup & Restore] AMI delete check: AWS CLI not found for ' . $ami_id);
         return;
     }
 
-    $region      = cs_get_instance_region();
+    $region      = csbr_get_instance_region();
     $region_flag = $region ? ' --region ' . escapeshellarg($region) : '';
     $cmd = escapeshellarg($aws) . ' ec2 describe-images --image-ids ' . escapeshellarg($ami_id) . $region_flag . ' --output json 2>&1';
     $out  = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
@@ -3448,40 +4654,40 @@ add_action('cs_ami_delete_check', function (string $ami_id): void {
     if (empty($data['Images'])) {
         // Gone from AWS — remove from local log
         $log = array_values(array_filter($log, fn($e) => ($e['ami_id'] ?? '') !== $ami_id));
-        cs_log('[CloudScale Backup] AMI delete confirmed, removed from log: ' . $ami_id);
+        csbr_log('[CloudScale Backup & Restore] AMI delete confirmed, removed from log: ' . $ami_id);
     } else {
         // Still exists — update state from AWS
         $log[$entry_idx]['state'] = $data['Images'][0]['State'] ?? 'unknown';
-        cs_log('[CloudScale Backup] AMI delete check: ' . $ami_id . ' state = ' . $log[$entry_idx]['state']);
+        csbr_log('[CloudScale Backup & Restore] AMI delete check: ' . $ami_id . ' state = ' . $log[$entry_idx]['state']);
     }
 
-    update_option('cs_ami_log', $log, false);
+    update_option('csbr_ami_log', $log, false);
 });
 
 // ============================================================
 // AJAX — Refresh all AMI states (one at a time, 2s gap between calls)
 // ============================================================
 
-add_action('wp_ajax_cs_ami_refresh_all', function (): void {
+add_action('wp_ajax_csbr_ami_refresh_all', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
 
-    $aws = cs_find_aws();
+    $aws = csbr_find_aws();
     if (!$aws) {
         wp_send_json_error('AWS CLI not found.');
     }
 
     // Read directly from DB — bypasses object cache which may serve stale state
-    // after cs_ami_reset_deleted has just written new values
+    // after csbr_ami_reset_deleted has just written new values
     global $wpdb;
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- bypasses object cache intentionally; post-reset read must be authoritative
-    $raw_log = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'cs_ami_log' ) );
+    $raw_log = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", 'csbr_ami_log' ) );
     $log     = $raw_log ? (array) maybe_unserialize($raw_log) : []; // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_maybe_unserialize -- value written only by this plugin
 
-    $region      = cs_get_instance_region();
+    $region      = csbr_get_instance_region();
     $region_flag = $region ? ' --region ' . escapeshellarg($region) : '';
     $results     = [];
 
@@ -3513,7 +4719,7 @@ add_action('wp_ajax_cs_ami_refresh_all', function (): void {
             }
         }
 
-        cs_log('[CloudScale Backup] Refresh All: ' . $ami_id . ' → ' . $new_state);
+        csbr_log('[CloudScale Backup & Restore] Refresh All: ' . $ami_id . ' → ' . $new_state);
 
         // Always write the state — never skip based on previous value
         $entry['state'] = $new_state;
@@ -3539,7 +4745,7 @@ add_action('wp_ajax_cs_ami_refresh_all', function (): void {
     }));
 
     // Always write back — state is always refreshed from AWS
-    update_option('cs_ami_log', $log, false);
+    update_option('csbr_ami_log', $log, false);
 
     wp_send_json_success(['results' => $results]);
 });
@@ -3548,12 +4754,12 @@ add_action('wp_ajax_cs_ami_refresh_all', function (): void {
 // AJAX — Reset all 'deleted in AWS' log entries back to 'pending' for re-query
 // ============================================================
 
-add_action('wp_ajax_cs_ami_reset_deleted', function (): void {
+add_action('wp_ajax_csbr_ami_reset_deleted', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    $log     = (array) get_option('cs_ami_log', []);
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    $log     = (array) get_option('csbr_ami_log', []);
     $reset   = 0;
     foreach ($log as &$entry) {
         if (!empty($entry['ami_id']) && ($entry['state'] ?? '') === 'deleted in AWS') {
@@ -3563,7 +4769,7 @@ add_action('wp_ajax_cs_ami_reset_deleted', function (): void {
         }
     }
     unset($entry);
-    update_option('cs_ami_log', $log, false);
+    update_option('csbr_ami_log', $log, false);
     wp_send_json_success(['reset' => $reset]);
 });
 
@@ -3571,11 +4777,11 @@ add_action('wp_ajax_cs_ami_reset_deleted', function (): void {
 // AJAX — Remove a log record (for AMIs already deleted in AWS)
 // ============================================================
 
-add_action('wp_ajax_cs_ami_remove_record', function (): void {
+add_action('wp_ajax_csbr_ami_remove_record', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
 
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $ami_id = sanitize_text_field( wp_unslash( $_POST['ami_id'] ?? '' ) );
@@ -3583,29 +4789,29 @@ add_action('wp_ajax_cs_ami_remove_record', function (): void {
         wp_send_json_error('Invalid AMI ID.');
     }
 
-    $log     = (array) get_option('cs_ami_log', []);
+    $log     = (array) get_option('csbr_ami_log', []);
     $updated = array_values(array_filter($log, fn($e) => ($e['ami_id'] ?? '') !== $ami_id));
 
-    update_option('cs_ami_log', $updated, false);
+    update_option('csbr_ami_log', $updated, false);
     wp_send_json_success('Record removed.');
 });
 
-add_action('wp_ajax_cs_ami_remove_failed', function (): void {
+add_action('wp_ajax_csbr_ami_remove_failed', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $name = sanitize_text_field( wp_unslash( $_POST['name'] ?? '' ) );
     if (!$name) {
         wp_send_json_error('No name provided.');
     }
-    $log     = (array) get_option('cs_ami_log', []);
+    $log     = (array) get_option('csbr_ami_log', []);
     $updated = array_values(array_filter($log, fn($e) => ($e['name'] ?? '') !== $name || !empty($e['ami_id'])));
     if (count($updated) === count($log)) {
         wp_send_json_error('Record not found.');
     }
-    update_option('cs_ami_log', $updated, false);
+    update_option('csbr_ami_log', $updated, false);
     wp_send_json_success('Record removed.');
 });
 
@@ -3619,28 +4825,28 @@ add_action('wp_ajax_cs_ami_remove_failed', function (): void {
  * @since 3.2.124
  * @return void Sends JSON success with task_id, or JSON error with message.
  */
-add_action('wp_ajax_cs_ami_restore', function (): void {
+add_action('wp_ajax_csbr_ami_restore', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $ami_id = sanitize_text_field( wp_unslash( $_POST['ami_id'] ?? '' ) );
     if ( ! preg_match( '/^ami-[a-f0-9]{8,17}$/', $ami_id ) ) {
         wp_send_json_error( 'Invalid AMI ID.' );
     }
 
-    $aws = cs_find_aws();
+    $aws = csbr_find_aws();
     if ( ! $aws ) {
         wp_send_json_error( 'AWS CLI not found on this server.' );
     }
 
-    $instance_id = cs_get_instance_id();
+    $instance_id = csbr_get_instance_id();
     if ( ! $instance_id ) {
         wp_send_json_error( 'EC2 instance ID not detected.' );
     }
 
-    $region      = cs_get_instance_region();
+    $region      = csbr_get_instance_region();
     $region_flag = $region ? ' --region ' . escapeshellarg( $region ) : '';
 
     $cmd = escapeshellarg( $aws ) . ' ec2 create-replace-root-volume-task'
@@ -3655,10 +4861,10 @@ add_action('wp_ajax_cs_ami_restore', function (): void {
 
     if ( isset( $decoded['ReplaceRootVolumeTask']['ReplaceRootVolumeTaskId'] ) ) {
         $task_id = sanitize_text_field( $decoded['ReplaceRootVolumeTask']['ReplaceRootVolumeTaskId'] );
-        cs_log( '[CloudScale Backup] AMI restore task created: ' . $task_id . ' (AMI: ' . $ami_id . ')' );
+        csbr_log( '[CloudScale Backup & Restore] AMI restore task created: ' . $task_id . ' (AMI: ' . $ami_id . ')' );
         wp_send_json_success( [ 'task_id' => $task_id ] );
     } else {
-        cs_log( '[CloudScale Backup] AMI restore failed. Output: ' . substr( $output ?? '', 0, 300 ) );
+        csbr_log( '[CloudScale Backup & Restore] AMI restore failed. Output: ' . substr( $output ?? '', 0, 300 ) );
         wp_send_json_error( is_string( $output ) ? trim( substr( $output, 0, 300 ) ) : 'No output from AWS CLI.' );
     }
 });
@@ -3673,11 +4879,11 @@ add_action('wp_ajax_cs_ami_restore', function (): void {
  * @since 3.2.124
  * @return void Sends JSON success with new tag value.
  */
-add_action('wp_ajax_cs_ami_set_tag', function (): void {
+add_action('wp_ajax_csbr_ami_set_tag', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $ami_id = sanitize_text_field( wp_unslash( $_POST['ami_id'] ?? '' ) );
     $tag    = sanitize_text_field( wp_unslash( $_POST['tag']    ?? '' ) );
@@ -3685,7 +4891,7 @@ add_action('wp_ajax_cs_ami_set_tag', function (): void {
     if ( ! preg_match( '/^ami-[a-f0-9]{8,17}$/', $ami_id ) ) {
         wp_send_json_error( 'Invalid AMI ID.' );
     }
-    $log   = (array) get_option( 'cs_ami_log', [] );
+    $log   = (array) get_option( 'csbr_ami_log', [] );
     $found = false;
     foreach ( $log as &$entry ) {
         if ( ( $entry['ami_id'] ?? '' ) === $ami_id ) {
@@ -3696,7 +4902,7 @@ add_action('wp_ajax_cs_ami_set_tag', function (): void {
     }
     unset( $entry );
     if ( ! $found ) { wp_send_json_error( 'AMI not found in log.' ); }
-    update_option( 'cs_ami_log', $log, false );
+    update_option( 'csbr_ami_log', $log, false );
     wp_send_json_success( [ 'tag' => $tag ] );
 });
 
@@ -3704,22 +4910,22 @@ add_action('wp_ajax_cs_ami_set_tag', function (): void {
  * AJAX: toggle golden image status for an AMI log entry.
  *
  * Enforces a maximum of 4 golden images across all AMI entries.
- * Golden images are exempt from auto-pruning in cs_ami_enforce_max().
+ * Golden images are exempt from auto-pruning in csbr_ami_enforce_max().
  *
  * @since 3.2.124
  * @return void Sends JSON success with new golden bool.
  */
-add_action('wp_ajax_cs_ami_set_golden', function (): void {
+add_action('wp_ajax_csbr_ami_set_golden', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $ami_id = sanitize_text_field( wp_unslash( $_POST['ami_id'] ?? '' ) );
     if ( ! preg_match( '/^ami-[a-f0-9]{8,17}$/', $ami_id ) ) {
         wp_send_json_error( 'Invalid AMI ID.' );
     }
-    $log = (array) get_option( 'cs_ami_log', [] );
+    $log = (array) get_option( 'csbr_ami_log', [] );
     $idx = null;
     foreach ( $log as $i => $entry ) {
         if ( ( $entry['ami_id'] ?? '' ) === $ami_id ) { $idx = $i; break; }
@@ -3733,7 +4939,7 @@ add_action('wp_ajax_cs_ami_set_golden', function (): void {
         }
     }
     $log[ $idx ]['golden'] = ! $currently;
-    update_option( 'cs_ami_log', $log, false );
+    update_option( 'csbr_ami_log', $log, false );
     wp_send_json_success( [ 'golden' => ! $currently ] );
 });
 
@@ -3757,16 +4963,16 @@ add_action('wp_ajax_cs_ami_set_golden', function (): void {
  * @since 3.2.124
  * @return void Sends JSON success with array of file entries.
  */
-add_action('wp_ajax_cs_gdrive_refresh_history', function (): void {
+add_action('wp_ajax_csbr_gdrive_refresh_history', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    if ( ! get_option( 'cs_gdrive_remote', '' ) ) {
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    if ( ! get_option( 'csbr_gdrive_remote', '' ) ) {
         wp_send_json_error( 'Google Drive not configured.' );
     }
-    $gd_hist = cs_gdrive_refresh_history();
-    update_option( 'cs_gdrive_remote_count', count( $gd_hist ), false );
+    $gd_hist = csbr_gdrive_refresh_history();
+    update_option( 'csbr_gdrive_remote_count', count( $gd_hist ), false );
     wp_send_json_success( [ 'files' => array_values( $gd_hist ), 'count' => count( $gd_hist ) ] );
 });
 
@@ -3776,20 +4982,20 @@ add_action('wp_ajax_cs_gdrive_refresh_history', function (): void {
  * @since 3.2.124
  * @return void Sends JSON success with new tag value.
  */
-add_action('wp_ajax_cs_gdrive_set_tag', function (): void {
+add_action('wp_ajax_csbr_gdrive_set_tag', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     $tag      = sanitize_text_field( wp_unslash( $_POST['tag']      ?? '' ) );
     // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
     if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
-    $hist = (array) get_option( 'cs_gdrive_history', [] );
+    $hist = (array) get_option( 'csbr_gdrive_history', [] );
     if ( ! isset( $hist[ $filename ] ) ) { wp_send_json_error( 'File not found in history.' ); }
     $hist[ $filename ]['tag'] = $tag;
-    update_option( 'cs_gdrive_history', $hist, false );
+    update_option( 'csbr_gdrive_history', $hist, false );
     wp_send_json_success( [ 'tag' => $tag ] );
 });
 
@@ -3801,15 +5007,15 @@ add_action('wp_ajax_cs_gdrive_set_tag', function (): void {
  * @since 3.2.124
  * @return void Sends JSON success with new golden bool.
  */
-add_action('wp_ajax_cs_gdrive_set_golden', function (): void {
+add_action('wp_ajax_csbr_gdrive_set_golden', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
-    $hist = (array) get_option( 'cs_gdrive_history', [] );
+    $hist = (array) get_option( 'csbr_gdrive_history', [] );
     if ( ! isset( $hist[ $filename ] ) ) { wp_send_json_error( 'File not found in history.' ); }
     $currently = ! empty( $hist[ $filename ]['golden'] );
     if ( ! $currently ) {
@@ -3819,7 +5025,7 @@ add_action('wp_ajax_cs_gdrive_set_golden', function (): void {
         }
     }
     $hist[ $filename ]['golden'] = ! $currently;
-    update_option( 'cs_gdrive_history', $hist, false );
+    update_option( 'csbr_gdrive_history', $hist, false );
     wp_send_json_success( [ 'golden' => ! $currently ] );
 });
 
@@ -3829,45 +5035,45 @@ add_action('wp_ajax_cs_gdrive_set_golden', function (): void {
  * @since 3.2.124
  * @return void Sends JSON success or error.
  */
-add_action('wp_ajax_cs_gdrive_delete_remote', function (): void {
+add_action('wp_ajax_csbr_gdrive_delete_remote', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
-    $remote = get_option( 'cs_gdrive_remote', '' );
+    $remote = get_option( 'csbr_gdrive_remote', '' );
     if ( ! $remote ) { wp_send_json_error( 'Google Drive not configured.' ); }
-    $rclone = cs_find_rclone();
+    $rclone = csbr_find_rclone();
     if ( ! $rclone ) { wp_send_json_error( 'rclone not found.' ); }
-    $dest_path   = ltrim( get_option( 'cs_gdrive_path', 'cloudscale-backups/' ), '/' );
+    $dest_path   = ltrim( get_option( 'csbr_gdrive_path', 'cloudscale-backups/' ), '/' );
     $remote_file = rtrim( $remote, ':' ) . ':' . $dest_path . $filename;
     $cmd         = escapeshellarg( $rclone ) . ' deletefile ' . escapeshellarg( $remote_file ) . ' 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     if ( $out === '' ) {
-        $hist = (array) get_option( 'cs_gdrive_history', [] );
+        $hist = (array) get_option( 'csbr_gdrive_history', [] );
         unset( $hist[ $filename ] );
-        update_option( 'cs_gdrive_history', $hist, false );
-        update_option( 'cs_gdrive_remote_count', max( 0, (int) get_option( 'cs_gdrive_remote_count', 0 ) - 1 ), false );
-        cs_log( '[CloudScale Backup] GDrive history: deleted ' . $filename );
+        update_option( 'csbr_gdrive_history', $hist, false );
+        update_option( 'csbr_gdrive_remote_count', max( 0, (int) get_option( 'csbr_gdrive_remote_count', 0 ) - 1 ), false );
+        csbr_log( '[CloudScale Backup & Restore] GDrive history: deleted ' . $filename );
         wp_send_json_success( 'Deleted.' );
     } else {
         wp_send_json_error( trim( substr( $out, 0, 200 ) ) );
     }
 });
 
-add_action('wp_ajax_cs_s3_refresh_history', function (): void {
+add_action('wp_ajax_csbr_s3_refresh_history', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    if ( ! get_option( 'cs_s3_bucket', '' ) ) {
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    if ( ! get_option( 'csbr_s3_bucket', '' ) ) {
         wp_send_json_error( 'S3 not configured.' );
     }
-    $s3_hist = cs_s3_refresh_history();
-    update_option( 'cs_s3_remote_count', count( $s3_hist ), false );
+    $s3_hist = csbr_s3_refresh_history();
+    update_option( 'csbr_s3_remote_count', count( $s3_hist ), false );
     wp_send_json_success( [ 'files' => array_values( $s3_hist ), 'count' => count( $s3_hist ) ] );
 });
 
@@ -3877,20 +5083,20 @@ add_action('wp_ajax_cs_s3_refresh_history', function (): void {
  * @since 3.2.124
  * @return void Sends JSON success with new tag value.
  */
-add_action('wp_ajax_cs_s3_set_tag', function (): void {
+add_action('wp_ajax_csbr_s3_set_tag', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     $tag      = sanitize_text_field( wp_unslash( $_POST['tag']      ?? '' ) );
     // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
     if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
-    $hist = (array) get_option( 'cs_s3_history', [] );
+    $hist = (array) get_option( 'csbr_s3_history', [] );
     if ( ! isset( $hist[ $filename ] ) ) { wp_send_json_error( 'File not found in history.' ); }
     $hist[ $filename ]['tag'] = $tag;
-    update_option( 'cs_s3_history', $hist, false );
+    update_option( 'csbr_s3_history', $hist, false );
     wp_send_json_success( [ 'tag' => $tag ] );
 });
 
@@ -3903,15 +5109,15 @@ add_action('wp_ajax_cs_s3_set_tag', function (): void {
  * @since 3.2.124
  * @return void Sends JSON success with new golden bool.
  */
-add_action('wp_ajax_cs_s3_set_golden', function (): void {
+add_action('wp_ajax_csbr_s3_set_golden', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
-    $hist = (array) get_option( 'cs_s3_history', [] );
+    $hist = (array) get_option( 'csbr_s3_history', [] );
     if ( ! isset( $hist[ $filename ] ) ) { wp_send_json_error( 'File not found in history.' ); }
     $currently = ! empty( $hist[ $filename ]['golden'] );
     if ( ! $currently ) {
@@ -3921,7 +5127,7 @@ add_action('wp_ajax_cs_s3_set_golden', function (): void {
         }
     }
     $hist[ $filename ]['golden'] = ! $currently;
-    update_option( 'cs_s3_history', $hist, false );
+    update_option( 'csbr_s3_history', $hist, false );
     wp_send_json_success( [ 'golden' => ! $currently ] );
 });
 
@@ -3931,29 +5137,29 @@ add_action('wp_ajax_cs_s3_set_golden', function (): void {
  * @since 3.2.124
  * @return void Sends JSON success or error.
  */
-add_action('wp_ajax_cs_s3_delete_remote', function (): void {
+add_action('wp_ajax_csbr_s3_delete_remote', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
-    $bucket = get_option( 'cs_s3_bucket', '' );
+    $bucket = get_option( 'csbr_s3_bucket', '' );
     if ( ! $bucket ) { wp_send_json_error( 'S3 not configured.' ); }
-    $aws = cs_find_aws();
+    $aws = csbr_find_aws();
     if ( ! $aws ) { wp_send_json_error( 'AWS CLI not found.' ); }
-    $prefix  = '/' . ltrim( get_option( 'cs_s3_prefix', 'backups/' ), '/' );
+    $prefix  = '/' . ltrim( get_option( 'csbr_s3_prefix', 'backups/' ), '/' );
     $s3_path = 's3://' . rtrim( $bucket, '/' ) . rtrim( $prefix, '/' ) . '/' . $filename;
     $cmd     = escapeshellarg( $aws ) . ' s3 rm ' . escapeshellarg( $s3_path ) . ' 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     if ( $out === '' || str_starts_with( $out, 'delete:' ) ) {
-        $hist = (array) get_option( 'cs_s3_history', [] );
+        $hist = (array) get_option( 'csbr_s3_history', [] );
         unset( $hist[ $filename ] );
-        update_option( 'cs_s3_history', $hist, false );
-        update_option( 'cs_s3_remote_count', max( 0, (int) get_option( 'cs_s3_remote_count', 0 ) - 1 ), false );
-        cs_log( '[CloudScale Backup] S3 history: deleted ' . $filename );
+        update_option( 'csbr_s3_history', $hist, false );
+        update_option( 'csbr_s3_remote_count', max( 0, (int) get_option( 'csbr_s3_remote_count', 0 ) - 1 ), false );
+        csbr_log( '[CloudScale Backup & Restore] S3 history: deleted ' . $filename );
         wp_send_json_success( 'Deleted.' );
     } else {
         wp_send_json_error( trim( substr( $out, 0, 200 ) ) );
@@ -3969,22 +5175,22 @@ add_action('wp_ajax_cs_s3_delete_remote', function (): void {
  * @since 3.2.124
  * @return void Sends JSON success or error.
  */
-add_action('wp_ajax_cs_s3_pull', function (): void {
+add_action('wp_ajax_csbr_s3_pull', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
-    cs_ensure_backup_dir();
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    csbr_ensure_backup_dir();
     // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- nonce verified via check_ajax_referer() above
     $filename = sanitize_file_name( wp_unslash( $_POST['filename'] ?? '' ) );
     if ( ! $filename ) { wp_send_json_error( 'No filename.' ); }
-    $bucket = get_option( 'cs_s3_bucket', '' );
+    $bucket = get_option( 'csbr_s3_bucket', '' );
     if ( ! $bucket ) { wp_send_json_error( 'S3 not configured.' ); }
-    $aws = cs_find_aws();
+    $aws = csbr_find_aws();
     if ( ! $aws ) { wp_send_json_error( 'AWS CLI not found.' ); }
-    $prefix     = '/' . ltrim( get_option( 'cs_s3_prefix', 'backups/' ), '/' );
+    $prefix     = '/' . ltrim( get_option( 'csbr_s3_prefix', 'backups/' ), '/' );
     $s3_path    = 's3://' . rtrim( $bucket, '/' ) . rtrim( $prefix, '/' ) . '/' . $filename;
-    $local_path = CS_BACKUP_DIR . $filename;
+    $local_path = CSBR_BACKUP_DIR . $filename;
     $cmd        = escapeshellarg( $aws ) . ' s3 cp ' . escapeshellarg( $s3_path ) . ' ' . escapeshellarg( $local_path ) . ' 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
@@ -3992,27 +5198,27 @@ add_action('wp_ajax_cs_s3_pull', function (): void {
         wp_send_json_error( $out ?: 'Pull failed — file not found after download.' );
     }
     // Belt-and-braces path check (sanitize_file_name prevents traversal, but verify)
-    $real_dir  = realpath( CS_BACKUP_DIR );
+    $real_dir  = realpath( CSBR_BACKUP_DIR );
     $real_file = realpath( $local_path );
     if ( $real_dir && $real_file && strpos( $real_file, $real_dir ) !== 0 ) {
         wp_delete_file( $local_path );
         wp_send_json_error( 'Security check failed.' );
     }
-    cs_log( '[CloudScale Backup] S3 pull: downloaded ' . $filename );
+    csbr_log( '[CloudScale Backup & Restore] S3 pull: downloaded ' . $filename );
     wp_send_json_success( 'Pulled to local backup folder. Reload to see it in Backup History.' );
 });
 
-add_action('wp_ajax_cs_save_retention', function (): void {
+add_action('wp_ajax_csbr_save_retention', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_send_json_error( 'Forbidden', 403 );
     }
-    check_ajax_referer( 'cs_nonce', 'nonce' );
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_ajax_referer() above; intval() used for integer field
     $r = max(1, min(9999, intval( wp_unslash( $_POST['retention'] ?? 8 ) )));
-    update_option('cs_retention', $r);
+    update_option('csbr_retention', $r);
     $prefix = sanitize_key( wp_unslash( $_POST['backup_prefix'] ?? 'bkup' ) ) ?: 'bkup';
     // phpcs:enable WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash
-    update_option('cs_backup_prefix', $prefix);
+    update_option('csbr_backup_prefix', $prefix);
     wp_send_json_success('Saved');
 });
 
@@ -4020,22 +5226,22 @@ add_action('wp_ajax_cs_save_retention', function (): void {
 // Download handler
 // ============================================================
 
-add_action('admin_post_cs_download', function (): void {
-    check_admin_referer('cs_download');
+add_action('admin_post_csbr_download', function (): void {
+    check_admin_referer('csbr_download');
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_die( esc_html__( 'Forbidden', 'cloudscale-backup-restore' ) );
     }
 
     // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- GET param sanitised immediately via sanitize_file_name()
     $file = sanitize_file_name( wp_unslash( $_GET['file'] ?? '' ) );
-    $path = CS_BACKUP_DIR . $file;
+    $path = CSBR_BACKUP_DIR . $file;
 
-    if (!file_exists($path) || strpos(realpath($path), realpath(CS_BACKUP_DIR)) !== 0) {
+    if (!file_exists($path) || strpos(realpath($path), realpath(CSBR_BACKUP_DIR)) !== 0) {
         wp_die( esc_html__( 'File not found.', 'cloudscale-backup-restore' ) );
     }
 
     header('Content-Type: application/zip');
-    header('Content-Disposition: attachment; filename="' . $file . '"');
+    header('Content-Disposition: attachment; filename="' . str_replace( [ "\r", "\n", '"', '\\' ], '', $file ) . '"');
     header('Content-Length: ' . filesize($path));
     header('Cache-Control: no-cache');
     readfile($path); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- streaming binary download requires readfile(); WP_Filesystem has no streaming equivalent
@@ -4046,18 +5252,18 @@ add_action('admin_post_cs_download', function (): void {
 /**
  * S3 download handler — streams a backup zip from S3 (or local cache) to the browser.
  *
- * Serves from CS_BACKUP_DIR if the file exists locally; otherwise pulls from S3
+ * Serves from CSBR_BACKUP_DIR if the file exists locally; otherwise pulls from S3
  * to a temporary path, streams it, then cleans up.
  *
  * @since 3.2.124
  * @return void
  */
-add_action('admin_post_cs_s3_download', function (): void {
+add_action('admin_post_csbr_s3_download', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_die( esc_html__( 'Forbidden', 'cloudscale-backup-restore' ) );
     }
     // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- sanitised immediately
-    if ( ! isset( $_GET['nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['nonce'] ) ), 'cs_nonce' ) ) {
+    if ( ! isset( $_GET['nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['nonce'] ) ), 'csbr_nonce' ) ) {
         wp_die( esc_html__( 'Security check failed.', 'cloudscale-backup-restore' ) );
     }
     // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- sanitised immediately
@@ -4065,18 +5271,18 @@ add_action('admin_post_cs_s3_download', function (): void {
     if ( ! $filename ) {
         wp_die( esc_html__( 'No file specified.', 'cloudscale-backup-restore' ) );
     }
-    $local   = CS_BACKUP_DIR . $filename;
+    $local   = CSBR_BACKUP_DIR . $filename;
     $cleanup = false;
     if ( ! file_exists( $local ) ) {
         // File not cached locally — pull from S3 to a temp path
-        $bucket = get_option( 'cs_s3_bucket', '' );
-        $aws    = cs_find_aws();
+        $bucket = get_option( 'csbr_s3_bucket', '' );
+        $aws    = csbr_find_aws();
         if ( ! $bucket || ! $aws ) {
             wp_die( esc_html__( 'S3 not configured or AWS CLI not found.', 'cloudscale-backup-restore' ) );
         }
-        $prefix  = '/' . ltrim( get_option( 'cs_s3_prefix', 'backups/' ), '/' );
+        $prefix  = '/' . ltrim( get_option( 'csbr_s3_prefix', 'backups/' ), '/' );
         $s3_path = 's3://' . rtrim( $bucket, '/' ) . rtrim( $prefix, '/' ) . '/' . $filename;
-        $tmp     = get_temp_dir() . 'cs_s3dl_' . md5( $filename . wp_generate_uuid4() ) . '.zip';
+        $tmp     = get_temp_dir() . 'csbr_s3dl_' . md5( $filename . wp_generate_uuid4() ) . '.zip';
         $cmd     = escapeshellarg( $aws ) . ' s3 cp ' . escapeshellarg( $s3_path ) . ' ' . escapeshellarg( $tmp ) . ' 2>&1';
         // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         shell_exec( $cmd ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
@@ -4087,7 +5293,7 @@ add_action('admin_post_cs_s3_download', function (): void {
         $cleanup = true;
     }
     header( 'Content-Type: application/zip' );
-    header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
+    header( 'Content-Disposition: attachment; filename="' . str_replace( [ "\r", "\n", '"', '\\' ], '', $filename ) . '"' );
     header( 'Content-Length: ' . filesize( $local ) );
     header( 'Cache-Control: no-cache' );
     readfile( $local ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- streaming binary download
@@ -4103,12 +5309,12 @@ add_action('admin_post_cs_s3_download', function (): void {
  * @since 3.2.124
  * @return void
  */
-add_action('admin_post_cs_gdrive_download', function (): void {
+add_action('admin_post_csbr_gdrive_download', function (): void {
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_die( esc_html__( 'Forbidden', 'cloudscale-backup-restore' ) );
     }
     // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- sanitised immediately
-    if ( ! isset( $_GET['nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['nonce'] ) ), 'cs_nonce' ) ) {
+    if ( ! isset( $_GET['nonce'] ) || ! wp_verify_nonce( sanitize_text_field( wp_unslash( $_GET['nonce'] ) ), 'csbr_nonce' ) ) {
         wp_die( esc_html__( 'Security check failed.', 'cloudscale-backup-restore' ) );
     }
     // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- sanitised immediately
@@ -4116,14 +5322,14 @@ add_action('admin_post_cs_gdrive_download', function (): void {
     if ( ! $filename ) {
         wp_die( esc_html__( 'No file specified.', 'cloudscale-backup-restore' ) );
     }
-    $remote = get_option( 'cs_gdrive_remote', '' );
-    $rclone = cs_find_rclone();
+    $remote = get_option( 'csbr_gdrive_remote', '' );
+    $rclone = csbr_find_rclone();
     if ( ! $remote || ! $rclone ) {
         wp_die( esc_html__( 'Google Drive not configured or rclone not found.', 'cloudscale-backup-restore' ) );
     }
-    $dest_path   = ltrim( get_option( 'cs_gdrive_path', 'cloudscale-backups/' ), '/' );
+    $dest_path   = ltrim( get_option( 'csbr_gdrive_path', 'cloudscale-backups/' ), '/' );
     $remote_file = rtrim( $remote, ':' ) . ':' . $dest_path . $filename;
-    $tmp         = get_temp_dir() . 'cs_gddl_' . md5( $filename . wp_generate_uuid4() ) . '.zip';
+    $tmp         = get_temp_dir() . 'csbr_gddl_' . md5( $filename . wp_generate_uuid4() ) . '.zip';
     $cmd         = escapeshellarg( $rclone ) . ' copyto ' . escapeshellarg( $remote_file ) . ' ' . escapeshellarg( $tmp ) . ' 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     shell_exec( $cmd ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
@@ -4131,7 +5337,7 @@ add_action('admin_post_cs_gdrive_download', function (): void {
         wp_die( esc_html__( 'Could not retrieve file from Google Drive.', 'cloudscale-backup-restore' ) );
     }
     header( 'Content-Type: application/zip' );
-    header( 'Content-Disposition: attachment; filename="' . $filename . '"' );
+    header( 'Content-Disposition: attachment; filename="' . str_replace( [ "\r", "\n", '"', '\\' ], '', $filename ) . '"' );
     header( 'Content-Length: ' . filesize( $tmp ) );
     header( 'Cache-Control: no-cache' );
     readfile( $tmp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- streaming binary download
@@ -4151,21 +5357,21 @@ add_action('admin_post_cs_gdrive_download', function (): void {
  * @since 3.2.1
  * @return void
  */
-add_action( 'admin_post_cs_quick_backup', function (): void {
-    check_admin_referer( 'cs_quick_backup', '_cs_quick_nonce' );
+add_action( 'admin_post_csbr_quick_backup', function (): void {
+    check_admin_referer( 'csbr_quick_backup', '_csbr_quick_nonce' );
     if ( ! current_user_can( 'manage_options' ) ) {
         wp_die( esc_html__( 'Forbidden', 'cloudscale-backup-restore' ) );
     }
 
     set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required to prevent PHP timeout on large backups
     ignore_user_abort( true );
-    cs_ensure_backup_dir();
+    csbr_ensure_backup_dir();
 
     try {
-        cs_create_backup( true, true, true, true );
-        cs_enforce_retention();
+        csbr_create_backup( true, true, true, true );
+        csbr_enforce_retention();
     } catch ( Exception $e ) {
-        cs_log( '[CloudScale Backup] Quick backup from dashboard widget failed: ' . $e->getMessage() );
+        csbr_log( '[CloudScale Backup & Restore] Quick backup from dashboard widget failed: ' . $e->getMessage() );
     }
 
     wp_safe_redirect( admin_url( 'tools.php?page=cloudscale-backup' ) );
@@ -4178,9 +5384,9 @@ add_action( 'admin_post_cs_quick_backup', function (): void {
 
 add_action('wp_dashboard_setup', function (): void {
     wp_add_dashboard_widget(
-        'cs_backup_status_widget',
+        'csbr_backup_status_widget',
         '&#128736; ' . esc_html__( 'CloudScale Backup Status', 'cloudscale-backup-restore' ),
-        'cs_render_dashboard_widget'
+        'csbr_render_dashboard_widget'
     );
 });
 
@@ -4190,17 +5396,20 @@ add_action('wp_dashboard_setup', function (): void {
  * @since 1.0.0
  * @return void
  */
-function cs_render_dashboard_widget(): void {
-    $backups    = cs_list_backups();
+function csbr_render_dashboard_widget(): void {
+    $backups    = csbr_list_backups();
     $count      = count($backups);
     $latest     = $backups[0] ?? null;
-    $free_bytes = disk_free_space(CS_BACKUP_DIR);
+    $free_bytes = disk_free_space(CSBR_BACKUP_DIR);
     if ($free_bytes === false) $free_bytes = disk_free_space(ABSPATH);
     $settings_url = admin_url('tools.php?page=cloudscale-backup');
 
-    // Time since last backup
+    // Time since last backup — use saved completion time (recorded after cloud syncs)
+    // so it matches the cloud sync log times in the rows below. Falls back to filemtime
+    // for backups created before this option existed.
     if ($latest) {
-        $age_secs = time() - (int) $latest['mtime'];
+        $saved_time = (int) get_option( 'csbr_last_backup_time', 0 );
+        $age_secs   = time() - ( $saved_time > 0 ? $saved_time : (int) $latest['mtime'] );
         if ($age_secs < 3600) {
             $age_label = round($age_secs / 60) . ' minutes ago';
         } elseif ($age_secs < 86400) {
@@ -4224,7 +5433,7 @@ function cs_render_dashboard_widget(): void {
     }
 
     // Cloud sync age rows — only for configured providers
-    $cs_age = function( int $ts ): array {
+    $csbr_age = function( int $ts ): array {
         if ( $ts <= 0 ) return [ 'Never', '#c62828' ];
         $secs = time() - $ts;
         if ( $secs < 3600 ) {
@@ -4242,31 +5451,35 @@ function cs_render_dashboard_widget(): void {
 
     $cloud_rows = [];
 
-    if ( get_option( 'cs_s3_bucket', '' ) ) {
-        $s3_log    = (array) get_option( 'cs_s3_log', [] );
+    if ( get_option( 'csbr_s3_bucket', '' ) ) {
+        $s3_log    = (array) get_option( 'csbr_s3_log', [] );
         $s3_ok     = array_filter( $s3_log, fn( $e ) => ! empty( $e['ok'] ) );
         $s3_last   = $s3_ok ? max( array_column( $s3_ok, 'time' ) ) : 0;
-        $cloud_rows[] = [ '&#9729; S3 last sync', ...$cs_age( (int) $s3_last ) ];
+        $cloud_rows[] = [ '&#9729; S3 last sync', ...$csbr_age( (int) $s3_last ) ];
     }
-    if ( get_option( 'cs_gdrive_remote', '' ) ) {
-        $gd_log   = (array) get_option( 'cs_gdrive_log', [] );
+    if ( get_option( 'csbr_gdrive_remote', '' ) ) {
+        $gd_log   = (array) get_option( 'csbr_gdrive_log', [] );
         $gd_ok    = array_filter( $gd_log, fn( $e ) => ! empty( $e['ok'] ) );
         $gd_last  = $gd_ok ? max( array_column( $gd_ok, 'time' ) ) : 0;
-        $cloud_rows[] = [ '&#128196; Google Drive last sync', ...$cs_age( (int) $gd_last ) ];
+        $cloud_rows[] = [ '&#128196; Google Drive last sync', ...$csbr_age( (int) $gd_last ) ];
     }
-    if ( get_option( 'cs_dropbox_remote', '' ) ) {
-        $db_log   = (array) get_option( 'cs_dropbox_log', [] );
+    if ( get_option( 'csbr_dropbox_remote', '' ) ) {
+        $db_log   = (array) get_option( 'csbr_dropbox_log', [] );
         $db_ok    = array_filter( $db_log, fn( $e ) => ! empty( $e['ok'] ) );
         $db_last  = $db_ok ? max( array_column( $db_ok, 'time' ) ) : 0;
-        $cloud_rows[] = [ '&#128194; Dropbox last sync', ...$cs_age( (int) $db_last ) ];
-    } else {
-        $cloud_rows[] = [ '&#128194; Dropbox', 'Not configured', '#999' ];
+        $cloud_rows[] = [ '&#128194; Dropbox last sync', ...$csbr_age( (int) $db_last ) ];
     }
-    if ( get_option( 'cs_ami_prefix', '' ) ) {
-        $ami_log  = (array) get_option( 'cs_ami_log', [] );
+    if ( get_option( 'csbr_onedrive_remote', '' ) || get_option( 'csbr_onedrive_sync_enabled', false ) || get_option( 'csbr_onedrive_path', null ) !== null ) {
+        $od_log   = (array) get_option( 'csbr_onedrive_log', [] );
+        $od_ok    = array_filter( $od_log, fn( $e ) => ! empty( $e['ok'] ) );
+        $od_last  = $od_ok ? max( array_column( $od_ok, 'time' ) ) : 0;
+        $cloud_rows[] = [ '&#128462; OneDrive last sync', ...$csbr_age( (int) $od_last ) ];
+    }
+    if ( get_option( 'csbr_ami_prefix', '' ) ) {
+        $ami_log  = (array) get_option( 'csbr_ami_log', [] );
         $ami_ok   = array_filter( $ami_log, fn( $e ) => ! empty( $e['ok'] ) && ! empty( $e['ami_id'] ) );
         $ami_last = $ami_ok ? max( array_column( $ami_ok, 'time' ) ) : 0;
-        $cloud_rows[] = [ '&#128247; AMI last snapshot', ...$cs_age( (int) $ami_last ) ];
+        $cloud_rows[] = [ '&#128247; AMI last snapshot', ...$csbr_age( (int) $ami_last ) ];
     }
 
     $widget_style = 'margin: -12px -12px 0 -12px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;';
@@ -4289,7 +5502,7 @@ function cs_render_dashboard_widget(): void {
             <div style="<?php echo esc_attr( $row_style ); ?>">
                 <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Last backup size', 'cloudscale-backup-restore' ); ?></span>
                 <span style="<?php echo esc_attr( $value_style ); ?>">
-                    <?php echo $latest ? esc_html(cs_format_size((int)$latest['size'])) : '—'; ?>
+                    <?php echo $latest ? esc_html(csbr_format_size((int)$latest['size'])) : '—'; ?>
                 </span>
             </div>
 
@@ -4297,7 +5510,7 @@ function cs_render_dashboard_widget(): void {
                 <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Backups stored', 'cloudscale-backup-restore' ); ?></span>
                 <span style="<?php echo esc_attr( $value_style ); ?>">
                     <?php
-                    $retention = (int) get_option('cs_retention', 8);
+                    $retention = (int) get_option('csbr_retention', 8);
                     echo esc_html($count . ' / ' . $retention);
                     ?>
                 </span>
@@ -4306,7 +5519,7 @@ function cs_render_dashboard_widget(): void {
             <div style="<?php echo esc_attr( $row_style . ( empty( $cloud_rows ) ? ' border-bottom:none;' : '' ) ); ?>">
                 <span style="<?php echo esc_attr( $label_style ); ?>"><?php esc_html_e( 'Free disk space', 'cloudscale-backup-restore' ); ?></span>
                 <span style="<?php echo esc_attr( $value_style ); ?>">
-                    <?php echo $free_bytes !== false ? esc_html(cs_format_size((int)$free_bytes)) : '—'; ?>
+                    <?php echo $free_bytes !== false ? esc_html(csbr_format_size((int)$free_bytes)) : '—'; ?>
                 </span>
             </div>
 
@@ -4316,7 +5529,7 @@ function cs_render_dashboard_widget(): void {
             foreach ( $cloud_pairs as $pi => $pair ):
                 $is_last = ( $pi === $last_pair );
             ?>
-            <div style="display:flex; gap:8px; padding:7px 0; <?php echo $is_last ? 'border-bottom:none;' : 'border-bottom:1px solid #f0f0f0;'; ?>">
+            <div style="display:flex; gap:8px; padding:7px 0; <?php echo $is_last ? 'border-bottom:none;' : 'border-bottom:1px solid #f0f0f0;'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded string literals, not user input ?>">
                 <?php foreach ( $pair as $cr ): ?>
                 <div style="flex:1; min-width:0;">
                     <span style="<?php echo esc_attr( $label_style ); ?> display:block; margin-bottom:1px;"><?php echo wp_kses( $cr[0], [] ); ?></span>
@@ -4328,10 +5541,15 @@ function cs_render_dashboard_widget(): void {
 
         </div>
 
-        <a href="<?php echo esc_url($settings_url); ?>"
-           style="<?php echo esc_attr( $btn_base . ' background: linear-gradient(90deg, #1565c0 0%, #0d47a1 100%); margin-top:2px; border-radius: 0 0 3px 3px;' ); ?>">
-            &#128736; <?php esc_html_e( 'CloudScale Backup & Restore', 'cloudscale-backup-restore' ); ?>
-        </a>
+        <div style="padding: 4px 12px 12px 12px;">
+            <a href="<?php echo esc_url($settings_url); ?>"
+               id="cs-widget-main-btn"
+               style="<?php echo esc_attr( $btn_base . ' background: linear-gradient(135deg, #1976d2 0%, #0d47a1 100%); border-radius: 8px; transition: background 0.15s ease, box-shadow 0.15s ease, letter-spacing 0.15s ease;' ); ?>"
+               onmouseover="this.style.background='linear-gradient(135deg,#2196f3 0%,#1565c0 100%)';this.style.boxShadow='0 8px 24px rgba(13,71,161,0.55)';this.style.letterSpacing='0.06em';"
+               onmouseout="this.style.background='linear-gradient(135deg,#1976d2 0%,#0d47a1 100%)';this.style.boxShadow='';this.style.letterSpacing='0.02em';">
+                &#128736; <?php esc_html_e( 'CloudScale Backup & Restore', 'cloudscale-backup-restore' ); ?>
+            </a>
+        </div>
     </div>
     <?php
 }
@@ -4346,9 +5564,9 @@ function cs_render_dashboard_widget(): void {
  * @since 1.0.0
  * @return void
  */
-function cs_maintenance_on(): void {
+function csbr_maintenance_on(): void {
     $php = '<?php $upgrading = ' . time() . '; ?>';
-    file_put_contents(CS_BACKUP_MAINT_FILE, $php); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- writing .maintenance file requires direct filesystem access; WP Filesystem API unavailable at restore time
+    file_put_contents(CSBR_MAINT_FILE, $php); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- writing .maintenance file requires direct filesystem access; WP Filesystem API unavailable at restore time
 }
 
 /**
@@ -4357,9 +5575,9 @@ function cs_maintenance_on(): void {
  * @since 1.0.0
  * @return void
  */
-function cs_maintenance_off(): void {
-    if (file_exists(CS_BACKUP_MAINT_FILE)) {
-        wp_delete_file(CS_BACKUP_MAINT_FILE);
+function csbr_maintenance_off(): void {
+    if (file_exists(CSBR_MAINT_FILE)) {
+        wp_delete_file(CSBR_MAINT_FILE);
     }
 }
 
@@ -4382,7 +5600,7 @@ function cs_maintenance_off(): void {
  * @param bool $include_wpconfig  Include wp-config.php.
  * @return void
  */
-function cs_create_backup(
+function csbr_create_backup(
     bool $include_db, bool $include_media,
     bool $include_plugins    = false, bool $include_themes    = false,
     bool $include_mu         = false, bool $include_languages = false,
@@ -4411,14 +5629,14 @@ function cs_create_backup(
     }
 
     // Increment global sequence number, skip any that already exist on disk
-    $prefix = sanitize_key(get_option('cs_backup_prefix', 'bkup')) ?: 'bkup';
-    $seq = (int) get_option('cs_backup_seq', 0);
+    $prefix = sanitize_key(get_option('csbr_backup_prefix', 'bkup')) ?: 'bkup';
+    $seq = (int) get_option('csbr_backup_seq', 0);
     do {
         $seq++;
         $filename = $prefix . '_' . $tcode . $seq . '.zip';
-    } while (file_exists(CS_BACKUP_DIR . $filename));
-    update_option('cs_backup_seq', $seq, false);
-    $zip_path = CS_BACKUP_DIR . $filename;
+    } while (file_exists(CSBR_BACKUP_DIR . $filename));
+    update_option('csbr_backup_seq', $seq, false);
+    $zip_path = CSBR_BACKUP_DIR . $filename;
 
     $zip = new ZipArchive();
     if ($zip->open($zip_path, ZipArchive::CREATE | ZipArchive::OVERWRITE) !== true) {
@@ -4426,29 +5644,29 @@ function cs_create_backup(
     }
 
     if ($include_db) {
-        $zip->addFromString('database.sql', cs_dump_database());
+        $zip->addFromString('database.sql', csbr_dump_database());
     }
 
     if ($include_media) {
-        cs_add_dir_to_zip($zip, wp_upload_dir()['basedir'], 'uploads');
+        csbr_add_dir_to_zip($zip, wp_upload_dir()['basedir'], 'uploads');
     }
 
     if ($include_plugins) {
-        cs_add_dir_to_zip($zip, WP_PLUGIN_DIR, 'plugins');
+        csbr_add_dir_to_zip($zip, WP_PLUGIN_DIR, 'plugins');
     }
 
     if ($include_themes) {
-        cs_add_dir_to_zip($zip, get_theme_root(), 'themes');
+        csbr_add_dir_to_zip($zip, get_theme_root(), 'themes');
     }
 
     if ($include_mu) {
         $mu_path = defined( 'WPMU_PLUGIN_DIR' ) ? WPMU_PLUGIN_DIR : WP_CONTENT_DIR . '/mu-plugins';
-        if (is_dir($mu_path)) cs_add_dir_to_zip($zip, $mu_path, 'mu-plugins');
+        if (is_dir($mu_path)) csbr_add_dir_to_zip($zip, $mu_path, 'mu-plugins');
     }
 
     if ($include_languages) {
         $lang_path = WP_CONTENT_DIR . '/languages';
-        if (is_dir($lang_path)) cs_add_dir_to_zip($zip, $lang_path, 'languages');
+        if (is_dir($lang_path)) csbr_add_dir_to_zip($zip, $lang_path, 'languages');
     }
 
     if ($include_dropins) {
@@ -4467,8 +5685,9 @@ function cs_create_backup(
         if (file_exists($wpc)) $zip->addFile($wpc, 'wp-config.php');
     }
 
+    $enc_pwd = (string) get_option( 'csbr_encrypt_password', '' );
     $zip->addFromString('backup-meta.json', json_encode([
-        'plugin_version'    => CS_BACKUP_VERSION,
+        'plugin_version'    => CSBR_VERSION,
         'created'           => gmdate('c'),
         'wp_version'        => get_bloginfo('version'),
         'site_url'          => get_site_url(),
@@ -4482,14 +5701,23 @@ function cs_create_backup(
         'include_dropins'   => $include_dropins,
         'include_htaccess'    => $include_htaccess,
         'include_wpconfig'    => $include_wpconfig,
+        'encrypted'           => $enc_pwd !== '',
     ], JSON_PRETTY_PRINT));
+
+    if ( $enc_pwd !== '' && defined( 'ZipArchive::EM_AES_256' ) ) {
+        $zip->setPassword( $enc_pwd );
+        for ( $i = 0; $i < $zip->numFiles; $i++ ) {
+            $zip->setEncryptionIndex( $i, ZipArchive::EM_AES_256 ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- intentional AES-256 encryption of backup data
+        }
+    }
 
     $zip->close();
 
-    // S3 sync — result stored in global for AJAX handler to include in response
-    $GLOBALS['cs_last_s3_result']       = cs_sync_to_s3( CS_BACKUP_DIR . $filename );
-    $GLOBALS['cs_last_gdrive_result']   = cs_sync_to_gdrive( CS_BACKUP_DIR . $filename );
-    $GLOBALS['cs_last_dropbox_result']  = cs_sync_to_dropbox( CS_BACKUP_DIR . $filename );
+    // Cloud sync — results stored in globals for AJAX handler to include in response
+    $GLOBALS['csbr_last_s3_result']       = csbr_sync_to_s3( CSBR_BACKUP_DIR . $filename );
+    $GLOBALS['csbr_last_gdrive_result']   = csbr_sync_to_gdrive( CSBR_BACKUP_DIR . $filename );
+    $GLOBALS['csbr_last_dropbox_result']  = csbr_sync_to_dropbox( CSBR_BACKUP_DIR . $filename );
+    $GLOBALS['csbr_last_onedrive_result'] = csbr_sync_to_onedrive( CSBR_BACKUP_DIR . $filename );
 
     return $filename;
 }
@@ -4510,7 +5738,7 @@ function cs_create_backup(
  * @since 2.74.0
  * @return string IMDSv2 token, or empty string on failure.
  */
-function cs_get_imds_token(): string {
+function csbr_get_imds_token(): string {
     $response = wp_remote_request( 'http://169.254.169.254/latest/api/token', [
         'method'    => 'PUT',
         'timeout'   => 2,
@@ -4531,8 +5759,8 @@ function cs_get_imds_token(): string {
  * @param string $path IMDS path, e.g. 'latest/meta-data/instance-id'.
  * @return string Metadata value, or empty string on failure.
  */
-function cs_imds_get(string $path): string {
-    $token    = cs_get_imds_token();
+function csbr_imds_get(string $path): string {
+    $token    = csbr_get_imds_token();
     $headers  = $token ? [ 'X-aws-ec2-metadata-token' => $token ] : [];
     $response = wp_remote_get( 'http://169.254.169.254' . $path, [
         'timeout'   => 2,
@@ -4553,12 +5781,12 @@ function cs_imds_get(string $path): string {
  * @since 2.74.0
  * @return string Instance ID (e.g. 'i-0abc123def456') or empty string.
  */
-function cs_get_instance_id(): string {
+function csbr_get_instance_id(): string {
     static $cached = null;
     if ($cached !== null) return $cached;
 
     try {
-        $cached = cs_imds_get('/latest/meta-data/instance-id');
+        $cached = csbr_imds_get('/latest/meta-data/instance-id');
     } catch (\Throwable $e) {
         $cached = '';
     }
@@ -4569,18 +5797,18 @@ function cs_get_instance_id(): string {
 /**
  * Return the AWS region of the running EC2 instance, or an empty string.
  *
- * Respects the cs_ami_region_override option. Result cached per request and
+ * Respects the csbr_ami_region_override option. Result cached per request and
  * in a one-hour WordPress transient.
  *
  * @since 2.74.0
  * @return string Region code (e.g. 'us-east-1') or empty string.
  */
-function cs_get_instance_region(): string {
+function csbr_get_instance_region(): string {
     static $cached = null;
     if ($cached !== null) return $cached;
 
     // Manual override always wins — avoids IMDS dependency entirely
-    $override = get_option('cs_ami_region_override', '');
+    $override = get_option('csbr_ami_region_override', '');
     if ($override) {
         $cached = $override;
         return $cached;
@@ -4588,7 +5816,7 @@ function cs_get_instance_region(): string {
 
     try {
         // Availability zone is e.g. "af-south-1a" — strip the trailing letter
-        $az = cs_imds_get('/latest/meta-data/placement/availability-zone');
+        $az = csbr_imds_get('/latest/meta-data/placement/availability-zone');
         $cached = $az ? preg_replace('/[a-z]$/', '', $az) : '';
     } catch (\Throwable $e) {
         $cached = '';
@@ -4606,21 +5834,21 @@ function cs_get_instance_region(): string {
 /**
  * Delete old backup zips from the configured S3 bucket, keeping only the most recent N.
  *
- * Uses the same retention count as local backups (cs_retention option).
+ * Uses the same retention count as local backups (csbr_retention option).
  *
  * @since 3.2.124
  * @return void
  */
-function cs_enforce_s3_retention(): void {
-    if (!get_option('cs_s3_sync_enabled', true)) return;
-    $bucket = get_option('cs_s3_bucket', '');
+function csbr_enforce_s3_retention(): void {
+    if (!get_option('csbr_s3_sync_enabled', true)) return;
+    $bucket = get_option('csbr_s3_bucket', '');
     if (!$bucket) return;
 
-    $aws = cs_find_aws();
+    $aws = csbr_find_aws();
     if (!$aws) return;
 
-    $retention = max(1, intval(get_option('cs_ami_max', 10)));
-    $prefix    = '/' . ltrim(get_option('cs_s3_prefix', 'backups/'), '/');
+    $retention = max(1, intval(get_option('csbr_ami_max', 10)));
+    $prefix    = '/' . ltrim(get_option('csbr_s3_prefix', 'backups/'), '/');
     $s3_base   = 's3://' . rtrim($bucket, '/') . rtrim($prefix, '/') . '/';
     $cmd = escapeshellarg($aws) . ' s3 ls ' . escapeshellarg($s3_base) . ' 2>&1';
     $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
@@ -4638,12 +5866,12 @@ function cs_enforce_s3_retention(): void {
 
     // Store the current remote count before any deletions
     // Golden images are never pruned and do not count towards the quota.
-    $s3_hist   = (array) get_option( 'cs_s3_history', [] );
+    $s3_hist   = (array) get_option( 'csbr_s3_history', [] );
     $pruneable = array_values( array_filter( $files, fn( $f ) => empty( $s3_hist[ $f['name'] ]['golden'] ) ) );
     $remote_count = count( $files ); // total (including goldens) for display
 
     if ( count( $pruneable ) <= $retention ) {
-        update_option('cs_s3_remote_count', $remote_count, false);
+        update_option('csbr_s3_remote_count', $remote_count, false);
         return;
     }
 
@@ -4656,33 +5884,33 @@ function cs_enforce_s3_retention(): void {
         // s3 rm prints "delete: s3://..." on success; anything else is an error
         if ($del_out === '' || str_starts_with($del_out, 'delete:')) {
             $remote_count--;
-            cs_log('[CloudScale Backup] S3 retention: deleted ' . $file['name']);
+            csbr_log('[CloudScale Backup & Restore] S3 retention: deleted ' . $file['name']);
         } else {
-            cs_log('[CloudScale Backup] S3 retention WARNING: failed to delete ' . $file['name'] . ' — ' . $del_out);
+            csbr_log('[CloudScale Backup & Restore] S3 retention WARNING: failed to delete ' . $file['name'] . ' — ' . $del_out);
         }
     }
 
-    update_option('cs_s3_remote_count', $remote_count, false);
+    update_option('csbr_s3_remote_count', $remote_count, false);
 }
 
 /**
  * Delete old backup zips from the configured Google Drive remote, keeping only the most recent N.
  *
- * Uses the same retention count as local backups (cs_retention option).
+ * Uses the same retention count as local backups (csbr_retention option).
  *
  * @since 3.2.124
  * @return void
  */
-function cs_enforce_gdrive_retention(): void {
-    if (!get_option('cs_gdrive_sync_enabled', true)) return;
-    $remote = get_option('cs_gdrive_remote', '');
+function csbr_enforce_gdrive_retention(): void {
+    if (!get_option('csbr_gdrive_sync_enabled', true)) return;
+    $remote = get_option('csbr_gdrive_remote', '');
     if (!$remote) return;
 
-    $rclone = cs_find_rclone();
+    $rclone = csbr_find_rclone();
     if (!$rclone) return;
 
-    $retention   = max(1, intval(get_option('cs_ami_max', 10)));
-    $dest_path   = ltrim(get_option('cs_gdrive_path', 'cloudscale-backups/'), '/');
+    $retention   = max(1, intval(get_option('csbr_ami_max', 10)));
+    $dest_path   = ltrim(get_option('csbr_gdrive_path', 'cloudscale-backups/'), '/');
     $remote_path = rtrim($remote, ':') . ':' . $dest_path;
 
     $cmd  = escapeshellarg($rclone) . ' lsjson ' . escapeshellarg($remote_path) . ' --files-only 2>&1';
@@ -4695,12 +5923,12 @@ function cs_enforce_gdrive_retention(): void {
     $files = array_values(array_filter($data, fn($f) => str_ends_with($f['Name'] ?? '', '.zip')));
 
     // Golden images are never pruned and do not count towards the quota.
-    $gdrive_hist = (array) get_option( 'cs_gdrive_history', [] );
+    $gdrive_hist = (array) get_option( 'csbr_gdrive_history', [] );
     $pruneable   = array_values( array_filter( $files, fn( $f ) => empty( $gdrive_hist[ $f['Name'] ?? '' ]['golden'] ) ) );
     $remote_count = count( $files ); // total (including goldens) for display
 
     if ( count( $pruneable ) <= $retention ) {
-        update_option('cs_gdrive_remote_count', $remote_count, false);
+        update_option('csbr_gdrive_remote_count', $remote_count, false);
         return;
     }
 
@@ -4714,13 +5942,13 @@ function cs_enforce_gdrive_retention(): void {
         // rclone delete prints nothing on success; any output indicates an error
         if ($del_out === '') {
             $remote_count--;
-            cs_log('[CloudScale Backup] GDrive retention: deleted ' . ($file['Name'] ?? ''));
+            csbr_log('[CloudScale Backup & Restore] GDrive retention: deleted ' . ($file['Name'] ?? ''));
         } else {
-            cs_log('[CloudScale Backup] GDrive retention WARNING: failed to delete ' . ($file['Name'] ?? '') . ' — ' . $del_out);
+            csbr_log('[CloudScale Backup & Restore] GDrive retention WARNING: failed to delete ' . ($file['Name'] ?? '') . ' — ' . $del_out);
         }
     }
 
-    update_option('cs_gdrive_remote_count', $remote_count, false);
+    update_option('csbr_gdrive_remote_count', $remote_count, false);
 }
 
 
@@ -4732,19 +5960,19 @@ function cs_enforce_gdrive_retention(): void {
  * Refresh the Google Drive backup history by querying the configured remote.
  *
  * Runs `rclone lsjson`, parses Name/Size/ModTime for each .zip, and merges
- * the result with the existing cs_gdrive_history option (preserving tag and
+ * the result with the existing csbr_gdrive_history option (preserving tag and
  * golden fields). Entries no longer on Drive are dropped.
  *
  * @since 3.2.124
  * @return array Updated history keyed by filename, or empty array if not configured.
  */
-function cs_gdrive_refresh_history(): array {
-    $remote = get_option( 'cs_gdrive_remote', '' );
+function csbr_gdrive_refresh_history(): array {
+    $remote = get_option( 'csbr_gdrive_remote', '' );
     if ( ! $remote ) return [];
-    $rclone = cs_find_rclone();
+    $rclone = csbr_find_rclone();
     if ( ! $rclone ) return [];
 
-    $dest_path   = ltrim( get_option( 'cs_gdrive_path', 'cloudscale-backups/' ), '/' );
+    $dest_path   = ltrim( get_option( 'csbr_gdrive_path', 'cloudscale-backups/' ), '/' );
     $remote_path = rtrim( $remote, ':' ) . ':' . $dest_path;
     $cmd         = escapeshellarg( $rclone ) . ' lsjson ' . escapeshellarg( $remote_path ) . ' --files-only 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
@@ -4752,7 +5980,7 @@ function cs_gdrive_refresh_history(): array {
     $data = json_decode( $out ?: '[]', true );
     if ( ! is_array( $data ) ) return [];
 
-    $existing = (array) get_option( 'cs_gdrive_history', [] );
+    $existing = (array) get_option( 'csbr_gdrive_history', [] );
     $found    = [];
 
     foreach ( $data as $f ) {
@@ -4764,7 +5992,7 @@ function cs_gdrive_refresh_history(): array {
         $found[ $name ] = [
             'name'       => $name,
             'size_bytes' => $size,
-            'size_fmt'   => cs_format_size( $size ),
+            'size_fmt'   => csbr_format_size( $size ),
             'time'       => $ts,
             'tag'        => $existing[ $name ]['tag']    ?? '',
             'golden'     => $existing[ $name ]['golden'] ?? false,
@@ -4774,10 +6002,10 @@ function cs_gdrive_refresh_history(): array {
 
     // Newest first for display
     uasort( $found, fn( $a, $b ) => ( $b['time'] ?? 0 ) <=> ( $a['time'] ?? 0 ) );
-    update_option( 'cs_gdrive_history', $found, false );
+    update_option( 'csbr_gdrive_history', $found, false );
     return $found;
 }
-function cs_find_rclone(): string {
+function csbr_find_rclone(): string {
     $candidates = [
         trim((string) shell_exec('which rclone 2>/dev/null')), // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         '/usr/local/bin/rclone',
@@ -4797,12 +6025,12 @@ function cs_find_rclone(): string {
  * Query free bytes available on an rclone remote via `rclone about --json`.
  * Returns null if the remote does not report quota info or if rclone is unavailable.
  *
- * @since 3.2.189
+ * @since 3.2.251
  * @param string $remote rclone remote name (with or without trailing colon).
  * @return int|null Free bytes, or null if not determinable.
  */
-function cs_rclone_free_bytes( string $remote ): ?int {
-    $rclone = cs_find_rclone();
+function csbr_rclone_free_bytes( string $remote ): ?int {
+    $rclone = csbr_find_rclone();
     if ( ! $rclone ) return null;
     $r   = escapeshellarg( rtrim( $remote, ':' ) . ':' );
     $cmd = 'timeout 15 ' . escapeshellarg( $rclone ) . " about {$r} --json 2>/dev/null";
@@ -4829,17 +6057,17 @@ function cs_rclone_free_bytes( string $remote ): ?int {
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
-function cs_sync_to_gdrive(string $local_path): array {
-    if (!get_option('cs_gdrive_sync_enabled', true)) return ['skipped' => true];
-    $remote = get_option('cs_gdrive_remote', '');
+function csbr_sync_to_gdrive(string $local_path): array {
+    if (!get_option('csbr_gdrive_sync_enabled', true)) return ['skipped' => true];
+    $remote = get_option('csbr_gdrive_remote', '');
     if (!$remote) return ['skipped' => true];
 
-    $rclone = cs_find_rclone();
+    $rclone = csbr_find_rclone();
     if (!$rclone) {
         return ['ok' => false, 'error' => 'rclone not found. Install rclone and configure a Google Drive remote.'];
     }
 
-    $dest_path = ltrim(get_option('cs_gdrive_path', 'cloudscale-backups/'), '/');
+    $dest_path = ltrim(get_option('csbr_gdrive_path', 'cloudscale-backups/'), '/');
     $dest      = rtrim($remote, ':') . ':' . $dest_path;
     $escaped   = escapeshellarg($local_path);
     $edest     = escapeshellarg($dest);
@@ -4847,12 +6075,12 @@ function cs_sync_to_gdrive(string $local_path): array {
     // Space pre-check: abort before uploading if Google Drive has less free space than the file.
     $file_size = file_exists( $local_path ) ? (int) filesize( $local_path ) : 0;
     if ( $file_size > 0 ) {
-        $free = cs_rclone_free_bytes( $remote );
+        $free = csbr_rclone_free_bytes( $remote );
         if ( $free !== null && $free < $file_size ) {
             $free_mb = round( $free / 1048576, 1 );
             $need_mb = round( $file_size / 1048576, 1 );
             $err     = "Not enough space on Google Drive: {$free_mb} MB free, backup needs {$need_mb} MB.";
-            cs_log( '[CloudScale Backup] GDrive sync skipped — ' . $err );
+            csbr_log( '[CloudScale Backup & Restore] GDrive sync skipped — ' . $err );
             return [ 'ok' => false, 'dest' => $dest, 'error' => $err ];
         }
     }
@@ -4862,32 +6090,32 @@ function cs_sync_to_gdrive(string $local_path): array {
     $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
 
     // Space error: free oldest local backup and retry once
-    if ($out && cs_is_space_error($out)) {
-        cs_free_local_space('Google Drive', basename($local_path));
+    if ($out && csbr_is_space_error($out)) {
+        csbr_free_local_space('Google Drive', basename($local_path));
         // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     }
 
     $filename = basename($local_path);
-    $log      = (array) get_option('cs_gdrive_log', []);
+    $log      = (array) get_option('csbr_gdrive_log', []);
 
     if ($out) {
-        cs_log('[CloudScale Backup] GDrive sync error: ' . $out);
+        csbr_log('[CloudScale Backup & Restore] GDrive sync error: ' . $out);
         $result       = ['ok' => false, 'dest' => $dest, 'error' => $out];
         $log[$filename] = ['ok' => false, 'time' => time(), 'dest' => $dest, 'error' => $out];
     } else {
-        cs_log('[CloudScale Backup] GDrive sync OK: ' . $dest);
+        csbr_log('[CloudScale Backup & Restore] GDrive sync OK: ' . $dest);
         $result       = ['ok' => true, 'dest' => $dest];
         $log[$filename] = ['ok' => true, 'time' => time(), 'dest' => $dest];
-        cs_enforce_gdrive_retention();
+        csbr_enforce_gdrive_retention();
     }
 
     // Prune log entries for files that no longer exist
-    $existing = array_map('basename', glob(CS_BACKUP_DIR . '*.zip') ?: []);
+    $existing = array_map('basename', glob(CSBR_BACKUP_DIR . '*.zip') ?: []);
     foreach (array_keys($log) as $k) {
         if (!in_array($k, $existing, true)) unset($log[$k]);
     }
-    update_option('cs_gdrive_log', $log, false);
+    update_option('csbr_gdrive_log', $log, false);
 
     return $result;
 }
@@ -4899,17 +6127,17 @@ function cs_sync_to_gdrive(string $local_path): array {
  * @param string $local_path Absolute filesystem path to the backup zip.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
-function cs_sync_to_dropbox( string $local_path ): array {
-    if ( ! get_option( 'cs_dropbox_sync_enabled', false ) ) return [ 'skipped' => true ];
-    $remote = get_option( 'cs_dropbox_remote', '' );
+function csbr_sync_to_dropbox( string $local_path ): array {
+    if ( ! get_option( 'csbr_dropbox_sync_enabled', false ) ) return [ 'skipped' => true ];
+    $remote = get_option( 'csbr_dropbox_remote', '' );
     if ( ! $remote ) return [ 'skipped' => true ];
 
-    $rclone = cs_find_rclone();
+    $rclone = csbr_find_rclone();
     if ( ! $rclone ) {
         return [ 'ok' => false, 'error' => 'rclone not found. Install rclone and configure a Dropbox remote.' ];
     }
 
-    $dest_path = ltrim( get_option( 'cs_dropbox_path', 'cloudscale-backups/' ), '/' );
+    $dest_path = ltrim( get_option( 'csbr_dropbox_path', 'cloudscale-backups/' ), '/' );
     $dest      = rtrim( $remote, ':' ) . ':' . $dest_path;
     $escaped   = escapeshellarg( $local_path );
     $edest     = escapeshellarg( $dest );
@@ -4917,12 +6145,12 @@ function cs_sync_to_dropbox( string $local_path ): array {
     // Space pre-check: abort before uploading if Dropbox has less free space than the file.
     $file_size = file_exists( $local_path ) ? (int) filesize( $local_path ) : 0;
     if ( $file_size > 0 ) {
-        $free = cs_rclone_free_bytes( $remote );
+        $free = csbr_rclone_free_bytes( $remote );
         if ( $free !== null && $free < $file_size ) {
             $free_mb = round( $free / 1048576, 1 );
             $need_mb = round( $file_size / 1048576, 1 );
             $err     = "Not enough space on Dropbox: {$free_mb} MB free, backup needs {$need_mb} MB.";
-            cs_log( '[CloudScale Backup] Dropbox sync skipped — ' . $err );
+            csbr_log( '[CloudScale Backup & Restore] Dropbox sync skipped — ' . $err );
             return [ 'ok' => false, 'dest' => $dest, 'error' => $err ];
         }
     }
@@ -4932,31 +6160,31 @@ function cs_sync_to_dropbox( string $local_path ): array {
     $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
 
     // Space error: free oldest local backup and retry once
-    if ( $out && cs_is_space_error( $out ) ) {
-        cs_free_local_space( 'Dropbox', basename( $local_path ) );
+    if ( $out && csbr_is_space_error( $out ) ) {
+        csbr_free_local_space( 'Dropbox', basename( $local_path ) );
         // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     }
 
     $filename = basename( $local_path );
-    $log      = (array) get_option( 'cs_dropbox_log', [] );
+    $log      = (array) get_option( 'csbr_dropbox_log', [] );
 
     if ( $out ) {
-        cs_log( '[CloudScale Backup] Dropbox sync error: ' . $out );
+        csbr_log( '[CloudScale Backup & Restore] Dropbox sync error: ' . $out );
         $result         = [ 'ok' => false, 'dest' => $dest, 'error' => $out ];
         $log[$filename] = [ 'ok' => false, 'time' => time(), 'dest' => $dest, 'error' => $out ];
     } else {
-        cs_log( '[CloudScale Backup] Dropbox sync OK: ' . $dest );
+        csbr_log( '[CloudScale Backup & Restore] Dropbox sync OK: ' . $dest );
         $result         = [ 'ok' => true, 'dest' => $dest ];
         $log[$filename] = [ 'ok' => true, 'time' => time(), 'dest' => $dest ];
-        cs_enforce_dropbox_retention();
+        csbr_enforce_dropbox_retention();
     }
 
-    $existing = array_map( 'basename', glob( CS_BACKUP_DIR . '*.zip' ) ?: [] );
+    $existing = array_map( 'basename', glob( CSBR_BACKUP_DIR . '*.zip' ) ?: [] );
     foreach ( array_keys( $log ) as $k ) {
         if ( ! in_array( $k, $existing, true ) ) unset( $log[$k] );
     }
-    update_option( 'cs_dropbox_log', $log, false );
+    update_option( 'csbr_dropbox_log', $log, false );
 
     return $result;
 }
@@ -4967,13 +6195,13 @@ function cs_sync_to_dropbox( string $local_path ): array {
  * @since 3.2.83
  * @return array Updated history keyed by filename, or empty array if not configured.
  */
-function cs_dropbox_refresh_history(): array {
-    $remote = get_option( 'cs_dropbox_remote', '' );
+function csbr_dropbox_refresh_history(): array {
+    $remote = get_option( 'csbr_dropbox_remote', '' );
     if ( ! $remote ) return [];
-    $rclone = cs_find_rclone();
+    $rclone = csbr_find_rclone();
     if ( ! $rclone ) return [];
 
-    $dest_path   = ltrim( get_option( 'cs_dropbox_path', 'cloudscale-backups/' ), '/' );
+    $dest_path   = ltrim( get_option( 'csbr_dropbox_path', 'cloudscale-backups/' ), '/' );
     $remote_path = rtrim( $remote, ':' ) . ':' . $dest_path;
     $cmd         = escapeshellarg( $rclone ) . ' lsjson ' . escapeshellarg( $remote_path ) . ' --files-only 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
@@ -4981,7 +6209,7 @@ function cs_dropbox_refresh_history(): array {
     $data = json_decode( $out ?: '[]', true );
     if ( ! is_array( $data ) ) return [];
 
-    $existing = (array) get_option( 'cs_dropbox_history', [] );
+    $existing = (array) get_option( 'csbr_dropbox_history', [] );
     $found    = [];
 
     foreach ( $data as $f ) {
@@ -4993,7 +6221,7 @@ function cs_dropbox_refresh_history(): array {
         $found[$name] = [
             'name'       => $name,
             'size_bytes' => $size,
-            'size_fmt'   => cs_format_size( $size ),
+            'size_fmt'   => csbr_format_size( $size ),
             'time'       => $ts,
             'tag'        => $existing[$name]['tag']    ?? '',
             'golden'     => $existing[$name]['golden'] ?? false,
@@ -5002,24 +6230,24 @@ function cs_dropbox_refresh_history(): array {
     }
 
     uasort( $found, fn( $a, $b ) => ( $b['time'] ?? 0 ) <=> ( $a['time'] ?? 0 ) );
-    update_option( 'cs_dropbox_history', $found, false );
+    update_option( 'csbr_dropbox_history', $found, false );
     return $found;
 }
 
 /**
- * Delete old Dropbox backups beyond cs_ami_max retention limit.
+ * Delete old Dropbox backups beyond csbr_ami_max retention limit.
  *
  * @since 3.2.83
  * @return void
  */
-function cs_enforce_dropbox_retention(): void {
-    $max    = max( 1, intval( get_option( 'cs_ami_max', 10 ) ) );
-    $remote = get_option( 'cs_dropbox_remote', '' );
+function csbr_enforce_dropbox_retention(): void {
+    $max    = max( 1, intval( get_option( 'csbr_ami_max', 10 ) ) );
+    $remote = get_option( 'csbr_dropbox_remote', '' );
     if ( ! $remote ) return;
-    $rclone = cs_find_rclone();
+    $rclone = csbr_find_rclone();
     if ( ! $rclone ) return;
 
-    $history = (array) get_option( 'cs_dropbox_history', [] );
+    $history = (array) get_option( 'csbr_dropbox_history', [] );
     if ( empty( $history ) ) return;
 
     $golden  = array_values( array_filter( $history, fn( $e ) => ! empty( $e['golden'] ) ) );
@@ -5029,7 +6257,7 @@ function cs_enforce_dropbox_retention(): void {
 
     usort( $regular, fn( $a, $b ) => ( $a['time'] ?? 0 ) <=> ( $b['time'] ?? 0 ) );
     $to_prune = array_slice( $regular, 0, count( $regular ) - $max );
-    $dest_path = ltrim( get_option( 'cs_dropbox_path', 'cloudscale-backups/' ), '/' );
+    $dest_path = ltrim( get_option( 'csbr_dropbox_path', 'cloudscale-backups/' ), '/' );
 
     foreach ( $to_prune as $old ) {
         $name  = $old['name'] ?? '';
@@ -5039,14 +6267,14 @@ function cs_enforce_dropbox_retention(): void {
         // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         shell_exec( $cmd ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         unset( $history[$name] );
-        cs_log( '[CloudScale Backup] Dropbox retention: deleted ' . $name );
+        csbr_log( '[CloudScale Backup & Restore] Dropbox retention: deleted ' . $name );
     }
 
-    update_option( 'cs_dropbox_history', $history, false );
-    update_option( 'cs_dropbox_remote_count', count( array_merge( $golden, array_slice( $regular, -$max ) ) ), false );
+    update_option( 'csbr_dropbox_history', $history, false );
+    update_option( 'csbr_dropbox_remote_count', count( array_merge( $golden, array_slice( $regular, -$max ) ) ), false );
 }
 
-function cs_find_aws(): string {
+function csbr_find_aws(): string {
     $candidates = [
         trim((string) shell_exec('which aws 2>/dev/null')), // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         '/usr/local/bin/aws',
@@ -5070,17 +6298,17 @@ function cs_find_aws(): string {
  * @param bool   $schedule_retry Whether to schedule a WP-Cron retry on failure. Default true.
  * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
  */
-function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
-    if (!get_option('cs_s3_sync_enabled', true)) return ['skipped' => true];
-    $bucket = get_option('cs_s3_bucket', '');
+function csbr_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
+    if (!get_option('csbr_s3_sync_enabled', true)) return ['skipped' => true];
+    $bucket = get_option('csbr_s3_bucket', '');
     if (!$bucket) return ['skipped' => true];
 
-    $aws = cs_find_aws();
+    $aws = csbr_find_aws();
     if (!$aws) {
         return ['ok' => false, 'error' => 'AWS CLI not found. Check common locations or ensure it is executable by the web server user.'];
     }
 
-    $prefix  = get_option('cs_s3_prefix', 'backups/');
+    $prefix  = get_option('csbr_s3_prefix', 'backups/');
     $prefix  = '/' . ltrim($prefix, '/');
     $dest    = 's3://' . rtrim($bucket, '/') . rtrim($prefix, '/') . '/' . basename($local_path);
     $escaped = escapeshellarg($local_path);
@@ -5091,23 +6319,23 @@ function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
     $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
 
     // Space error: free oldest local backup and retry once
-    if ($out && cs_is_space_error($out)) {
-        cs_free_local_space('S3', basename($local_path));
+    if ($out && csbr_is_space_error($out)) {
+        csbr_free_local_space('S3', basename($local_path));
         // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
         $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     }
 
     $filename = basename($local_path);
-    $log      = (array) get_option('cs_s3_log', []);
+    $log      = (array) get_option('csbr_s3_log', []);
 
     if ($out) {
-        cs_log('[CloudScale Backup] S3 sync error: ' . $out);
+        csbr_log('[CloudScale Backup & Restore] S3 sync error: ' . $out);
         $result = ['ok' => false, 'dest' => $dest, 'error' => $out];
         $retry_at = null;
-        if ($schedule_retry && !wp_next_scheduled('cs_s3_retry', [$filename])) {
-            wp_schedule_single_event(time() + 300, 'cs_s3_retry', [$filename]);
+        if ($schedule_retry && !wp_next_scheduled('csbr_s3_retry', [$filename])) {
+            wp_schedule_single_event(time() + 300, 'csbr_s3_retry', [$filename]);
             $retry_at = time() + 300;
-            cs_log('[CloudScale Backup] S3 retry scheduled in 5 min for ' . $filename);
+            csbr_log('[CloudScale Backup & Restore] S3 retry scheduled in 5 min for ' . $filename);
         }
         $log[$filename] = array_filter([
             'ok'       => false,
@@ -5117,18 +6345,18 @@ function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
             'retry_at' => $retry_at,
         ], fn($v) => $v !== null);
     } else {
-        cs_log('[CloudScale Backup] S3 sync OK: ' . $dest);
+        csbr_log('[CloudScale Backup & Restore] S3 sync OK: ' . $dest);
         $result = ['ok' => true, 'dest' => $dest];
         $log[$filename] = ['ok' => true, 'time' => time(), 'dest' => $dest];
-        cs_enforce_s3_retention();
+        csbr_enforce_s3_retention();
     }
 
     // Prune log entries for files that no longer exist
-    $existing = array_map('basename', glob(CS_BACKUP_DIR . '*.zip') ?: []);
+    $existing = array_map('basename', glob(CSBR_BACKUP_DIR . '*.zip') ?: []);
     foreach (array_keys($log) as $k) {
         if (!in_array($k, $existing, true)) unset($log[$k]);
     }
-    update_option('cs_s3_log', $log, false);
+    update_option('csbr_s3_log', $log, false);
 
     return $result;
 }
@@ -5146,25 +6374,25 @@ function cs_sync_to_s3(string $local_path, bool $schedule_retry = true): array {
  * Refresh the S3 backup history by querying the configured bucket.
  *
  * Runs `aws s3 ls`, parses date/size/filename for each .zip, and merges the
- * result with the existing cs_s3_history option (preserving tag and golden
+ * result with the existing csbr_s3_history option (preserving tag and golden
  * fields for files that still exist in S3). Entries for files no longer in
  * S3 are dropped.
  *
  * @since 3.2.124
  * @return array Updated history keyed by filename, or empty array if S3 not configured.
  */
-function cs_s3_refresh_history(): array {
-    $bucket = get_option( 'cs_s3_bucket', '' );
+function csbr_s3_refresh_history(): array {
+    $bucket = get_option( 'csbr_s3_bucket', '' );
     if ( ! $bucket ) return [];
-    $aws = cs_find_aws();
+    $aws = csbr_find_aws();
     if ( ! $aws ) return [];
 
-    $prefix    = '/' . ltrim( get_option( 'cs_s3_prefix', 'backups/' ), '/' );
+    $prefix    = '/' . ltrim( get_option( 'csbr_s3_prefix', 'backups/' ), '/' );
     $s3_base   = 's3://' . rtrim( $bucket, '/' ) . rtrim( $prefix, '/' ) . '/';
     $cmd       = escapeshellarg( $aws ) . ' s3 ls ' . escapeshellarg( $s3_base ) . ' 2>&1';
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
     $out       = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $existing  = (array) get_option( 'cs_s3_history', [] );
+    $existing  = (array) get_option( 'csbr_s3_history', [] );
     $found     = [];
 
     foreach ( explode( "\n", $out ) as $line ) {
@@ -5178,17 +6406,17 @@ function cs_s3_refresh_history(): array {
             $found[ $name ] = [
                 'name'       => $name,
                 'size_bytes' => $size,
-                'size_fmt'   => cs_format_size( $size ),
+                'size_fmt'   => csbr_format_size( $size ),
                 'time'       => $ts,
                 'tag'        => $existing[ $name ]['tag']    ?? '',
                 'golden'     => $existing[ $name ]['golden'] ?? false,
                 'date_fmt'   => $ts ? wp_date( 'j M Y H:i', $ts ) : '—',
-                'local'      => file_exists( CS_BACKUP_DIR . $name ),
+                'local'      => file_exists( CSBR_BACKUP_DIR . $name ),
             ];
         }
     }
 
-    update_option( 'cs_s3_history', $found, false );
+    update_option( 'csbr_s3_history', $found, false );
     return $found;
 }
 /**
@@ -5199,8 +6427,8 @@ function cs_s3_refresh_history(): array {
  * @since 1.0.0
  * @return string Complete SQL dump as a string.
  */
-function cs_dump_database(): string {
-    return cs_mysqldump_available() ? cs_dump_via_mysqldump() : cs_dump_via_php($GLOBALS['wpdb']);
+function csbr_dump_database(): string {
+    return csbr_mysqldump_available() ? csbr_dump_via_mysqldump() : csbr_dump_via_php($GLOBALS['wpdb']);
 }
 
 /**
@@ -5209,7 +6437,7 @@ function cs_dump_database(): string {
  * @since 1.0.0
  * @return bool True if mysqldump is found in PATH.
  */
-function cs_mysqldump_available(): bool {
+function csbr_mysqldump_available(): bool {
     exec('which mysqldump 2>/dev/null', $out, $rc); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- checking binary availability via which; no user input
     return $rc === 0;
 }
@@ -5223,12 +6451,12 @@ function cs_mysqldump_available(): bool {
  * @since 1.0.0
  * @return string Complete SQL dump as a string.
  */
-function cs_dump_via_mysqldump(): string {
-    [$host, $port] = cs_parse_db_host(DB_HOST);
-    $tmp = tempnam(sys_get_temp_dir(), 'cs_dump_') . '.sql';
+function csbr_dump_via_mysqldump(): string {
+    [$host, $port] = csbr_parse_db_host(DB_HOST);
+    $tmp = tempnam(sys_get_temp_dir(), 'csbr_dump_') . '.sql';
 
     $cmd = sprintf(
-        'MYSQL_PWD=%s mysqldump --single-transaction --quick --lock-tables=false -h %s -P %s -u %s %s > %s 2>&1',
+        'MYSQL_PWD=%s mysqldump --single-transaction --quick --lock-tables=false --complete-insert -h %s -P %s -u %s %s > %s 2>&1',
         escapeshellarg(DB_PASSWORD),
         escapeshellarg($host),
         escapeshellarg($port),
@@ -5241,7 +6469,7 @@ function cs_dump_via_mysqldump(): string {
 
     if ($rc !== 0 || !file_exists($tmp) || filesize($tmp) < 100) {
         wp_delete_file($tmp);
-        return cs_dump_via_php($GLOBALS['wpdb']);
+        return csbr_dump_via_php($GLOBALS['wpdb']);
     }
 
     $sql = file_get_contents($tmp); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading mysqldump output from temp file; WP Filesystem API not appropriate for temp file operations
@@ -5259,9 +6487,9 @@ function cs_dump_via_mysqldump(): string {
  * @param \wpdb $wpdb WordPress database object.
  * @return string Complete SQL dump as a string.
  */
-function cs_dump_via_php(\wpdb $wpdb): string {
+function csbr_dump_via_php(\wpdb $wpdb): string {
     $out   = [];
-    $out[] = '-- CloudScale Backup & Restore v' . CS_BACKUP_VERSION;
+    $out[] = '-- CloudScale Backup & Restore v' . CSBR_VERSION;
     $out[] = '-- Generated: ' . gmdate('Y-m-d H:i:s');
     $out[] = '-- Site: ' . get_site_url();
     $out[] = '-- Database: ' . DB_NAME;
@@ -5327,7 +6555,7 @@ function cs_dump_via_php(\wpdb $wpdb): string {
  * @param string     $prefix Path prefix to use inside the zip (e.g. 'uploads/').
  * @return void
  */
-function cs_add_dir_to_zip(ZipArchive $zip, string $dir, string $prefix): void {
+function csbr_add_dir_to_zip(ZipArchive $zip, string $dir, string $prefix): void {
     if (!is_dir($dir)) return;
     $it = new RecursiveIteratorIterator(
         new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS),
@@ -5353,10 +6581,17 @@ function cs_add_dir_to_zip(ZipArchive $zip, string $dir, string $prefix): void {
  * @return void
  * @throws \Exception If the zip cannot be opened or contains no database.sql.
  */
-function cs_restore_from_zip(string $zip_path): void {
+function csbr_restore_from_zip(string $zip_path): void {
+    csbr_log( '[CloudScale Backup & Restore] Opening zip: ' . basename( $zip_path ) );
     $zip = new ZipArchive();
     if ($zip->open($zip_path) !== true) {
         throw new Exception('Cannot open zip file.');
+    }
+
+    $enc_pwd = (string) get_option( 'csbr_encrypt_password', '' );
+    if ( $enc_pwd !== '' ) {
+        $zip->setPassword( $enc_pwd );
+        csbr_log( '[CloudScale Backup & Restore] Zip: encryption password set' );
     }
 
     $idx = $zip->locateName('database.sql');
@@ -5367,12 +6602,16 @@ function cs_restore_from_zip(string $zip_path): void {
 
     $sql = $zip->getFromIndex($idx);
     $zip->close();
+    csbr_log( '[CloudScale Backup & Restore] Zip: database.sql extracted (' . CloudScale_Backup_Utils::format_size( strlen( $sql ?: '' ) ) . ')' );
 
     if (empty($sql)) {
-        throw new Exception('database.sql is empty.');
+        $hint = $enc_pwd !== ''
+            ? ' The backup may be encrypted with a different password — check Backup Encryption in Schedule & Settings.'
+            : ' If this backup was encrypted, set the matching password in Schedule & Settings first.';
+        throw new Exception( 'database.sql could not be read.' . $hint ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- $hint is a hardcoded string literal, not user input
     }
 
-    cs_execute_sql_string($sql);
+    csbr_execute_sql_string($sql);
 }
 
 /**
@@ -5383,12 +6622,456 @@ function cs_restore_from_zip(string $zip_path): void {
  * @return void
  * @throws \Exception If the file is empty or unreadable.
  */
-function cs_restore_sql_file(string $path): void {
+function csbr_restore_sql_file(string $path): void {
+    csbr_log( '[CloudScale Backup & Restore] Reading SQL file: ' . basename( $path ) . ' (' . CloudScale_Backup_Utils::format_size( (int) filesize( $path ) ) . ')' );
     $sql = file_get_contents($path); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading uploaded SQL backup file; WP Filesystem API not appropriate for restore operations
     if (empty($sql)) {
         throw new Exception('SQL file is empty.');
     }
-    cs_execute_sql_string($sql);
+    csbr_execute_sql_string($sql);
+}
+
+/**
+ * Upload a local backup file to Microsoft OneDrive using rclone.
+ *
+ * @since 3.2.251
+ * @param string $local_path Absolute filesystem path to the backup zip.
+ * @return array{ok: bool, dest: string, error?: string, skipped?: bool} Result array.
+ */
+function csbr_sync_to_onedrive( string $local_path ): array {
+    if ( ! get_option( 'csbr_onedrive_sync_enabled', false ) ) return [ 'skipped' => true ];
+    $remote = get_option( 'csbr_onedrive_remote', '' );
+    if ( ! $remote ) return [ 'skipped' => true ];
+
+    $rclone = csbr_find_rclone();
+    if ( ! $rclone ) {
+        return [ 'ok' => false, 'error' => 'rclone not found. Install rclone and configure a OneDrive remote.' ];
+    }
+
+    $dest_path = ltrim( get_option( 'csbr_onedrive_path', 'cloudscale-backups/' ), '/' );
+    $dest      = rtrim( $remote, ':' ) . ':' . $dest_path;
+    $escaped   = escapeshellarg( $local_path );
+    $edest     = escapeshellarg( $dest );
+
+    // Space pre-check
+    $file_size = file_exists( $local_path ) ? (int) filesize( $local_path ) : 0;
+    if ( $file_size > 0 ) {
+        $free = csbr_rclone_free_bytes( $remote );
+        if ( $free !== null && $free < $file_size ) {
+            $free_mb = round( $free / 1048576, 1 );
+            $need_mb = round( $file_size / 1048576, 1 );
+            $err     = "Not enough space on OneDrive: {$free_mb} MB free, backup needs {$need_mb} MB.";
+            csbr_log( '[CloudScale Backup & Restore] OneDrive sync skipped — ' . $err );
+            return [ 'ok' => false, 'dest' => $dest, 'error' => $err ];
+        }
+    }
+
+    $cmd = escapeshellarg( $rclone ) . " copy --timeout 5m --contimeout 30s {$escaped} {$edest} 2>&1";
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+
+    if ( $out && csbr_is_space_error( $out ) ) {
+        csbr_free_local_space( 'OneDrive', basename( $local_path ) );
+        // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+        $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    }
+
+    $filename = basename( $local_path );
+    $log      = (array) get_option( 'csbr_onedrive_log', [] );
+
+    if ( $out ) {
+        csbr_log( '[CloudScale Backup & Restore] OneDrive sync error: ' . $out );
+        $result         = [ 'ok' => false, 'dest' => $dest, 'error' => $out ];
+        $log[$filename] = [ 'ok' => false, 'time' => time(), 'dest' => $dest, 'error' => $out ];
+    } else {
+        csbr_log( '[CloudScale Backup & Restore] OneDrive sync OK: ' . $dest );
+        $result         = [ 'ok' => true, 'dest' => $dest ];
+        $log[$filename] = [ 'ok' => true, 'time' => time(), 'dest' => $dest ];
+        csbr_enforce_onedrive_retention();
+    }
+
+    $existing = array_map( 'basename', glob( CSBR_BACKUP_DIR . '*.zip' ) ?: [] );
+    foreach ( array_keys( $log ) as $k ) {
+        if ( ! in_array( $k, $existing, true ) ) unset( $log[$k] );
+    }
+    update_option( 'csbr_onedrive_log', $log, false );
+
+    return $result;
+}
+
+/**
+ * Refresh the OneDrive backup history by querying via rclone lsjson.
+ *
+ * @since 3.2.251
+ * @return array Updated history keyed by filename, or empty array if not configured.
+ */
+function csbr_onedrive_refresh_history(): array {
+    $remote = get_option( 'csbr_onedrive_remote', '' );
+    if ( ! $remote ) return [];
+    $rclone = csbr_find_rclone();
+    if ( ! $rclone ) return [];
+
+    $dest_path   = ltrim( get_option( 'csbr_onedrive_path', 'cloudscale-backups/' ), '/' );
+    $remote_path = rtrim( $remote, ':' ) . ':' . $dest_path;
+    $cmd         = escapeshellarg( $rclone ) . ' lsjson ' . escapeshellarg( $remote_path ) . ' --files-only 2>&1';
+    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $out  = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    $data = json_decode( $out ?: '[]', true );
+    if ( ! is_array( $data ) ) return [];
+
+    $existing = (array) get_option( 'csbr_onedrive_history', [] );
+    $found    = [];
+
+    foreach ( $data as $f ) {
+        $name = $f['Name'] ?? '';
+        if ( ! str_ends_with( $name, '.zip' ) ) continue;
+        $size = (int) ( $f['Size']    ?? 0 );
+        $mod  = $f['ModTime'] ?? '';
+        $ts   = $mod ? (int) strtotime( $mod ) : 0;
+        $found[$name] = [
+            'name'       => $name,
+            'size_bytes' => $size,
+            'size_fmt'   => csbr_format_size( $size ),
+            'time'       => $ts,
+            'tag'        => $existing[$name]['tag']    ?? '',
+            'golden'     => $existing[$name]['golden'] ?? false,
+            'date_fmt'   => $ts ? wp_date( 'j M Y H:i', $ts ) : '—',
+        ];
+    }
+
+    uasort( $found, fn( $a, $b ) => ( $b['time'] ?? 0 ) <=> ( $a['time'] ?? 0 ) );
+    update_option( 'csbr_onedrive_history', $found, false );
+    return $found;
+}
+
+/**
+ * Delete old OneDrive backups beyond the configured retention limit.
+ *
+ * @since 3.2.251
+ * @return void
+ */
+function csbr_enforce_onedrive_retention(): void {
+    $max    = max( 1, intval( get_option( 'csbr_ami_max', 10 ) ) );
+    $remote = get_option( 'csbr_onedrive_remote', '' );
+    if ( ! $remote ) return;
+    $rclone = csbr_find_rclone();
+    if ( ! $rclone ) return;
+
+    $history = csbr_onedrive_refresh_history();
+    if ( empty( $history ) ) return;
+
+    $golden  = array_values( array_filter( $history, fn( $e ) => ! empty( $e['golden'] ) ) );
+    $regular = array_values( array_filter( $history, fn( $e ) =>   empty( $e['golden'] ) ) );
+
+    if ( count( $regular ) <= $max ) return;
+
+    usort( $regular, fn( $a, $b ) => ( $a['time'] ?? 0 ) <=> ( $b['time'] ?? 0 ) );
+    $to_prune  = array_slice( $regular, 0, count( $regular ) - $max );
+    $dest_path = ltrim( get_option( 'csbr_onedrive_path', 'cloudscale-backups/' ), '/' );
+
+    foreach ( $to_prune as $old ) {
+        $name  = $old['name'] ?? '';
+        if ( ! $name ) continue;
+        $rpath = rtrim( $remote, ':' ) . ':' . rtrim( $dest_path, '/' ) . '/' . $name;
+        $cmd   = escapeshellarg( $rclone ) . ' deletefile ' . escapeshellarg( $rpath ) . ' 2>&1';
+        // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+        shell_exec( $cmd ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+        unset( $history[$name] );
+        csbr_log( '[CloudScale Backup & Restore] OneDrive retention: deleted ' . $name );
+    }
+
+    update_option( 'csbr_onedrive_history', $history, false );
+    update_option( 'csbr_onedrive_remote_count', count( array_merge( $golden, array_slice( $regular, -$max ) ) ), false );
+}
+
+/**
+ * List all table names defined in a SQL dump string.
+ *
+ * Scans for CREATE TABLE statements and returns each table name once.
+ *
+ * @since 3.2.251
+ * @param string $sql Raw SQL dump string.
+ * @return string[] Table names in the order they appear in the dump.
+ */
+/**
+ * Extract the SQL dump string from a resolved source (zip or .sql file).
+ *
+ * @since 3.2.251
+ * @param array $source Return value of csbr_resolve_restore_source().
+ * @return string Raw SQL dump contents.
+ * @throws Exception If the file cannot be read or is empty.
+ */
+function csbr_get_sql_from_source( array $source ): string {
+    if ( $source['ext'] === 'sql' ) {
+        $sql = file_get_contents( $source['path'] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading local backup/staged file
+        if ( empty( $sql ) ) { throw new Exception( 'SQL file is empty.' ); }
+        return $sql;
+    }
+    $zip = new ZipArchive();
+    if ( $zip->open( $source['path'] ) !== true ) { throw new Exception( 'Cannot open backup zip.' ); }
+    $enc_pwd = (string) get_option( 'csbr_encrypt_password', '' );
+    if ( $enc_pwd !== '' ) { $zip->setPassword( $enc_pwd ); }
+    $sql = $zip->getFromName( 'database.sql' );
+    $zip->close();
+    if ( empty( $sql ) ) { throw new Exception( 'No database.sql in this backup.' ); }
+    return $sql;
+}
+
+/**
+ * Return a map of column name => zero-based index for a table in a SQL dump.
+ *
+ * Tries the INSERT column list first; falls back to CREATE TABLE column order.
+ * Returns an empty array on failure (callers use known WordPress defaults).
+ *
+ * @since 3.2.251
+ * @param string $sql   Full SQL dump.
+ * @param string $table Table name to look up.
+ * @return array<string,int> Map of column name to zero-based position.
+ */
+function csbr_get_table_column_indices( string $sql, string $table ): array {
+    // Strategy 1: INSERT with explicit column list (--complete-insert or PHP dump).
+    // Grab only the first line of the INSERT statement so the regex stays small.
+    foreach ( [ 'INSERT INTO `' . $table . '`', 'INSERT IGNORE INTO `' . $table . '`' ] as $ins_needle ) {
+        $pos = stripos( $sql, $ins_needle );
+        if ( $pos !== false ) {
+            $eol  = strpos( $sql, "\n", $pos );
+            $line = substr( $sql, $pos, $eol !== false ? ( $eol - $pos ) : 4096 );
+            // Match: INSERT INTO `table` (`col1`, `col2`, ...) VALUES
+            if ( preg_match( '/`[^`]+`\s+\((`[^)]+`)\)\s+VALUES/i', $line, $m ) ) {
+                $names = array_map( static fn( $c ) => trim( $c, " `\t" ), explode( ',', $m[1] ) );
+                if ( $names && $names[0] !== '' ) {
+                    return array_flip( $names );
+                }
+            }
+            break; // only check the first INSERT for this table
+        }
+    }
+
+    // Strategy 2: CREATE TABLE column order.
+    // Use a balanced-paren scanner to locate the body — robust across all MySQL/MariaDB
+    // versions regardless of ENGINE, CHARSET, or line-ending variations.
+    $ct_needle = 'CREATE TABLE `' . $table . '`';
+    $ct_pos    = stripos( $sql, $ct_needle );
+    if ( $ct_pos === false ) {
+        $ct_needle = 'CREATE TABLE IF NOT EXISTS `' . $table . '`';
+        $ct_pos    = stripos( $sql, $ct_needle );
+    }
+    if ( $ct_pos !== false ) {
+        $open = strpos( $sql, '(', $ct_pos ); // opening ( of the column list
+        if ( $open !== false ) {
+            // Walk forward tracking paren depth and string state to find the matching ).
+            $sql_len = strlen( $sql );
+            $depth   = 1;
+            $in_str  = false;
+            $j       = $open + 1;
+            while ( $j < $sql_len && $depth > 0 ) {
+                $ch = $sql[ $j ];
+                if ( $in_str ) {
+                    if ( $ch === '\\' ) { $j++; } // skip escaped char
+                    elseif ( $ch === "'" ) { $in_str = false; }
+                } else {
+                    if ( $ch === "'" ) { $in_str = true; }
+                    elseif ( $ch === '(' ) { $depth++; }
+                    elseif ( $ch === ')' ) { $depth--; }
+                }
+                $j++;
+            }
+            // Contents between the outer parens of CREATE TABLE
+            $body       = substr( $sql, $open + 1, $j - $open - 2 );
+            $cols_found = [];
+            foreach ( explode( "\n", $body ) as $ln ) {
+                $ln = ltrim( $ln, " \t\r" );
+                // Lines that start with `)` are the closing of a nested expression — stop.
+                if ( $ln !== '' && $ln[0] === ')' ) {
+                    break;
+                }
+                // Column definition lines start with a backtick-quoted name followed by a type keyword.
+                if ( preg_match( '/^`([^`]+)`\s+[a-z]/i', $ln, $lm ) ) {
+                    $cols_found[] = $lm[1];
+                }
+            }
+            if ( ! empty( $cols_found ) ) {
+                return array_flip( $cols_found );
+            }
+        }
+    }
+    return [];
+}
+
+/**
+ * Extract the column list clause (with surrounding spaces) from an INSERT statement.
+ * Returns '' if the INSERT uses positional VALUES (no explicit column list).
+ *
+ * @since 3.2.251
+ * @param string $insert_sql A complete INSERT ... statement.
+ * @return string e.g. ' (`ID`,`post_title`,...)' or ''.
+ */
+function csbr_get_insert_column_clause( string $insert_sql ): string {
+    if ( preg_match( '/INSERT\s+(?:IGNORE\s+)?INTO\s+`[^`]+`\s+(\([^)]+\))\s+VALUES/i', $insert_sql, $m ) ) {
+        return ' ' . $m[1];
+    }
+    return '';
+}
+
+/**
+ * Parse each VALUES row from a SQL INSERT statement into an array of row content strings.
+ * Each returned string is the raw content between the outer parentheses of one row,
+ * with quotes and escape sequences intact.
+ *
+ * @since 3.2.251
+ * @param string $insert_sql A complete INSERT ... VALUES (...),(...),...; statement.
+ * @return string[] Array of row content strings (outer parens stripped).
+ */
+function csbr_parse_insert_row_strings( string $insert_sql ): array {
+    $vpos = stripos( $insert_sql, ' VALUES' );
+    if ( $vpos === false ) { return []; }
+    $clause = ltrim( substr( $insert_sql, $vpos + 7 ) ); // ltrim handles \n or space after VALUES
+    $clause = rtrim( $clause, '; ' );
+
+    $rows = [];
+    $len  = strlen( $clause );
+    $i    = 0;
+
+    while ( $i < $len ) {
+        while ( $i < $len && $clause[ $i ] !== '(' ) { $i++; }
+        if ( $i >= $len ) { break; }
+        $i++; // skip opening (
+
+        $start    = $i;
+        $depth    = 1;
+        $in_quote = false;
+
+        while ( $i < $len ) {
+            $c = $clause[ $i ];
+            if ( $in_quote ) {
+                if ( $c === '\\' ) { $i++; } // skip escaped char
+                elseif ( $c === "'" ) { $in_quote = false; }
+            } else {
+                if ( $c === "'" )     { $in_quote = true; }
+                elseif ( $c === '(' ) { $depth++; }
+                elseif ( $c === ')' ) {
+                    $depth--;
+                    if ( $depth === 0 ) { break; }
+                }
+            }
+            $i++;
+        }
+
+        $rows[] = substr( $clause, $start, $i - $start );
+        $i++; // skip closing )
+        while ( $i < $len && ( $clause[ $i ] === ',' || $clause[ $i ] === ' ' || $clause[ $i ] === "\n" || $clause[ $i ] === "\r" || $clause[ $i ] === "\t" ) ) { $i++; }
+    }
+
+    return $rows;
+}
+
+/**
+ * Parse column values from a single VALUES row content string (no outer parens).
+ *
+ * Handles SQL escape sequences, quoted strings, and unquoted values (NULL, integers).
+ * Returns each value as a plain PHP string; NULL becomes the string 'NULL'.
+ *
+ * @since 3.2.251
+ * @param string $row Row content without outer parentheses.
+ * @return string[] Ordered array of column value strings.
+ */
+function csbr_parse_row_columns( string $row ): array {
+    $cols = [];
+    $len  = strlen( $row );
+    $i    = 0;
+
+    while ( $i < $len ) {
+        while ( $i < $len && ( $row[ $i ] === ' ' || $row[ $i ] === "\t" || $row[ $i ] === "\n" || $row[ $i ] === "\r" ) ) { $i++; }
+        if ( $i >= $len ) { break; }
+
+        if ( $row[ $i ] === "'" ) {
+            $i++;
+            $val = '';
+            while ( $i < $len ) {
+                if ( $row[ $i ] === '\\' && $i + 1 < $len ) {
+                    $next = $row[ ++$i ];
+                    $val .= match ( $next ) {
+                        'n'  => "\n",
+                        'r'  => "\r",
+                        't'  => "\t",
+                        default => $next,
+                    };
+                    $i++;
+                } elseif ( $row[ $i ] === "'" ) {
+                    $i++;
+                    break;
+                } else {
+                    $val .= $row[ $i++ ];
+                }
+            }
+            $cols[] = $val;
+        } else {
+            $j = $i;
+            while ( $j < $len && $row[ $j ] !== ',' ) { $j++; }
+            $cols[] = trim( substr( $row, $i, $j - $i ) );
+            $i = $j;
+        }
+
+        if ( $i < $len && $row[ $i ] === ',' ) { $i++; }
+    }
+
+    return $cols;
+}
+
+function csbr_list_tables_in_dump( string $sql ): array {
+    preg_match_all( '/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`([^`]+)`/i', $sql, $m );
+    return array_values( array_unique( $m[1] ) );
+}
+
+/**
+ * Filter a SQL dump to only include statements for the given tables.
+ *
+ * Preserves session-variable SET statements and MySQL version conditionals.
+ * Strips database-level statements (CREATE DATABASE, USE).
+ *
+ * @since 3.2.251
+ * @param string   $sql    Raw SQL dump string.
+ * @param string[] $tables Table names to keep.
+ * @return string Filtered SQL, ready to execute.
+ */
+function csbr_filter_sql_for_tables( string $sql, array $tables ): string {
+    $stmts     = csbr_split_sql( $sql );
+    $table_set = array_flip( array_map( 'strtolower', $tables ) );
+    $out       = [];
+
+    foreach ( $stmts as $stmt ) {
+        $s = ltrim( $stmt );
+
+        // Always keep SET statements and MySQL version conditionals.
+        if ( preg_match( '/^SET\s+/i', $s ) || str_starts_with( $s, '/*!' ) ) {
+            $out[] = $stmt . ';';
+            continue;
+        }
+
+        // Always keep UNLOCK TABLES (paired with LOCK TABLES we may have kept).
+        if ( preg_match( '/^UNLOCK\s+TABLES/i', $s ) ) {
+            $out[] = $stmt . ';';
+            continue;
+        }
+
+        // Skip database-level statements.
+        if ( preg_match( '/^(?:CREATE\s+DATABASE|USE\s+)/i', $s ) ) {
+            continue;
+        }
+
+        // Table-specific statements: include only if table is in the selected set.
+        if ( preg_match(
+            '/^(?:DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?|CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?|INSERT\s+(?:IGNORE\s+)?INTO\s+|TRUNCATE\s+(?:TABLE\s+)?|ALTER\s+TABLE\s+|LOCK\s+TABLES\s+)`([^`]+)`/i',
+            $s,
+            $m
+        ) ) {
+            if ( isset( $table_set[ strtolower( $m[1] ) ] ) ) {
+                $out[] = $stmt . ';';
+            }
+        }
+    }
+
+    return implode( "\n", $out );
 }
 
 /**
@@ -5405,30 +7088,53 @@ function cs_restore_sql_file(string $path): void {
  * @param string $sql Complete SQL to execute.
  * @return void
  */
-function cs_execute_sql_string(string $sql): void {
+function csbr_execute_sql_string(string $sql): void {
     global $wpdb;
 
-    if (cs_mysql_cli_available()) {
-        cs_restore_via_mysql_cli($sql);
+    // Acquire MySQL advisory lock — prevents a second concurrent restore from running simultaneously.
+    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- restore requires direct execution; prepare() cannot be applied to DDL/DML replay from a trusted backup file
+    $lock = $wpdb->get_var( "SELECT GET_LOCK('csbr_restore_lock', 10)" );
+    if ( '1' !== (string) $lock ) {
+        throw new Exception( 'Could not acquire restore lock — another restore may already be running. Please wait and try again.' );
+    }
+    csbr_log( '[CloudScale Backup & Restore] Advisory lock acquired' );
+
+    if (csbr_mysql_cli_available()) {
+        csbr_log( '[CloudScale Backup & Restore] DB execution path: mysql CLI' );
+        try {
+            csbr_restore_via_mysql_cli($sql);
+        } finally {
+            $wpdb->query( "SELECT RELEASE_LOCK('csbr_restore_lock')" );
+            csbr_log( '[CloudScale Backup & Restore] Advisory lock released' );
+        }
         return;
     }
 
-    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter -- restore requires direct execution; prepare() cannot be applied to DDL/DML replay from a trusted backup file
+    csbr_log( '[CloudScale Backup & Restore] DB execution path: wpdb fallback' );
+    $stmts       = csbr_split_sql( $sql );
+    $stmt_count  = count( $stmts );
+    $err_count   = 0;
+    csbr_log( '[CloudScale Backup & Restore] Executing ' . $stmt_count . ' SQL statements' );
+
     $wpdb->query('SET FOREIGN_KEY_CHECKS=0');
 
-    foreach (cs_split_sql($sql) as $stmt) {
+    foreach ( $stmts as $stmt ) {
         $stmt = trim($stmt);
         if (empty($stmt) || str_starts_with($stmt, '--') || str_starts_with($stmt, '/*')) {
             continue;
         }
         $wpdb->query($stmt);
         if ($wpdb->last_error) {
-            cs_log('CS Restore statement error: ' . $wpdb->last_error . ' | ' . substr($stmt, 0, 200));
+            ++$err_count;
+            csbr_log('[CloudScale Backup & Restore] Restore statement error: ' . $wpdb->last_error . ' | ' . substr($stmt, 0, 200));
         }
     }
 
     $wpdb->query('SET FOREIGN_KEY_CHECKS=1');
+    $wpdb->query( "SELECT RELEASE_LOCK('csbr_restore_lock')" );
     // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.NoPrepare, WordPress.DB.PreparedSQL.NotPrepared, PluginCheck.Security.DirectDB.UnescapedDBParameter
+    csbr_log( '[CloudScale Backup & Restore] Advisory lock released' );
+    csbr_log( '[CloudScale Backup & Restore] DB execution complete — ' . $stmt_count . ' statements, ' . $err_count . ' error(s)' );
 }
 
 /**
@@ -5437,7 +7143,7 @@ function cs_execute_sql_string(string $sql): void {
  * @since 1.0.0
  * @return bool True if mysql is found in PATH.
  */
-function cs_mysql_cli_available(): bool {
+function csbr_mysql_cli_available(): bool {
     exec('which mysql 2>/dev/null', $out, $rc); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- checking binary availability via which; no user input
     return $rc === 0;
 }
@@ -5453,11 +7159,14 @@ function cs_mysql_cli_available(): bool {
  * @return void
  * @throws \Exception If the restore command exits with a non-zero status.
  */
-function cs_restore_via_mysql_cli(string $sql): void {
-    $tmp = tempnam(sys_get_temp_dir(), 'cs_restore_') . '.sql';
+function csbr_restore_via_mysql_cli(string $sql): void {
+    $stmt_count = count( csbr_split_sql( $sql ) );
+    csbr_log( '[CloudScale Backup & Restore] mysql CLI: starting restore (' . CloudScale_Backup_Utils::format_size( strlen( $sql ) ) . ', ~' . $stmt_count . ' statements)' );
+
+    $tmp = tempnam(sys_get_temp_dir(), 'csbr_restore_') . '.sql';
     file_put_contents($tmp, $sql); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- writing SQL to temp file for mysql CLI restore; WP Filesystem API not appropriate here
 
-    [$host, $port] = cs_parse_db_host(DB_HOST);
+    [$host, $port] = csbr_parse_db_host(DB_HOST);
 
     $cmd = sprintf(
         'MYSQL_PWD=%s mysql -h %s -P %s -u %s %s < %s 2>&1',
@@ -5473,8 +7182,10 @@ function cs_restore_via_mysql_cli(string $sql): void {
     wp_delete_file( $tmp );
 
     if ($rc !== 0) {
+        csbr_log( '[CloudScale Backup & Restore] mysql CLI: restore FAILED (exit ' . $rc . ') — ' . implode( ' | ', $output ) );
         throw new Exception('mysql CLI restore failed: ' . implode(' | ', $output)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception caught and message passed to wp_send_json_error()
     }
+    csbr_log( '[CloudScale Backup & Restore] mysql CLI: restore complete (exit 0)' );
 }
 
 /**
@@ -5487,7 +7198,7 @@ function cs_restore_via_mysql_cli(string $sql): void {
  * @param string $sql Raw SQL dump string.
  * @return string[] Array of individual SQL statements (without trailing semicolons).
  */
-function cs_split_sql(string $sql): array {
+function csbr_split_sql(string $sql): array {
     $stmts      = [];
     $current    = '';
     $in_string  = false;
@@ -5533,7 +7244,7 @@ function cs_split_sql(string $sql): array {
  * @param string $host Raw DB_HOST value, e.g. 'localhost' or '127.0.0.1:3307'.
  * @return array{string, string} Two-element array: [hostname, port].
  */
-function cs_parse_db_host( string $host ): array {
+function csbr_parse_db_host( string $host ): array {
     return CloudScale_Backup_Utils::parse_db_host( $host );
 }
 
@@ -5543,20 +7254,20 @@ function cs_parse_db_host( string $host ): array {
  * @since 3.2.28
  * @return string Absolute path to the newest zip file, or empty string if none exist.
  */
-function cs_get_latest_backup_path(): string {
-    $files = glob(CS_BACKUP_DIR . '*.zip') ?: [];
+function csbr_get_latest_backup_path(): string {
+    $files = glob(CSBR_BACKUP_DIR . '*.zip') ?: [];
     if (!$files) return '';
     usort($files, fn($a, $b) => filemtime($b) <=> filemtime($a));
     return $files[0];
 }
 
-function cs_list_backups(): array {
+function csbr_list_backups(): array {
     $backups = [];
-    if (!is_dir(CS_BACKUP_DIR)) return $backups;
+    if (!is_dir(CSBR_BACKUP_DIR)) return $backups;
 
-    $files = glob(CS_BACKUP_DIR . '*.zip') ?: [];
+    $files = glob(CSBR_BACKUP_DIR . '*.zip') ?: [];
 
-    $current_prefix = sanitize_key(get_option('cs_backup_prefix', 'bkup')) ?: 'bkup';
+    $current_prefix = sanitize_key(get_option('csbr_backup_prefix', 'bkup')) ?: 'bkup';
 
     foreach ($files as $file) {
         $name = basename($file);
@@ -5598,12 +7309,21 @@ function cs_list_backups(): array {
         } else {
             $type = 'Unknown';
         }
+        // Detect AES encryption via zip central-directory stat (no file read needed).
+        $is_enc = false;
+        $zs = new ZipArchive();
+        if ( $zs->open( $file ) === true ) {
+            $stat   = $zs->statIndex( 0 );
+            $is_enc = isset( $stat['encryption_method'] ) && $stat['encryption_method'] !== 0;
+            $zs->close();
+        }
         $backups[] = [
-            'name'  => $name,
-            'type'  => $type,
-            'size'  => filesize($file),
-            'date'  => wp_date('j M Y H:i', filemtime($file)),
-            'mtime' => filemtime($file),
+            'name'      => $name,
+            'type'      => $type,
+            'size'      => filesize($file),
+            'date'      => wp_date('j M Y H:i', filemtime($file)),
+            'mtime'     => filemtime($file),
+            'encrypted' => $is_enc,
         ];
     }
 
@@ -5617,11 +7337,11 @@ function cs_list_backups(): array {
  * @since 1.0.0
  * @return void
  */
-function cs_enforce_retention(): void {
-    $keep    = intval(get_option('cs_retention', 8));
-    $backups = cs_list_backups();
+function csbr_enforce_retention(): void {
+    $keep    = intval(get_option('csbr_retention', 8));
+    $backups = csbr_list_backups();
     foreach (array_slice($backups, $keep) as $b) {
-        wp_delete_file(CS_BACKUP_DIR . $b['name']);
+        wp_delete_file(CSBR_BACKUP_DIR . $b['name']);
     }
 }
 
@@ -5632,7 +7352,7 @@ function cs_enforce_retention(): void {
  * @param string $dir Absolute path to the directory.
  * @return int Total size in bytes, or 0 if the directory does not exist.
  */
-function cs_dir_size( string $dir ): int {
+function csbr_dir_size( string $dir ): int {
     return CloudScale_Backup_Utils::dir_size( $dir );
 }
 
@@ -5643,10 +7363,17 @@ function cs_dir_size( string $dir ): int {
  * @param int $bytes Size in bytes.
  * @return string Formatted string, e.g. '12.5 MB'.
  */
-function cs_format_size( int $bytes ): string {
+function csbr_format_size( int $bytes ): string {
     return CloudScale_Backup_Utils::format_size( $bytes );
 }
 
+/**
+ * Format bytes as MB string with thousand separators and 2 decimal places.
+ * Shows KB for values under 0.1 MB.
+ *
+ * @param int $bytes
+ * @return string e.g. '1,234.56 MB'
+ */
 /**
  * Return a human-readable relative age string for a Unix timestamp.
  *
@@ -5654,7 +7381,7 @@ function cs_format_size( int $bytes ): string {
  * @param int $timestamp Unix timestamp to describe.
  * @return string E.g. '5 min ago', '3 hr ago', '12 days ago', or a formatted date.
  */
-function cs_human_age( int $timestamp ): string {
+function csbr_human_age( int $timestamp ): string {
     return CloudScale_Backup_Utils::human_age( $timestamp );
 }
 
@@ -5667,7 +7394,7 @@ function cs_human_age( int $timestamp ): string {
  * @param int|null $last_ok Unix timestamp of the last successful sync, or null.
  * @return array|null The failed log entry array, or null if none qualifies.
  */
-function cs_latest_failed_log_entry( array $log, ?int $last_ok ): ?array {
+function csbr_latest_failed_log_entry( array $log, ?int $last_ok ): ?array {
     if ( empty( $log ) ) return null;
     $most_recent = array_reduce(
         $log,
@@ -5685,7 +7412,7 @@ function cs_latest_failed_log_entry( array $log, ?int $last_ok ): ?array {
  * @param string $error Shell command output.
  * @return bool
  */
-function cs_is_space_error( string $error ): bool {
+function csbr_is_space_error( string $error ): bool {
     return (bool) preg_match(
         '/no space left|disk quota|insufficient.?storage|ENOSPC|quota.?exceeded|storageQuotaExceeded|not enough space|out of.?space/i',
         $error
@@ -5701,10 +7428,10 @@ function cs_is_space_error( string $error ): bool {
  * @param string $exclude_file Basename of the file currently being processed — skip it.
  * @return string Basename of deleted file, or empty string if nothing was deleted.
  */
-function cs_free_local_space( string $context, string $exclude_file = '' ): string {
-    $zips = glob( CS_BACKUP_DIR . '*.zip' ) ?: [];
+function csbr_free_local_space( string $context, string $exclude_file = '' ): string {
+    $zips = glob( CSBR_BACKUP_DIR . '*.zip' ) ?: [];
     if ( count( $zips ) <= 1 ) {
-        cs_log( "[CloudScale Backup] Space error during {$context} sync: only one local backup exists, cannot free space. Consider increasing server disk storage." );
+        csbr_log( "[CloudScale Backup & Restore] Space error during {$context} sync: only one local backup exists, cannot free space. Consider increasing server disk storage." );
         return '';
     }
     usort( $zips, fn( $a, $b ) => filemtime( $a ) - filemtime( $b ) );
@@ -5712,7 +7439,7 @@ function cs_free_local_space( string $context, string $exclude_file = '' ): stri
         if ( $exclude_file && basename( $zip ) === $exclude_file ) continue;
         $name = basename( $zip );
         if ( wp_delete_file( $zip ) ) {
-            cs_log( "[CloudScale Backup] Space error during {$context} sync: deleted oldest local backup {$name} to free disk space. Consider increasing server storage or reducing retention count." );
+            csbr_log( "[CloudScale Backup & Restore] Space error during {$context} sync: deleted oldest local backup {$name} to free disk space. Consider increasing server storage or reducing retention count." );
             return $name;
         }
     }
@@ -5729,8 +7456,8 @@ function cs_free_local_space( string $context, string $exclude_file = '' ): stri
  * @since 1.0.0
  * @return void
  */
-function cs_verify_nonce(): void {
-    if ( ! check_ajax_referer( 'cs_nonce', 'nonce', false ) ) {
+function csbr_verify_nonce(): void {
+    if ( ! check_ajax_referer( 'csbr_nonce', 'nonce', false ) ) {
         wp_send_json_error( 'Security check failed.' );
     }
 }

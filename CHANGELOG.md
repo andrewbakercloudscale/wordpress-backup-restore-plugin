@@ -3,6 +3,32 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.225] - 2026-04-02
+
+### Added
+- Post restore: multi-select — check any number of posts in the list and restore them all in one operation; progress shows "Restoring post #X (N of M)"
+- Post restore: date range filter (From / To date pickers) above the post list; works alongside the existing title/ID search
+- Post restore: "All" / "None" quick-select links for visible rows
+- Post restore: post date now shown prominently in each row label
+
+### Changed
+- Staged upload files are no longer deleted after a restore completes; the file remains available for the full 2-hour upload window so the same backup can be used for multiple restore operations
+- Staged files are now deleted only when the user clicks the trash icon or when the transient expires
+- `csbr_cleanup_staged()` DocBlock updated to reflect new lifecycle
+- `csbr_delete_staged` handler: replaced `@unlink()` with `wp_delete_file()` for consistency
+- Three inline-style ternary echoes suppressed with `phpcs:ignore EscapeOutput.OutputNotEscaped` (hardcoded string literals, not user input)
+
+### Fixed
+- Delete staged button is now always visible; it is disabled (not hidden) when no upload is staged — hiding controls is bad UX
+- NULL posts in "Single post or page" list: fixed by selecting the shortest table name ending in `posts` — `wp_aioseo_posts` (which also ends in `posts`) appeared before `wp_posts` in the dump and was incorrectly selected
+- PHP 30-second timeout on large backup files: added `set_time_limit(0)` to `csbr_list_backup_posts` and `csbr_restore_post` handlers
+- CREATE TABLE column fallback: replaced fragile `strpos($sql, "\n) ENGINE")` pattern with a balanced-parenthesis scanner; robust across all MySQL/MariaDB ENGINE/CHARSET variants
+
+## [3.2.189] - 2026-03-29
+
+### Fixed
+- WordPress.org review compliance: plugin renamed, curl replaced with WP HTTP API, external services documented
+
 ## [3.2.187] - 2026-03-29
 
 ### Changed

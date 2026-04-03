@@ -4,7 +4,7 @@ Tags: backup, restore, database, scheduled backup, maintenance mode
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 3.2.189
+Stable tag: 3.2.251
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -140,7 +140,7 @@ The plugin removes maintenance mode even when a restore fails, so your site will
 
 Yes. Use WP-CLI to trigger a backup from the command line:
 
-`wp eval 'cs_create_backup(true, true, true, true); cs_enforce_retention();' --path=/path/to/wordpress`
+`wp eval 'csbr_create_backup(true, true, true, true); csbr_enforce_retention();' --path=/path/to/wordpress`
 
 Adjust the four boolean arguments (`$include_db`, `$include_media`, `$include_plugins`, `$include_themes`) as needed.
 
@@ -165,7 +165,7 @@ Yes. Run a full backup on the old site, install WordPress on the new host, insta
 
 == Changelog ==
 
-= 3.2.189 =
+= 3.2.251 =
 * FIX: PCP compliance — `cs_admin_page()` now independently checks `current_user_can('manage_options')`
 * FIX: PCP compliance — `wp_unslash()` added to `$_POST['cs_action']` and `$_POST['schedule_enabled']`; `phpcs:ignore` annotations added
 * FIX: PCP compliance — `data-free-bytes` attribute annotated with `phpcs:ignore EscapeOutput.OutputNotEscaped`
@@ -233,18 +233,50 @@ Initial release.
 
 This plugin optionally connects to third-party services when those features are configured by the site administrator. No data is sent to any external service unless the administrator has explicitly enabled the relevant integration.
 
-**Amazon S3** (optional cloud backup)
-When S3 settings are configured, backup zip files are uploaded to the administrator's own S3 bucket after each backup run. The data transmitted is the backup zip file itself (database, media, plugins, and/or themes as selected).
-Service operated by Amazon Web Services: https://aws.amazon.com/service-terms/ — https://aws.amazon.com/privacy/
+= Amazon S3 (optional cloud backup) =
+When S3 settings are configured, the plugin uploads backup zip files to the
+administrator's own S3 bucket after each backup run. Only the backup zip file
+is transmitted (database, media, plugins, and/or themes as selected).
+Terms of Service: https://aws.amazon.com/service-terms/
+Privacy Policy: https://aws.amazon.com/privacy/
 
-**Google Drive via rclone** (optional cloud backup)
-When Google Drive settings are configured, backup zip files are transferred to the administrator's own Google Drive using the rclone tool installed on the server.
-Service operated by Google LLC: https://policies.google.com/terms — https://policies.google.com/privacy
+= Google Drive via rclone (optional cloud backup) =
+When Google Drive settings are configured, the plugin transfers backup zip files
+to the administrator's own Google Drive using the rclone tool installed on the
+server. Only the backup zip file is transmitted.
+Terms of Service: https://policies.google.com/terms
+Privacy Policy: https://policies.google.com/privacy
 
-**AWS EC2 Instance Metadata Service** (AMI snapshot feature only)
-When the AMI snapshot feature is used, the plugin reads instance metadata (instance ID and region) from the local EC2 Instance Metadata Service at `http://169.254.169.254`. This address is only reachable from within an EC2 instance. AMI creation requests are then issued via the AWS CLI installed on the server.
-Service operated by Amazon Web Services: https://aws.amazon.com/service-terms/ — https://aws.amazon.com/privacy/
+= Dropbox via rclone (optional cloud backup) =
+When Dropbox settings are configured, the plugin transfers backup zip files to
+the administrator's own Dropbox account using the rclone tool installed on the
+server. Only the backup zip file is transmitted. No data is sent unless the
+administrator has explicitly configured a Dropbox remote in rclone.
+Terms of Service: https://www.dropbox.com/terms
+Privacy Policy: https://www.dropbox.com/privacy
+
+= Microsoft OneDrive via rclone (optional cloud backup) =
+When OneDrive settings are configured, the plugin transfers backup zip files to
+the administrator's own Microsoft OneDrive using the rclone tool installed on
+the server. Only the backup zip file is transmitted. No data is sent unless the
+administrator has explicitly configured an OneDrive remote in rclone.
+Terms of Service: https://www.microsoft.com/en-us/servicesagreement/
+Privacy Policy: https://privacy.microsoft.com/en-us/privacystatement
+
+= AWS EC2 Instance Metadata Service (AMI snapshot feature only) =
+When the AMI snapshot feature is used, the plugin reads instance metadata
+(instance ID and region) from the local EC2 Instance Metadata Service at
+http://169.254.169.254. This address is only reachable from within an EC2
+instance and no data leaves the server at this step. AMI creation requests are
+then issued via the AWS CLI installed on the server.
+
+The plugin's AMI setup guide displays download URLs for the AWS CLI installer
+(https://awscli.amazonaws.com/). These URLs are shown as copy-paste
+installation commands for the site administrator to run manually. The plugin
+itself does not download or contact awscli.amazonaws.com at any time.
+Terms of Service: https://aws.amazon.com/service-terms/
+Privacy Policy: https://aws.amazon.com/privacy/
 
 == Privacy Policy ==
 
-CloudScale Backup & Restore does not collect, transmit, or store any personal data. All backups are stored locally in `/wp-content/cloudscale-backups/`. No telemetry or analytics are sent by this plugin. Optional cloud backup features (S3, Google Drive, AMI snapshots) transmit data only when explicitly configured by the site administrator — see the External services section above.
+CloudScale Backup & Restore does not collect, transmit, or store any personal data. All backups are stored locally in `/wp-content/cloudscale-backups/`. No telemetry or analytics are sent by this plugin. Optional cloud backup features (S3, Google Drive, Dropbox, OneDrive, AMI snapshots) transmit data only when explicitly configured by the site administrator — see the External services section above.

@@ -30,6 +30,76 @@ jQuery(function ($) {
         applyScheduleState($(this).is(':checked'));
     });
 
+    // Notify toggle
+    $('#cs-notify-enabled').on('change', function () {
+        $('#cs-notify-controls').toggle($(this).is(':checked'));
+    });
+
+    // Size email + password inputs to fit the email address text + 20px buffer
+    (function () {
+        var $email = $('#cs-notify-email');
+        if (!$email.length) return;
+        var text = $email.val() || $email.attr('placeholder') || '';
+        if (!text) return;
+        var $ruler = $('<span>').css({
+            position: 'absolute', visibility: 'hidden', whiteSpace: 'nowrap',
+            font: $email.css('font'), letterSpacing: $email.css('letter-spacing'),
+            padding: $email.css('padding')
+        }).text(text).appendTo('body');
+        var w = Math.ceil($ruler.width()) + 20;
+        $ruler.remove();
+        $email.css('width', w + 'px');
+        $('#cs-encrypt-password').css('width', w + 'px');
+    }());
+
+    // Send test email
+    $('#cs-notify-test-btn').on('click', function () {
+        var $btn  = $(this);
+        var $msg  = $('#cs-notify-test-msg');
+        var $warn = $('#cs-notify-port-warn');
+        var email = $('#cs-notify-email').val().trim();
+        $btn.prop('disabled', true);
+        $msg.text('Checking ports and sending\u2026').css('color', '#666');
+        $warn.hide().text('');
+        $.ajax({
+            url: CSBR.ajax_url, method: 'POST',
+            data: { action: 'csbr_send_test_email', nonce: CSBR.nonce, email: email },
+            success: function (res) {
+                var d = res.data || {};
+                if (res.success) {
+                    $msg.text('\u2713 ' + (d.msg || 'Sent.')).css('color', '#2e7d32');
+                } else {
+                    $msg.text('\u2717 ' + (d.msg || 'Failed.')).css('color', '#c62828');
+                }
+                if (d.port_warning) {
+                    $warn.text('\u26a0\ufe0f ' + d.port_warning).show();
+                }
+            },
+            error: function () {
+                $msg.text('\u2717 Request error.').css('color', '#c62828');
+            },
+            complete: function () {
+                $btn.prop('disabled', false);
+            }
+        });
+    });
+
+    // Encryption toggle
+    $('#cs-encrypt-enabled').on('change', function () {
+        $('#cs-encrypt-controls').toggle($(this).is(':checked'));
+        if (!$(this).is(':checked')) {
+            $('#cs-encrypt-password').val('');
+        }
+    });
+
+    // Show/hide password
+    $('#cs-encrypt-toggle').on('click', function () {
+        var $input = $('#cs-encrypt-password');
+        var showing = $input.attr('type') === 'text';
+        $input.attr('type', showing ? 'password' : 'text');
+        $(this).text(showing ? 'Show' : 'Hide');
+    });
+
     // Cloud schedule enable/disable
     function applyCloudScheduleState(on) {
         $('#cs-cloud-schedule-controls').prop('disabled', !on);
@@ -60,7 +130,7 @@ jQuery(function ($) {
     // ================================================================
 
     (function () {
-        var STORAGE_KEY = 'cs_active_tab';
+        var STORAGE_KEY = 'csbr_active_tab';
         var cloudAutoRefreshDone = false;
         function switchTab(tab) {
             $('.cs-tab').removeClass('cs-tab--active');
@@ -81,8 +151,8 @@ jQuery(function ($) {
     // ================================================================
 
     (function () {
-        var HIST_KEY = 'cs_history_source';
-        var providers = ['s3', 'ami', 'gdrive', 'dropbox'];
+        var HIST_KEY = 'csbr_history_source';
+        var providers = ['s3', 'ami', 'gdrive', 'dropbox', 'onedrive'];
         var histAutoRefreshed = {};
 
         function switchHistoryPane(src) {
@@ -108,6 +178,9 @@ jQuery(function ($) {
                     }
                     if (src === 'dropbox' && document.querySelectorAll('#cs-db-tbody tr').length === 0) {
                         if (window.csDropboxHistoryRefresh) csDropboxHistoryRefresh();
+                    }
+                    if (src === 'onedrive' && document.querySelectorAll('#cs-od-tbody tr').length === 0) {
+                        if (window.csOneDriveHistoryRefresh) csOneDriveHistoryRefresh();
                     }
                 }, 300);
             }
@@ -137,7 +210,7 @@ jQuery(function ($) {
     }
 
     function updateBackupTotal() {
-        var sizes = window.CS_BACKUP_SIZES || {};
+        var sizes = window.CSBR_SIZES || {};
 
         // Sum raw uncompressed filesystem sizes
         var total = 0;
@@ -210,8 +283,8 @@ jQuery(function ($) {
 
     function csCollectBackupData() {
         return {
-            action:          'cs_start_backup',
-            nonce:           CS.nonce,
+            action:          'csbr_start_backup',
+            nonce:           CSBR.nonce,
             include_db:        $('#cs-include-db').is(':checked')        ? 1 : 0,
             include_media:     $('#cs-include-media').is(':checked')     ? 1 : 0,
             include_plugins:   $('#cs-include-plugins').is(':checked')   ? 1 : 0,
@@ -231,7 +304,7 @@ jQuery(function ($) {
         $prog.show();
         progress('cs-backup-fill', 'cs-backup-msg', 'Starting backup job\u2026', 'running');
         $.ajax({
-            url: CS.ajax_url, method: 'POST', timeout: 15000, data: csCollectBackupData(),
+            url: CSBR.ajax_url, method: 'POST', timeout: 15000, data: csCollectBackupData(),
             success: function (res) {
                 if (res.success) {
                     csStartBackupPoll(res.data.job_id, $btn, $prog);
@@ -284,8 +357,8 @@ jQuery(function ($) {
         $btn.prop('disabled', true).text('Checking cloud storage\u2026');
 
         $.ajax({
-            url: CS.ajax_url, method: 'POST', timeout: 30000,
-            data: { action: 'cs_cloud_space_check', nonce: CS.nonce },
+            url: CSBR.ajax_url, method: 'POST', timeout: 30000,
+            data: { action: 'csbr_cloud_space_check', nonce: CSBR.nonce },
             success: function (res) {
                 if (!res.success || $.isEmptyObject(res.data)) {
                     csDoStartBackup($btn);
@@ -325,8 +398,8 @@ jQuery(function ($) {
         $btn.prop('disabled', true);
         $status.text('Freeing space\u2026');
         $.ajax({
-            url: CS.ajax_url, method: 'POST', timeout: 120000,
-            data: { action: 'cs_delete_oldest_cloud', nonce: CS.nonce, provider: provider, need_mb: estMb },
+            url: CSBR.ajax_url, method: 'POST', timeout: 120000,
+            data: { action: 'csbr_delete_oldest_cloud', nonce: CSBR.nonce, provider: provider, need_mb: estMb },
             success: function (res) {
                 if (res.success) {
                     var d = res.data;
@@ -361,8 +434,8 @@ jQuery(function ($) {
             progress('cs-backup-fill', 'cs-backup-msg', 'Backup running\u2026 (' + elapsed + 's)', 'running');
 
             $.ajax({
-                url: CS.ajax_url, method: 'POST', timeout: 15000,
-                data: { action: 'cs_backup_status', nonce: CS.nonce, job_id: jobId },
+                url: CSBR.ajax_url, method: 'POST', timeout: 15000,
+                data: { action: 'csbr_backup_status', nonce: CSBR.nonce, job_id: jobId },
                 success: function (res) {
                     if (!res.success) {
                         clearInterval(timer);
@@ -400,8 +473,8 @@ jQuery(function ($) {
     window.csCheckSpaceThenSync = function (provider, startAction, msgFn) {
         msgFn('Checking storage space\u2026', true);
         $.ajax({
-            url: CS.ajax_url, method: 'POST', timeout: 30000,
-            data: { action: 'cs_cloud_space_check', nonce: CS.nonce, provider: provider },
+            url: CSBR.ajax_url, method: 'POST', timeout: 30000,
+            data: { action: 'csbr_cloud_space_check', nonce: CSBR.nonce, provider: provider },
             success: function (res) {
                 var info = res.success && res.data && res.data[provider] ? res.data[provider] : null;
                 if (!info || info.ok) {
@@ -420,8 +493,8 @@ jQuery(function ($) {
                 $('#cs-sync-del-' + provider).one('click', function () {
                     msgFn('Freeing space on ' + label + '\u2026', true);
                     $.ajax({
-                        url: CS.ajax_url, method: 'POST', timeout: 120000,
-                        data: { action: 'cs_delete_oldest_cloud', nonce: CS.nonce, provider: provider, need_mb: info.est_mb },
+                        url: CSBR.ajax_url, method: 'POST', timeout: 120000,
+                        data: { action: 'csbr_delete_oldest_cloud', nonce: CSBR.nonce, provider: provider, need_mb: info.est_mb },
                         success: function (r) {
                             if (r.success) {
                                 var n = r.data.count > 1 ? r.data.count + ' backups deleted' : 'Deleted ' + (r.data.deleted || 'backup');
@@ -476,8 +549,8 @@ jQuery(function ($) {
         });
         // Single AJAX covers all pending jobs
         $.ajax({
-            url: CS.ajax_url, method: 'POST', timeout: 15000,
-            data: { action: 'cs_batch_job_status', nonce: CS.nonce, job_ids: ids.join(',') },
+            url: CSBR.ajax_url, method: 'POST', timeout: 15000,
+            data: { action: 'csbr_batch_job_status', nonce: CSBR.nonce, job_ids: ids.join(',') },
             success: function (res) {
                 _csConsecPollErrors = 0;
                 if (!res.success) return;
@@ -515,8 +588,8 @@ jQuery(function ($) {
     window.csStartSyncPoll = function (startAction, msgFn) {
         msgFn('Starting sync\u2026', true);
         $.ajax({
-            url: CS.ajax_url, method: 'POST', timeout: 15000,
-            data: { action: startAction, nonce: CS.nonce },
+            url: CSBR.ajax_url, method: 'POST', timeout: 15000,
+            data: { action: startAction, nonce: CSBR.nonce },
             success: function (res) {
                 if (!res.success) { msgFn('\u2717 ' + (res.data || 'Failed to start'), false); return; }
                 msgFn('Syncing\u2026 (0s)', true);
@@ -552,7 +625,7 @@ jQuery(function ($) {
         $btn.prop('disabled', true);
         $msg.text('Saving…').css('color', '#888').show();
 
-        $.post(CS.ajax_url, { action: 'cs_save_manual_defaults', nonce: CS.nonce, components: components },
+        $.post(CSBR.ajax_url, { action: 'csbr_save_manual_defaults', nonce: CSBR.nonce, components: components },
             function (res) {
                 if (res.success) {
                     $msg.text('✓ Saved').css('color', '#2e7d32');
@@ -583,7 +656,7 @@ jQuery(function ($) {
             '<p>This action <strong>cannot be undone</strong>.</p>',
             function () {
                 $btn.prop('disabled', true).removeClass('cs-icon-btn--red').addClass('cs-icon-btn--orange');
-                $.post(CS.ajax_url, { action: 'cs_delete_backup', nonce: CS.nonce, file: file },
+                $.post(CSBR.ajax_url, { action: 'csbr_delete_backup', nonce: CSBR.nonce, file: file },
                     function (res) {
                         if (res.success) {
                             $row.fadeOut(250, function () { $(this).remove(); });
@@ -598,88 +671,497 @@ jQuery(function ($) {
     });
 
     // ================================================================
-    // Restore Modal — open
+    // Unified Restore Modal
     // ================================================================
 
-    var restoreFile = '';
+    // restoreSource tracks what we're restoring from
+    // { type: 'backup', file, date } — from history row
+    // { type: 'staged', staged_key, filename } — from uploaded file
+    var restoreSource = null;
 
-    $(document).on('click', '.cs-restore-btn', function () {
-        restoreFile = $(this).data('file');
-        var date    = $(this).data('date');
+    function csOpenRestoreModal() {
+        // Reset radio to full restore
+        $('#cs-mode-full').prop('checked', true);
+        $('#cs-mode-selective').prop('checked', false);
 
-        $('#cs-modal-filename').text(restoreFile);
-        $('#cs-modal-date').text(date);
-        $('#cs-confirm-snapshot').prop('checked', false);
-        $('#cs-modal-confirm').prop('disabled', true);
+        // Reset warnings
+        $('#cs-modal-warning-full').show();
+        $('#cs-modal-warning-selective').hide();
+
+        // Reset confirm label for full restore
+        $('#cs-confirm-label').text('I have taken a server snapshot and understand this will overwrite the live database.');
+
+        // Reset table section
+        $('#cs-modal-table-section').hide();
+        $('#cs-modal-table-loading').show();
+        $('#cs-modal-table-wrap').hide();
+        $('#cs-modal-table-error').hide().text('');
+        $('#cs-modal-table-list').empty();
+
+        // Reset post section
+        selectedPostIds = [];
+        $('#cs-modal-post-section').hide();
+        $('#cs-modal-post-loading').show();
+        $('#cs-modal-post-wrap').hide();
+        $('#cs-modal-post-search').val('');
+        $('#cs-modal-post-list').empty().data('all-posts', null);
+        $('#cs-modal-post-selected').hide().text('');
+        $('#cs-modal-post-error').hide().text('');
+
+        // Reset confirm checkbox and button
+        $('#cs-confirm-snapshot').prop('checked', false).prop('disabled', false);
+        $('#cs-modal-confirm').prop('disabled', true).text('Restore Now');
+        $('#cs-modal-cancel').prop('disabled', false).text('Cancel');
+
+        // Reset progress
         $('#cs-modal-progress').hide();
-        progress('cs-modal-fill', 'cs-modal-progress-msg', 'Enabling maintenance mode...', 'running');
+        $('#cs-restore-footer').show();
+
+        // Show filename / date
+        if (restoreSource.type === 'staged') {
+            $('#cs-modal-filename').text(restoreSource.filename);
+            $('#cs-modal-date-wrap').hide();
+        } else {
+            $('#cs-modal-filename').text(restoreSource.file);
+            $('#cs-modal-date').text(restoreSource.date || '');
+            $('#cs-modal-date-wrap').toggle(!!restoreSource.date);
+        }
+
         $('#cs-modal-overlay, #cs-restore-modal').show();
+    }
+
+    // Open from history row
+    $(document).on('click', '.cs-restore-btn', function () {
+        restoreSource = { type: 'backup', file: $(this).data('file'), date: $(this).data('date') };
+        csOpenRestoreModal();
     });
 
+    // Track selected post IDs in post-restore mode (multi-select)
+    var selectedPostIds = [];
+
+    function csSourceData() {
+        var d = { nonce: CSBR.nonce };
+        if (restoreSource.type === 'staged') { d.staged_key = restoreSource.staged_key; }
+        else { d.file = restoreSource.file; }
+        return d;
+    }
+
+    // Radio: swap warning/sections for each mode
+    $('input[name="cs-restore-mode"]').on('change', function () {
+        var mode = $(this).val();
+
+        // Reset shared state
+        $('#cs-confirm-snapshot').prop('checked', false);
+        $('#cs-modal-confirm').prop('disabled', true);
+
+        if (mode === 'selective') {
+            $('#cs-modal-warning-full').hide();
+            $('#cs-modal-warning-selective').show();
+            $('#cs-modal-table-section').show();
+            $('#cs-modal-post-section').hide();
+            $('#cs-confirm-label').text('I understand only the selected tables will be overwritten.');
+            selectedPostIds = [];
+
+            if ($('#cs-modal-table-list').children().length === 0) {
+                $('#cs-modal-table-loading').show();
+                $('#cs-modal-table-wrap').hide();
+                $('#cs-modal-table-error').hide().text('');
+
+                $.ajax({
+                    url: CSBR.ajax_url, method: 'POST',
+                    data: $.extend({ action: 'csbr_list_backup_tables' }, csSourceData()),
+                    success: function (res) {
+                        $('#cs-modal-table-loading').hide();
+                        if (!res.success) { $('#cs-modal-table-error').text(res.data || 'Could not load table list.').show(); return; }
+                        var $list = $('#cs-modal-table-list').empty();
+                        (res.data.tables || []).forEach(function (tbl) {
+                            $list.append(
+                                $('<label>').css({ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.85rem', cursor: 'pointer' }).append(
+                                    $('<input>').attr({ type: 'checkbox', name: 'cs_restore_tables[]', value: tbl }).css('flex-shrink', '0'),
+                                    $('<span>').text(tbl)
+                                )
+                            );
+                        });
+                        $('#cs-modal-table-wrap').show();
+                    },
+                    error: function () {
+                        $('#cs-modal-table-loading').hide();
+                        $('#cs-modal-table-error').text('Network error loading table list.').show();
+                    }
+                });
+            }
+
+        } else if (mode === 'post') {
+            $('#cs-modal-warning-full').hide();
+            $('#cs-modal-warning-selective').hide();
+            $('#cs-modal-table-section').hide();
+            $('#cs-modal-post-section').show();
+            $('#cs-confirm-label').text('I understand this will overwrite the selected post(s) and their metadata.');
+            selectedPostIds = [];
+
+            if ($('#cs-modal-post-list').children().length === 0) {
+                $('#cs-modal-post-loading').show();
+                $('#cs-modal-post-wrap').hide();
+                $('#cs-modal-post-selected').hide();
+                $('#cs-modal-post-error').hide().text('');
+
+                $.ajax({
+                    url: CSBR.ajax_url, method: 'POST',
+                    data: $.extend({ action: 'csbr_list_backup_posts' }, csSourceData()),
+                    success: function (res) {
+                        $('#cs-modal-post-loading').hide();
+                        if (!res.success) { $('#cs-modal-post-error').text(res.data || 'Could not load post list.').show(); return; }
+                        var posts = res.data.posts || [];
+                        csRenderPostList(posts);
+                        $('#cs-modal-post-list').data('all-posts', posts);
+                        $('#cs-modal-post-wrap').show();
+                    },
+                    error: function () {
+                        $('#cs-modal-post-loading').hide();
+                        $('#cs-modal-post-error').text('Network error loading post list.').show();
+                    }
+                });
+            } else {
+                $('#cs-modal-post-wrap').show();
+            }
+
+        } else {
+            // Full
+            $('#cs-modal-warning-full').show();
+            $('#cs-modal-warning-selective').hide();
+            $('#cs-modal-table-section').hide();
+            $('#cs-modal-post-section').hide();
+            $('#cs-confirm-label').text('I have taken a server snapshot and understand this will overwrite the live database.');
+            selectedPostIds = [];
+        }
+    });
+
+    function csRenderPostList(posts) {
+        var $list = $('#cs-modal-post-list').empty();
+        if (!posts.length) {
+            $list.append($('<p>').css({ padding: '8px 12px', color: '#666', fontSize: '0.85rem', margin: 0 }).text('No posts found in this backup.'));
+            return;
+        }
+        posts.forEach(function (p) {
+            var checked = selectedPostIds.indexOf(p.id) !== -1;
+            var label = '#' + p.id + ' \u2014 ' + p.title + ' \u2014 ' + p.date + ' (' + p.type + ', ' + p.status + ')';
+            var $cb = $('<input>').attr({ type: 'checkbox', 'aria-label': label }).addClass('cs-post-check')
+                .prop('checked', checked)
+                .css({ marginRight: '7px', cursor: 'pointer', flexShrink: '0' });
+            $list.append(
+                $('<div>').addClass('cs-post-row').css({
+                    display: 'flex', alignItems: 'flex-start',
+                    padding: '6px 10px', cursor: 'pointer', fontSize: '0.84rem',
+                    borderBottom: '1px solid #eee', lineHeight: '1.4',
+                    background: checked ? '#e3f2fd' : '',
+                    userSelect: 'none',
+                }).append($cb, $('<span>').text(label)).data('post', p)
+            );
+        });
+    }
+
+    // Combined post list filter (search + date range)
+    function csApplyPostFilter() {
+        var q     = $('#cs-modal-post-search').val().toLowerCase();
+        var from  = $('#cs-post-date-from').val();  // YYYY-MM-DD or ''
+        var to    = $('#cs-post-date-to').val();
+        var all   = $('#cs-modal-post-list').data('all-posts') || [];
+        var filtered = all.filter(function (p) {
+            if (q && String(p.id).indexOf(q) === -1 && p.title.toLowerCase().indexOf(q) === -1) return false;
+            if (from && p.date < from) return false;
+            if (to   && p.date > to)   return false;
+            return true;
+        });
+        csRenderPostList(filtered);
+    }
+
+    function csUpdatePostBadge() {
+        var n = selectedPostIds.length;
+        if (n === 0) {
+            $('#cs-modal-post-selected').hide().empty();
+        } else {
+            $('#cs-modal-post-selected').html(
+                '<strong>' + n + ' post' + (n === 1 ? '' : 's') + ' selected</strong>'
+            ).show();
+        }
+        $('#cs-confirm-snapshot').trigger('change');
+    }
+
+    $('#cs-modal-post-search').on('input', csApplyPostFilter);
+    $('#cs-post-date-from, #cs-post-date-to').on('change', csApplyPostFilter);
+
+    $('#cs-post-date-clear').on('click', function (e) {
+        e.preventDefault();
+        $('#cs-post-date-from, #cs-post-date-to').val('');
+        csApplyPostFilter();
+    });
+
+    // Post list row click — toggle selection
+    $(document).on('click', '.cs-post-row', function (e) {
+        // Clicking the checkbox directly is also handled here via bubbling
+        var p   = $(this).data('post');
+        var idx = selectedPostIds.indexOf(p.id);
+        if (idx === -1) {
+            selectedPostIds.push(p.id);
+            $(this).css('background', '#e3f2fd').find('.cs-post-check').prop('checked', true);
+        } else {
+            selectedPostIds.splice(idx, 1);
+            $(this).css('background', '').find('.cs-post-check').prop('checked', false);
+        }
+        csUpdatePostBadge();
+    });
+
+    // Select all / none (visible rows only)
+    $('#cs-post-sel-all').on('click', function (e) {
+        e.preventDefault();
+        $('.cs-post-row').each(function () {
+            var p = $(this).data('post');
+            if (p && selectedPostIds.indexOf(p.id) === -1) selectedPostIds.push(p.id);
+            $(this).css('background', '#e3f2fd').find('.cs-post-check').prop('checked', true);
+        });
+        csUpdatePostBadge();
+    });
+
+    $('#cs-post-sel-none').on('click', function (e) {
+        e.preventDefault();
+        $('.cs-post-row').each(function () {
+            var p = $(this).data('post');
+            if (p) {
+                var idx = selectedPostIds.indexOf(p.id);
+                if (idx !== -1) selectedPostIds.splice(idx, 1);
+            }
+            $(this).css('background', '').find('.cs-post-check').prop('checked', false);
+        });
+        csUpdatePostBadge();
+    });
+
+    // Confirm checkbox: enable Restore Now based on mode
     $('#cs-confirm-snapshot').on('change', function () {
-        $('#cs-modal-confirm').prop('disabled', !this.checked);
+        var mode = $('input[name="cs-restore-mode"]:checked').val();
+        var checked = this.checked;
+        if (mode === 'selective') {
+            var hasSelection = $('#cs-modal-table-list input[type=checkbox]:checked').length > 0;
+            $('#cs-modal-confirm').prop('disabled', !(checked && hasSelection));
+        } else if (mode === 'post') {
+            $('#cs-modal-confirm').prop('disabled', !(checked && selectedPostIds.length > 0));
+        } else {
+            $('#cs-modal-confirm').prop('disabled', !checked);
+        }
+    });
+
+    // Table checkbox change: re-evaluate confirm button state (selective mode)
+    $(document).on('change', '#cs-modal-table-list input[type=checkbox]', function () {
+        var hasSelection = $('#cs-modal-table-list input[type=checkbox]:checked').length > 0;
+        var confirmed    = $('#cs-confirm-snapshot').is(':checked');
+        $('#cs-modal-confirm').prop('disabled', !(confirmed && hasSelection));
+    });
+
+    // Select all / clear all
+    $('#cs-modal-sel-all').on('click', function (e) {
+        e.preventDefault();
+        $('#cs-modal-table-list input[type=checkbox]').prop('checked', true);
+        $('#cs-confirm-snapshot').trigger('change');
+    });
+    $('#cs-modal-sel-none').on('click', function (e) {
+        e.preventDefault();
+        $('#cs-modal-table-list input[type=checkbox]').prop('checked', false);
+        $('#cs-confirm-snapshot').trigger('change');
     });
 
     $('#cs-modal-cancel').on('click', function () {
-        $('#cs-modal-overlay, #cs-restore-modal').hide();
-        restoreFile = '';
+        if (!$('#cs-modal-progress').is(':visible')) {
+            $('#cs-modal-overlay, #cs-restore-modal').hide();
+            restoreSource = null;
+        }
     });
 
     $('#cs-modal-overlay').on('click', function () {
         if (!$('#cs-modal-progress').is(':visible')) {
             $('#cs-modal-overlay, #cs-restore-modal').hide();
-            restoreFile = '';
+            restoreSource = null;
         }
     });
 
-    // ================================================================
-    // Restore Modal — confirm and execute
-    // ================================================================
-
+    // Confirm: route to full or selective
     $('#cs-modal-confirm').on('click', function () {
+        var mode    = $('input[name="cs-restore-mode"]:checked').val();
         var $confirm = $(this);
         var $cancel  = $('#cs-modal-cancel');
-        var $prog    = $('#cs-modal-progress');
 
         $confirm.prop('disabled', true).text('Restoring...');
         $cancel.prop('disabled', true);
         $('#cs-confirm-snapshot').prop('disabled', true);
-        $prog.show();
+        $('#cs-restore-footer').show();
+        $('#cs-modal-progress').show();
 
-        progress('cs-modal-fill', 'cs-modal-progress-msg', 'Step 1/3: Enabling maintenance mode...', 'running');
+        if (mode === 'full') {
+            progress('cs-modal-fill', 'cs-modal-progress-msg', 'Step 1/3: Enabling maintenance mode...', 'running');
+            setTimeout(function () {
+                progress('cs-modal-fill', 'cs-modal-progress-msg', 'Step 2/3: Dropping tables and restoring database — do not close this window...', 'running');
+            }, 1200);
 
-        setTimeout(function () {
-            progress('cs-modal-fill', 'cs-modal-progress-msg', 'Step 2/3: Dropping tables and restoring database — do not close this window...', 'running');
-        }, 1200);
+            var fullData = $.extend({ action: 'csbr_restore_backup' }, csSourceData());
 
-        $.ajax({
-            url:    CS.ajax_url,
-            method: 'POST',
-            timeout: 0,
-            data: { action: 'cs_restore_backup', nonce: CS.nonce, file: restoreFile },
-            success: function (res) {
-                if (res.success) {
-                    progress('cs-modal-fill', 'cs-modal-progress-msg', 'Step 3/3: ✓ ' + res.data, 'done');
-                    setTimeout(function () { location.reload(); }, 1500);
-                } else {
-                    progress('cs-modal-fill', 'cs-modal-progress-msg', '✗ ' + res.data, 'error');
+            $.ajax({
+                url: CSBR.ajax_url, method: 'POST', timeout: 0, data: fullData,
+                success: function (res) {
+                    if (res.success) {
+                        progress('cs-modal-fill', 'cs-modal-progress-msg', 'Step 3/3: ✓ ' + res.data, 'done');
+                        csStagedClear();
+                        setTimeout(function () { location.reload(); }, 1500);
+                    } else {
+                        progress('cs-modal-fill', 'cs-modal-progress-msg', '✗ ' + res.data, 'error');
+                        $cancel.prop('disabled', false).text('Close');
+                    }
+                },
+                error: function (xhr, status) {
+                    progress('cs-modal-fill', 'cs-modal-progress-msg', '✗ Request error: ' + status + '. Check server error log.', 'error');
                     $cancel.prop('disabled', false).text('Close');
                 }
-            },
-            error: function (xhr, status) {
-                progress('cs-modal-fill', 'cs-modal-progress-msg', '✗ Request error: ' + status + '. Check server error log.', 'error');
-                $cancel.prop('disabled', false).text('Close');
+            });
+        } else if (mode === 'selective') {
+            var selected = [];
+            $('#cs-modal-table-list input[type=checkbox]:checked').each(function () {
+                selected.push($(this).val());
+            });
+            if (!selected.length) { return; }
+
+            progress('cs-modal-fill', 'cs-modal-progress-msg', 'Restoring selected tables — do not close this window...', 'running');
+
+            var selData = $.extend({ action: 'csbr_restore_selective' }, csSourceData());
+            selected.forEach(function (tbl, i) { selData['tables[' + i + ']'] = tbl; });
+
+            $.ajax({
+                url: CSBR.ajax_url, method: 'POST', timeout: 0, data: selData,
+                success: function (res) {
+                    if (res.success) {
+                        progress('cs-modal-fill', 'cs-modal-progress-msg', '✓ ' + res.data, 'done');
+                        setTimeout(function () {
+                            $('#cs-modal-overlay, #cs-restore-modal').hide();
+                            csStagedClear();
+                            restoreSource = null;
+                            location.reload();
+                        }, 1800);
+                    } else {
+                        progress('cs-modal-fill', 'cs-modal-progress-msg', '✗ ' + (res.data || 'Restore failed.'), 'error');
+                        $cancel.prop('disabled', false).text('Close');
+                    }
+                },
+                error: function (xhr, status) {
+                    progress('cs-modal-fill', 'cs-modal-progress-msg', '✗ Request error: ' + status + '. Check server error log.', 'error');
+                    $cancel.prop('disabled', false).text('Close');
+                }
+            });
+
+        } else {
+            // Post restore (multi)
+            if (!selectedPostIds.length) { return; }
+
+            var idsQueue = selectedPostIds.slice();
+            var total    = idsQueue.length;
+            var done     = 0;
+            var failed   = [];
+
+            function restoreNextPost() {
+                if (!idsQueue.length) {
+                    if (failed.length) {
+                        progress('cs-modal-fill', 'cs-modal-progress-msg',
+                            '\u2717 ' + failed.length + ' of ' + total + ' post(s) failed: #' + failed.join(', #'), 'error');
+                        $cancel.prop('disabled', false).text('Close');
+                    } else {
+                        progress('cs-modal-fill', 'cs-modal-progress-msg',
+                            '\u2713 ' + total + ' post' + (total === 1 ? '' : 's') + ' restored successfully.', 'done');
+                        setTimeout(function () {
+                            $('#cs-modal-overlay, #cs-restore-modal').hide();
+                            csStagedClear();
+                            restoreSource = null;
+                            location.reload();
+                        }, 1800);
+                    }
+                    return;
+                }
+                var id = idsQueue.shift();
+                done++;
+                progress('cs-modal-fill', 'cs-modal-progress-msg',
+                    'Restoring post #' + id + ' (' + done + ' of ' + total + ') \u2014 do not close this window\u2026', 'running');
+                $.ajax({
+                    url: CSBR.ajax_url, method: 'POST', timeout: 0,
+                    data: $.extend({ action: 'csbr_restore_post', post_id: id }, csSourceData()),
+                    success: function (res) {
+                        if (!res.success) failed.push(id);
+                        restoreNextPost();
+                    },
+                    error: function () {
+                        failed.push(id);
+                        restoreNextPost();
+                    }
+                });
             }
-        });
+            restoreNextPost();
+        }
     });
 
     // ================================================================
-    // Restore from Upload
+    // Restore from Upload — stage then open unified modal
     // ================================================================
+
+    var STAGED_LS_KEY = 'csbr_staged_upload';
+    var STAGED_TTL_MS = 29 * 60 * 1000; // 29 min (server transient is 30 min)
+
+    function csStagedSave(source) {
+        try {
+            localStorage.setItem(STAGED_LS_KEY, JSON.stringify({ source: source, ts: Date.now() }));
+        } catch (e) {}
+    }
+
+    function csStagedClear() {
+        try { localStorage.removeItem(STAGED_LS_KEY); } catch (e) {}
+    }
+
+    function csStagedSetReady(source) {
+        restoreSource = source;
+        $('#cs-restore-ready-label').text('\u2713 Ready \u2014 ' + source.filename).css('color', '#2e7d32');
+        $('#cs-restore-open-modal-btn').prop('disabled', false).css({ background: '', borderColor: '', color: '', boxShadow: '', cursor: 'pointer', opacity: '1' });
+        $('#cs-restore-delete-staged-btn').prop('disabled', false).css('opacity', '1');
+    }
+
+    function csStagedReset() {
+        csStagedClear();
+        restoreSource = null;
+        $('#cs-restore-ready-label').text('Upload a file first').css('color', '#999');
+        $('#cs-restore-open-modal-btn').prop('disabled', true).css({ background: '#c5d8f0', borderColor: '#aac4e8', color: '#6a96c8', boxShadow: 'none', cursor: 'not-allowed', opacity: '1' });
+        $('#cs-restore-delete-staged-btn').prop('disabled', true).css('opacity', '0.3');
+    }
+
+    $('#cs-restore-delete-staged-btn').on('click', function () {
+        if (!restoreSource || !restoreSource.staged_key) { csStagedReset(); return; }
+        $.post(CSBR.ajax_url, { action: 'csbr_delete_staged', nonce: CSBR.nonce, staged_key: restoreSource.staged_key });
+        csStagedReset();
+    });
+
+    // Restore staged state from localStorage on page load
+    (function () {
+        try {
+            var stored = localStorage.getItem(STAGED_LS_KEY);
+            if (!stored) return;
+            var data = JSON.parse(stored);
+            if (!data || !data.source || (Date.now() - data.ts) > STAGED_TTL_MS) {
+                csStagedClear();
+                return;
+            }
+            csStagedSetReady(data.source);
+        } catch (e) {}
+    }());
 
     $('#cs-restore-file').on('change', function () {
         var name = this.files && this.files[0] ? this.files[0].name : 'No file chosen';
         $('#cs-restore-file-name').text(name);
+        // Reset ready state whenever a new file is chosen
+        csStagedReset();
+    });
+
+    $('#cs-restore-open-modal-btn').on('click', function () {
+        if (restoreSource) csOpenRestoreModal();
     });
 
     $('#cs-restore-upload-btn').on('click', function () {
@@ -701,43 +1183,118 @@ jQuery(function ($) {
             return;
         }
 
-        csConfirm('&#8629;', 'Restore from Uploaded File',
-            '<span style="color:#e65100;font-weight:600;">This will overwrite the entire database with the uploaded file.</span>',
-            '<p>Restoring <strong>' + csEscHtml(file.name) + '</strong> will:</p>' +
-            '<ul style="margin:6px 0 10px 18px;line-height:1.8;">' +
-            '<li>Put the site into <strong>maintenance mode</strong></li>' +
-            '<li><strong>Drop all current database tables</strong> and replace them with the backup</li>' +
-            '<li>Bring the site back online automatically when complete</li>' +
-            '</ul>' +
-            '<p>Take a server snapshot or AMI first. This action <strong>cannot be undone</strong>.</p>',
-            function () {
-                $btn.prop('disabled', true).text('Restoring...');
-                $prog.show();
-                progress('cs-restore-upload-fill', 'cs-restore-upload-msg', 'Uploading and restoring — do not close this window...', 'running');
+        $btn.prop('disabled', true).text('Uploading...');
+        $prog.show();
 
-                var fd = new FormData();
-                fd.append('action', 'cs_restore_upload');
-                fd.append('nonce',  CS.nonce);
-                fd.append('backup_file', file);
+        var $fill = $('#cs-restore-upload-fill');
+        var $msg  = $('#cs-restore-upload-msg');
+        $fill.removeClass('cs-done cs-error').addClass('cs-upload-real').css('width', '0%');
+        $msg.text('Uploading backup file...');
 
-                $.ajax({
-                    url: CS.ajax_url, method: 'POST', data: fd,
-                    processData: false, contentType: false, timeout: 0,
-                    success: function (res) {
-                        if (res.success) {
-                            progress('cs-restore-upload-fill', 'cs-restore-upload-msg', '&#10003; ' + res.data, 'done');
-                            setTimeout(function () { location.reload(); }, 1500);
-                        } else {
-                            progress('cs-restore-upload-fill', 'cs-restore-upload-msg', '&#10007; ' + res.data, 'error');
-                            $btn.prop('disabled', false).text('↩ Restore from Upload');
-                        }
-                    },
-                    error: function (xhr, status) {
-                        progress('cs-restore-upload-fill', 'cs-restore-upload-msg', '&#10007; Upload failed: ' + status, 'error');
-                        $btn.prop('disabled', false).text('↩ Restore from Upload');
-                    }
-                });
-            }, 'Restore', 'background:#e65100;border-color:#bf360c;color:#fff;');
+        function fmtBytes(b) {
+            if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
+            if (b >= 1048576)    return (b / 1048576).toFixed(1) + ' MB';
+            if (b >= 1024)       return (b / 1024).toFixed(1) + ' KB';
+            return b + ' B';
+        }
+
+        function csLogUploadEvent(msg) {
+            $.post(CSBR.ajax_url, { action: 'csbr_log_event', nonce: CSBR.nonce, message: msg });
+        }
+
+        var CHUNK_SIZE   = 2 * 1024 * 1024; // 2 MB per chunk
+        var totalChunks  = Math.max(1, Math.ceil(file.size / CHUNK_SIZE));
+        var uploadKey    = Math.random().toString(36).substr(2, 10) + Math.random().toString(36).substr(2, 10);
+        var currentChunk = 0;
+        var cancelled    = false;
+        var activeXhr    = null;
+
+        function resetUploadUI() {
+            $btn.prop('disabled', false).text('Upload Backup File');
+            $prog.hide();
+            $fill.removeClass('cs-upload-real').css('width', '30%');
+        }
+
+        $('#cs-restore-upload-cancel').off('click.upload').on('click.upload', function () {
+            cancelled = true;
+            if (activeXhr) activeXhr.abort();
+            csLogUploadEvent('Upload cancelled by user: ' + file.name + ' (after chunk ' + (currentChunk + 1) + ' of ' + totalChunks + ')');
+            resetUploadUI();
+        });
+
+        function sendChunk() {
+            if (cancelled) return;
+
+            var start = currentChunk * CHUNK_SIZE;
+            var end   = Math.min(start + CHUNK_SIZE, file.size);
+            var blob  = file.slice(start, end);
+            var pct   = Math.round((start / file.size) * 100);
+
+            $fill.css('width', pct + '%');
+            $msg.text('Uploading chunk ' + (currentChunk + 1) + ' of ' + totalChunks +
+                      '  \u2014  ' + fmtBytes(start) + ' / ' + fmtBytes(file.size));
+
+            var fd = new FormData();
+            fd.append('action',        'csbr_upload_chunk');
+            fd.append('nonce',         CSBR.nonce);
+            fd.append('upload_key',    uploadKey);
+            fd.append('chunk_index',   currentChunk);
+            fd.append('total_chunks',  totalChunks);
+            fd.append('filename',      file.name);
+            fd.append('chunk_data',    blob);
+
+            var xhr = new XMLHttpRequest();
+            activeXhr = xhr;
+            xhr.open('POST', CSBR.ajax_url, true);
+
+            xhr.upload.onprogress = function (e) {
+                if (!e.lengthComputable) return;
+                var sent = start + e.loaded;
+                var p    = Math.round((sent / file.size) * 100);
+                $fill.css('width', p + '%');
+                $msg.text('Uploading chunk ' + (currentChunk + 1) + ' of ' + totalChunks +
+                          '  \u2014  ' + fmtBytes(sent) + ' / ' + fmtBytes(file.size));
+            };
+
+            xhr.onload = function () {
+                if (cancelled) return;
+                var res;
+                try { res = JSON.parse(xhr.responseText); } catch (e) { res = { success: false, data: 'Server error' }; }
+                if (!res.success) {
+                    var errMsg = res.data || 'Could not upload chunk ' + (currentChunk + 1) + '.';
+                    csLogUploadEvent('Upload error: ' + file.name + ' — ' + errMsg + ' (chunk ' + (currentChunk + 1) + ' of ' + totalChunks + ')');
+                    resetUploadUI();
+                    csAlert('&#9888;', 'Upload Failed', errMsg,
+                        '<p>Please try again or check the server error log.</p>');
+                    return;
+                }
+                currentChunk++;
+                if (res.data && res.data.assembled) {
+                    $fill.css('width', '100%');
+                    $msg.text('Upload complete \u2014 ' + fmtBytes(file.size));
+                    setTimeout(function () {
+                        resetUploadUI();
+                        var src = { type: 'staged', staged_key: res.data.key, filename: res.data.filename };
+                        csStagedSave(src);
+                        csStagedSetReady(src);
+                    }, 300);
+                } else {
+                    sendChunk();
+                }
+            };
+
+            xhr.onerror = function () {
+                if (cancelled) return;
+                csLogUploadEvent('Upload network error: ' + file.name + ' — connection lost on chunk ' + (currentChunk + 1) + ' of ' + totalChunks);
+                resetUploadUI();
+                csAlert('&#9888;', 'Upload Failed', 'Network error on chunk ' + (currentChunk + 1) + '.',
+                    '<p>Please check your connection and try again.</p>');
+            };
+
+            xhr.send(fd);
+        }
+
+        sendChunk();
     });
 
     // ================================================================
@@ -786,7 +1343,7 @@ jQuery(function ($) {
         var $btn = $(this);
         $btn.prop('disabled', true).text('Saving...');
 
-        $.post(CS.ajax_url, { action: 'cs_save_retention', nonce: CS.nonce, retention: $('#cs-retention').val(), backup_prefix: $('#cs-backup-prefix').val() },
+        $.post(CSBR.ajax_url, { action: 'csbr_save_retention', nonce: CSBR.nonce, retention: $('#cs-retention').val(), backup_prefix: $('#cs-backup-prefix').val() },
             function (res) {
                 if (res.success) {
                     $('#cs-retention-saved').show().delay(2500).fadeOut();
@@ -822,8 +1379,8 @@ jQuery(function ($) {
 
     function csLoadLog(since) {
         $.ajax({
-            url: CS.ajax_url, method: 'POST', timeout: 10000,
-            data: { action: 'cs_get_activity_log', nonce: CS.nonce, since: since || 0 },
+            url: CSBR.ajax_url, method: 'POST', timeout: 10000,
+            data: { action: 'csbr_get_activity_log', nonce: CSBR.nonce, since: since || 0 },
             success: function (res) {
                 if (!res.success) return;
                 var entries = res.data.entries || [];
@@ -880,8 +1437,8 @@ jQuery(function ($) {
 
     $('#cs-log-clear').on('click', function () {
         $.ajax({
-            url: CS.ajax_url, method: 'POST', timeout: 10000,
-            data: { action: 'cs_clear_activity_log', nonce: CS.nonce },
+            url: CSBR.ajax_url, method: 'POST', timeout: 10000,
+            data: { action: 'csbr_clear_activity_log', nonce: CSBR.nonce },
             success: function () {
                 _csLogSince = 0;
                 $('#cs-log-entries').empty();
@@ -1068,7 +1625,7 @@ window.csCloudScheduleExplain = function () {
         '<li><strong>AWS EC2 AMI Snapshot</strong> — creates a full disk-level image of this entire server in AWS (OS, files, database). Not dependent on a local zip. Requires AWS CLI and an IAM role (see AMI Explain).</li>' +
         '<li><strong>AWS S3 Remote Backup</strong> — uploads the most recent local backup zip to your S3 bucket. Requires AWS CLI and a configured bucket.</li>' +
         '<li><strong>Google Drive Backup</strong> — uploads the most recent local backup zip to Google Drive via rclone. Requires rclone and a configured Drive remote.</li>' +
-        '<li><strong>Dropbox Backup (Beta)</strong> — uploads the most recent local backup zip to Dropbox via rclone. Requires rclone and a configured Dropbox remote (see Dropbox Explain).</li>' +
+        '<li><strong>Dropbox Backup</strong> — uploads the most recent local backup zip to Dropbox via rclone. Requires rclone and a configured Dropbox remote (see Dropbox Explain).</li>' +
         '</ul>' +
         '<p><strong>Tip:</strong> Set cloud backup days to the same days as your local backup, or the day after. If cloud runs on a day with no new local backup, it will re-upload the previous zip.</p>' +
         '<p><strong>Max Cloud Backups to Keep</strong> — applies to S3, Google Drive, Dropbox, and AMIs independently. Once the limit is reached the oldest is deleted automatically. <strong>Golden Images</strong> are excluded and never auto-deleted.</p>' +
@@ -1112,7 +1669,7 @@ window.csS3Explain = function () {
 };
 
 window.csS3Diagnose = function () {
-    var d = window.CS_S3_DIAG || {};
+    var d = window.CSBR_S3_DIAG || {};
     var ok  = '<span style="color:#2e7d32;font-weight:700;">&#10003;</span>';
     var err = '<span style="color:#c62828;font-weight:700;">&#10007;</span>';
 
@@ -1168,12 +1725,12 @@ var $msg = $('#cs-cloud-schedule-msg');
 
     $msg.text('Saving\u2026').css('color', '#888').show();
     $.ajax({
-        url: CS.ajax_url,
+        url: CSBR.ajax_url,
         method: 'POST',
         traditional: true,
         data: {
-            action:                 'cs_save_cloud_schedule',
-            nonce:                  CS.nonce,
+            action:                 'csbr_save_cloud_schedule',
+            nonce:                  CSBR.nonce,
             cloud_schedule_enabled: $('#cs-cloud-schedule-enabled').is(':checked') ? '1' : '0',
             ami_schedule_days:      daysStr,
             cloud_backup_delay:     delay,
@@ -1279,7 +1836,7 @@ window.csRepairTables = function () {
     var $msg = $('#cs-repair-msg');
     $btn.prop('disabled', true).text('Repairing\u2026');
     $msg.text('').css('color', '');
-    $.post(CS.ajax_url, { action: 'cs_repair_tables', nonce: CS.nonce }, function (res) {
+    $.post(CSBR.ajax_url, { action: 'csbr_repair_tables', nonce: CSBR.nonce }, function (res) {
         if (res.success) {
             $msg.text('\u2713 ' + res.data).css('color', '#2e7d32');
         } else {
@@ -1375,6 +1932,7 @@ window.csCopyBackupPath = function () {
 window.csRestoreExplain = function () {
     csShowExplain('Restore from Uploaded File',
         '<p>Upload a backup zip from this plugin or a raw <code>.sql</code> file from your local machine to restore the database on this server.</p>' +
+        '<p><strong>Chunked upload:</strong> The file is split into <strong>2 MB chunks</strong> and sent one at a time. This bypasses your server\'s PHP <code>upload_max_filesize</code> limit, so even large backups upload reliably. Progress shows the current chunk number, bytes sent, and total file size. You can cancel at any time — partially uploaded chunks are discarded.</p>' +
         '<p><strong>What happens:</strong> The site enters maintenance mode → all existing database tables are dropped → the SQL is imported → maintenance mode is lifted automatically.</p>' +
         '<p><strong>Accepted files:</strong> <code>.zip</code> (must contain a <code>.sql</code> dump inside, as created by this plugin) or a plain <code>.sql</code> file.</p>' +
         '<p><strong>This is irreversible.</strong> Take an AMI snapshot or download a fresh backup before restoring. If the import fails for any reason, maintenance mode is removed and the error is shown — but your previous database content will be gone.</p>'
@@ -1393,10 +1951,10 @@ function csS3Msg(text, ok) {
 }
 
 function csS3Post(action, extra, onDone) {
-    var params = 'action=' + action + '&nonce=' + encodeURIComponent(CS.nonce);
+    var params = 'action=' + action + '&nonce=' + encodeURIComponent(CSBR.nonce);
     if (extra) params += '&' + extra;
     var xhr = new XMLHttpRequest();
-    xhr.open('POST', CS.ajax_url, true);
+    xhr.open('POST', CSBR.ajax_url, true);
     xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
     xhr.onload = function () {
         try { onDone(JSON.parse(xhr.responseText)); }
@@ -1428,7 +1986,7 @@ window.csS3Save = function () {
     var bucket = document.getElementById('cs-s3-bucket').value.trim();
     var prefix = document.getElementById('cs-s3-prefix').value.trim() || 'backups/';
     csS3Msg('Saving...', true);
-    csS3Post('cs_save_s3',
+    csS3Post('csbr_save_s3',
         'bucket=' + encodeURIComponent(bucket) + '&prefix=' + encodeURIComponent(prefix),
         function (res) {
             csS3Msg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success);
@@ -1439,20 +1997,20 @@ window.csS3Save = function () {
 
 window.csS3Test = function () {
     csS3Msg('Testing\u2026', true);
-    csS3Post('cs_test_s3', '', function (res) {
+    csS3Post('csbr_test_s3', '', function (res) {
         csS3Msg((res.success ? '&#10003; ' : '&#10007; ') + res.data, res.success);
         if (res.success) csMarkProviderConfigured('cs-cloud-s3-enabled');
     });
 };
 
 window.csS3SyncLatest = function () {
-    csStartSyncPoll('cs_start_sync_s3', csS3Msg);
+    csStartSyncPoll('csbr_start_sync_s3', csS3Msg);
 };
 
 window.csS3SyncFile = function (btn, filename) {
     btn.disabled = true;
     btn.textContent = '…';
-    csS3Post('cs_s3_sync_file', 'filename=' + encodeURIComponent(filename), function (res) {
+    csS3Post('csbr_s3_sync_file', 'filename=' + encodeURIComponent(filename), function (res) {
         if (res.success) {
             var td = btn.closest ? btn.closest('td') : btn.parentNode;
             if (td) td.innerHTML = '<span style="color:#2e7d32;font-size:16px;">&#10003;</span>';
@@ -1479,10 +2037,10 @@ function csGDriveMsg(text, ok) {
 }
 
 function csGDrivePost(action, extra, onDone) {
-    var params = 'action=' + action + '&nonce=' + encodeURIComponent(CS.nonce);
+    var params = 'action=' + action + '&nonce=' + encodeURIComponent(CSBR.nonce);
     if (extra) params += '&' + extra;
     var xhr = new XMLHttpRequest();
-    xhr.open('POST', CS.ajax_url, true);
+    xhr.open('POST', CSBR.ajax_url, true);
     xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
     xhr.onload = function () {
         try { onDone(JSON.parse(xhr.responseText)); }
@@ -1499,7 +2057,7 @@ window.csGDriveSave = function () {
     var remote = remoteEl.value.trim();
     var path   = pathEl.value.trim() || 'cloudscale-backups/';
     csGDriveMsg('Saving\u2026', true);
-    csGDrivePost('cs_save_gdrive',
+    csGDrivePost('csbr_save_gdrive',
         'remote=' + encodeURIComponent(remote) + '&path=' + encodeURIComponent(path),
         function (res) {
             csGDriveMsg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success);
@@ -1510,14 +2068,14 @@ window.csGDriveSave = function () {
 
 window.csGDriveTest = function () {
     csGDriveMsg('Testing\u2026', true);
-    csGDrivePost('cs_test_gdrive', '', function (res) {
+    csGDrivePost('csbr_test_gdrive', '', function (res) {
         csGDriveMsg((res.success ? '&#10003; ' : '&#10007; ') + res.data, res.success);
         if (res.success) csMarkProviderConfigured('cs-cloud-gdrive-enabled');
     });
 };
 
 window.csGDriveSyncLatest = function () {
-    csCheckSpaceThenSync('gdrive', 'cs_start_sync_gdrive', csGDriveMsg);
+    csCheckSpaceThenSync('gdrive', 'csbr_start_sync_gdrive', csGDriveMsg);
 };
 
 window.csGDriveExplain = function () {
@@ -1625,7 +2183,7 @@ window.csGDriveExplain = function () {
 };
 
 window.csGDriveDiagnose = function () {
-    var d = window.CS_GDRIVE_DIAG || {};
+    var d = window.CSBR_GDRIVE_DIAG || {};
     var ok  = '<span style="color:#2e7d32;font-weight:700;">&#10003;</span>';
     var err = '<span style="color:#c62828;font-weight:700;">&#10007;</span>';
 
@@ -1703,7 +2261,7 @@ window.csAmiSave = function () {
     var reboot         = rebootEl.checked ? '1' : '0';
     var regionOverride = regionEl.value.trim();
     csAmiMsg('Saving...', true);
-    csAmiPost('cs_save_ami',
+    csAmiPost('csbr_save_ami',
         'prefix=' + encodeURIComponent(prefix) +
         '&reboot=' + reboot +
         '&region_override=' + encodeURIComponent(regionOverride),
@@ -1728,7 +2286,7 @@ window.csAmiCreate = function () {
         '<p>AMI creation runs in the background. The table refreshes automatically when complete.</p>',
         function () {
             csAmiMsg('Creating AMI\u2026 this may take a moment.', true);
-            csAmiPost('cs_create_ami', '', function (res) {
+            csAmiPost('csbr_create_ami', '', function (res) {
                 if (res.success) {
                     csAmiMsg('&#10003; ' + (res.data.message || 'AMI created'), true);
                     setTimeout(function () { location.reload(); }, 2000);
@@ -1743,7 +2301,7 @@ window.csAmiCreate = function () {
 
 window.csAmiStatus = function () {
     csAmiMsg('Checking\u2026', true);
-    csAmiPost('cs_ami_status', '', function (res) {
+    csAmiPost('csbr_ami_status', '', function (res) {
         csAmiMsg((res.success ? '&#10003; ' + res.data : '&#10007; ' + (res.data || 'Could not check status')), res.success);
     });
 };
@@ -1803,7 +2361,7 @@ function csAmiRefreshAll() {
         var stateCell = document.getElementById('cs-ami-state-' + amiId);
         if (stateCell) stateCell.innerHTML = '<span style="color:#888;">&#8635; checking\u2026</span>';
 
-        csAmiPost('cs_ami_status', 'ami_id=' + encodeURIComponent(amiId), function (res) {
+        csAmiPost('csbr_ami_status', 'ami_id=' + encodeURIComponent(amiId), function (res) {
             if (res.success && res.data && res.data.state) {
                 updateRow(amiId, res.data.state, res.data.name || '');
             }
@@ -1818,7 +2376,7 @@ window.csAmiResetAndRefresh = function () {
     var btn = document.getElementById('cs-ami-refresh-all');
     if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Refreshing\u2026'; }
     csAmiMsg('Resetting and refreshing\u2026', true);
-    csAmiPost('cs_ami_reset_deleted', '', function (res) {
+    csAmiPost('csbr_ami_reset_deleted', '', function (res) {
         if (!res.success) {
             if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh All'; }
             csAmiMsg('&#10007; Reset failed: ' + res.data, false);
@@ -1831,7 +2389,7 @@ window.csAmiResetAndRefresh = function () {
 window.csAmiRefreshOne = function (amiId) {
     var stateCell = document.getElementById('cs-ami-state-' + amiId);
     if (stateCell) stateCell.innerHTML = '<span style="color:#888;">&#8635; checking\u2026</span>';
-    csAmiPost('cs_ami_status', 'ami_id=' + encodeURIComponent(amiId), function (res) {
+    csAmiPost('csbr_ami_status', 'ami_id=' + encodeURIComponent(amiId), function (res) {
         if (!stateCell) return;
         if (res.success && res.data && res.data.state) {
             var state = res.data.state;
@@ -1853,7 +2411,7 @@ window.csAmiDelete = function (amiId, amiName, alreadyDeleted) {
             '<p>This AMI has already been deleted in AWS. Removing it cleans up the local log — no changes are made in AWS.</p>',
             function () {
                 csAmiMsg('Removing record\u2026', true);
-                csAmiPost('cs_ami_remove_record', 'ami_id=' + encodeURIComponent(amiId), function (res) {
+                csAmiPost('csbr_ami_remove_record', 'ami_id=' + encodeURIComponent(amiId), function (res) {
                     if (res.success) {
                         csAmiMsg('&#10003; Record removed', true);
                         var row = document.getElementById('cs-ami-row-' + amiId);
@@ -1876,7 +2434,7 @@ window.csAmiDelete = function (amiId, amiName, alreadyDeleted) {
             // Show pending state immediately
             var stateCell = document.getElementById('cs-ami-state-' + amiId);
             if (stateCell) stateCell.innerHTML = '<span style="color:#e65100;font-weight:600;">&#9203; Pending Delete\u2026</span>';
-            csAmiPost('cs_deregister_ami', 'ami_id=' + encodeURIComponent(amiId), function (res) {
+            csAmiPost('csbr_deregister_ami', 'ami_id=' + encodeURIComponent(amiId), function (res) {
                 if (res.success) {
                     csAmiMsg('&#10003; Delete requested — status will update in 15 minutes', true);
                     // Keep row visible with pending state; cron will clean up
@@ -1951,7 +2509,7 @@ window.csAmiRestore = function (amiId, amiName) {
         $btn.prop('disabled', true).text('Sending request\u2026');
         $status.css('color', '#1565c0').text('Sending restore request to AWS\u2026');
 
-        csAmiPost('cs_ami_restore', 'ami_id=' + encodeURIComponent(amiId), function (res) {
+        csAmiPost('csbr_ami_restore', 'ami_id=' + encodeURIComponent(amiId), function (res) {
             if (res.success) {
                 $status.css('color', '#2e7d32').html(
                     '&#10003; Restore task created (task ID: ' + (res.data && res.data.task_id ? res.data.task_id : 'n/a') + '). ' +
@@ -1992,7 +2550,7 @@ window.csAmiTagEdit = function (amiId, currentTag) {
     cancelBtn.addEventListener('click', function () { cell.innerHTML = saved; });
     var doSave = function () {
         var tag = inp ? inp.value.trim().substring(0, 40) : '';
-        csAmiPost('cs_ami_set_tag', 'ami_id=' + encodeURIComponent(amiId) + '&tag=' + encodeURIComponent(tag), function (res) {
+        csAmiPost('csbr_ami_set_tag', 'ami_id=' + encodeURIComponent(amiId) + '&tag=' + encodeURIComponent(tag), function (res) {
             if (res.success) {
                 var tagJs = tag.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 cell.innerHTML =
@@ -2015,7 +2573,7 @@ window.csAmiTagEdit = function (amiId, currentTag) {
 };
 
 window.csAmiSetGolden = function (amiId) {
-    csAmiPost('cs_ami_set_golden', 'ami_id=' + encodeURIComponent(amiId), function (res) {
+    csAmiPost('csbr_ami_set_golden', 'ami_id=' + encodeURIComponent(amiId), function (res) {
         if (res.success) {
             var isGolden = !!(res.data && res.data.golden);
             var btn = document.getElementById('cs-ami-golden-btn-' + amiId);
@@ -2048,7 +2606,7 @@ function csAmiUpdateGoldenCount() {
     var goldenCount   = document.querySelectorAll('[id^="cs-ami-golden-btn-"][data-golden="1"]').length;
     var totalRows     = document.querySelectorAll('#cs-ami-tbody tr[id^="cs-ami-row-"]').length;
     var nonGolden     = totalRows - goldenCount;
-    var amiMax        = (window.CS && CS.ami_max) ? parseInt(CS.ami_max, 10) : '?';
+    var amiMax        = (window.CSBR && CSBR.ami_max) ? parseInt(CSBR.ami_max, 10) : '?';
     el.innerHTML = '&#11088; ' + goldenCount + ' / 4 golden\u2003' + nonGolden + ' of ' + amiMax + ' max backups';
 }
 
@@ -2059,7 +2617,7 @@ window.csAmiRemoveFailed = function (name) {
         '<p>This record represents a failed AMI creation attempt. Removing it cleans up the log — no changes are made in AWS.</p>',
         function () {
             csAmiMsg('Removing\u2026', true);
-            csAmiPost('cs_ami_remove_failed', 'name=' + encodeURIComponent(name), function (res) {
+            csAmiPost('csbr_ami_remove_failed', 'name=' + encodeURIComponent(name), function (res) {
                 if (res.success) {
                     csAmiMsg('&#10003; Record removed', true);
                     document.querySelectorAll('#cs-ami-tbody tr').forEach(function (row) {
@@ -2094,7 +2652,7 @@ function csS3HUpdateGoldenCount() {
     var goldenCount = document.querySelectorAll('[id^="cs-s3h-golden-btn-"][data-golden="1"]').length;
     var totalRows   = document.querySelectorAll('#cs-s3h-tbody tr').length;
     var nonGolden   = totalRows - goldenCount;
-    var s3Max       = (window.CS && CS.ami_max) ? parseInt(CS.ami_max, 10) : '?';
+    var s3Max       = (window.CSBR && CSBR.ami_max) ? parseInt(CSBR.ami_max, 10) : '?';
     el.innerHTML = '&#11088; ' + goldenCount + ' / 4 golden\u2003' + nonGolden + ' of ' + s3Max + ' max backups';
 }
 
@@ -2102,7 +2660,7 @@ window.csS3HistoryRefresh = function () {
     var btn = document.getElementById('cs-s3h-refresh-btn');
     if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Querying S3\u2026'; }
     csS3HMsg('Refreshing\u2026', true);
-    csS3HPost('cs_s3_refresh_history', '', function (res) {
+    csS3HPost('csbr_s3_refresh_history', '', function (res) {
         if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh'; }
         if (!res.success) {
             csS3HMsg('\u2717 ' + (res.data || 'Refresh failed'), false);
@@ -2133,7 +2691,7 @@ window.csS3HistoryRefresh = function () {
             var goldenD   = isGolden ? '1' : '0';
             var goldenSt  = isGolden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '';
             var goldenTit = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
-            var dlUrl     = CS.admin_post_url + '?action=cs_s3_download&file=' + encodeURIComponent(name) + '&nonce=' + CS.nonce;
+            var dlUrl     = CSBR.admin_post_url + '?action=csbr_s3_download&file=' + encodeURIComponent(name) + '&nonce=' + CSBR.nonce;
             var dlBtn     = '<a href="' + dlUrl + '" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; Download</a> ';
             var tr = document.createElement('tr');
             tr.id = 'cs-s3h-row-' + keyE;
@@ -2180,7 +2738,7 @@ window.csS3HistoryTagEdit = function (filename, currentTag) {
     var filenameJs = filename.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     var doSave = function () {
         var tag = inp ? inp.value.trim().substring(0, 40) : '';
-        csS3HPost('cs_s3_set_tag', 'filename=' + encodeURIComponent(filename) + '&tag=' + encodeURIComponent(tag), function (res) {
+        csS3HPost('csbr_s3_set_tag', 'filename=' + encodeURIComponent(filename) + '&tag=' + encodeURIComponent(tag), function (res) {
             if (res.success) {
                 var tagJs = tag.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 cell.innerHTML =
@@ -2204,7 +2762,7 @@ window.csS3HistoryTagEdit = function (filename, currentTag) {
 
 window.csS3HistorySetGolden = function (filename) {
     var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
-    csS3HPost('cs_s3_set_golden', 'filename=' + encodeURIComponent(filename), function (res) {
+    csS3HPost('csbr_s3_set_golden', 'filename=' + encodeURIComponent(filename), function (res) {
         if (res.success) {
             var isGolden = !!(res.data && res.data.golden);
             var btn = document.getElementById('cs-s3h-golden-btn-' + keyE);
@@ -2240,7 +2798,7 @@ window.csS3HistoryDelete = function (filename) {
         function () {
             var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
             csS3HMsg('Deleting\u2026', true);
-            csS3HPost('cs_s3_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
+            csS3HPost('csbr_s3_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
                 if (res.success) {
                     csS3HMsg('\u2713 Deleted', true);
                     var row = document.getElementById('cs-s3h-row-' + keyE);
@@ -2259,7 +2817,7 @@ window.csS3HistoryPull = function (filename) {
     var keyE   = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
     var actEl  = document.getElementById('cs-s3h-actions-' + keyE);
     csS3HMsg('Pulling from S3\u2026', true);
-    csS3HPost('cs_s3_pull', 'filename=' + encodeURIComponent(filename), function (res) {
+    csS3HPost('csbr_s3_pull', 'filename=' + encodeURIComponent(filename), function (res) {
         if (res.success) {
             csS3HMsg('\u2713 Pulled — reload to see it in Backup History', true);
             // Remove the Pull button and update Local column
@@ -2298,7 +2856,7 @@ function csGDriveHUpdateGoldenCount() {
     var goldenCount = document.querySelectorAll('[id^="cs-gd-golden-btn-"][data-golden="1"]').length;
     var totalRows   = document.querySelectorAll('#cs-gd-tbody tr').length;
     var nonGolden   = totalRows - goldenCount;
-    var maxB        = (window.CS && CS.ami_max) ? parseInt(CS.ami_max, 10) : '?';
+    var maxB        = (window.CSBR && CSBR.ami_max) ? parseInt(CSBR.ami_max, 10) : '?';
     el.innerHTML = '&#11088; ' + goldenCount + ' / 4 golden\u2003' + nonGolden + ' of ' + maxB + ' max backups';
 }
 
@@ -2307,7 +2865,7 @@ window.csGDriveHistoryRefresh = function () {
     var btn = document.getElementById('cs-gd-refresh-btn');
     if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Querying Drive\u2026'; }
     csGDriveHMsg('Refreshing\u2026', true);
-    csGDriveHPost('cs_gdrive_refresh_history', '', function (res) {
+    csGDriveHPost('csbr_gdrive_refresh_history', '', function (res) {
         if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh'; }
         if (!res.success) {
             csGDriveHMsg('\u2717 ' + (res.data || 'Refresh failed'), false);
@@ -2334,7 +2892,7 @@ window.csGDriveHistoryRefresh = function () {
             var goldenD   = isGolden ? '1' : '0';
             var goldenSt  = isGolden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '';
             var goldenTit = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
-            var dlUrl     = CS.admin_post_url + '?action=cs_gdrive_download&file=' + encodeURIComponent(name) + '&nonce=' + CS.nonce;
+            var dlUrl     = CSBR.admin_post_url + '?action=csbr_gdrive_download&file=' + encodeURIComponent(name) + '&nonce=' + CSBR.nonce;
             var tr = document.createElement('tr');
             tr.id = 'cs-gd-row-' + keyE;
             if (isGolden) tr.className = 'cs-row-golden';
@@ -2382,7 +2940,7 @@ window.csGDriveHistoryTagEdit = function (filename, currentTag) {
     var filenameJs = filename.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     var doSave = function () {
         var tag = inp ? inp.value.trim().substring(0, 40) : '';
-        csGDriveHPost('cs_gdrive_set_tag', 'filename=' + encodeURIComponent(filename) + '&tag=' + encodeURIComponent(tag), function (res) {
+        csGDriveHPost('csbr_gdrive_set_tag', 'filename=' + encodeURIComponent(filename) + '&tag=' + encodeURIComponent(tag), function (res) {
             if (res.success) {
                 var tagJs = tag.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 cell.innerHTML =
@@ -2406,7 +2964,7 @@ window.csGDriveHistoryTagEdit = function (filename, currentTag) {
 
 window.csGDriveHistorySetGolden = function (filename) {
     var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
-    csGDriveHPost('cs_gdrive_set_golden', 'filename=' + encodeURIComponent(filename), function (res) {
+    csGDriveHPost('csbr_gdrive_set_golden', 'filename=' + encodeURIComponent(filename), function (res) {
         if (res.success) {
             var isGolden = !!(res.data && res.data.golden);
             var btn = document.getElementById('cs-gd-golden-btn-' + keyE);
@@ -2442,7 +3000,7 @@ window.csGDriveHistoryDelete = function (filename) {
         function () {
             var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
             csGDriveHMsg('Deleting\u2026', true);
-            csGDriveHPost('cs_gdrive_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
+            csGDriveHPost('csbr_gdrive_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
                 if (res.success) {
                     csGDriveHMsg('\u2713 Deleted', true);
                     var row = document.getElementById('cs-gd-row-' + keyE);
@@ -2532,7 +3090,7 @@ window.csDropboxSave = function () {
     var remote = remoteEl.value.trim();
     var path   = pathEl.value.trim() || 'cloudscale-backups/';
     csDropboxMsg('Saving\u2026', true);
-    csDropboxPost('cs_save_dropbox', 'remote=' + encodeURIComponent(remote) + '&path=' + encodeURIComponent(path),
+    csDropboxPost('csbr_save_dropbox', 'remote=' + encodeURIComponent(remote) + '&path=' + encodeURIComponent(path),
         function (res) {
             csDropboxMsg(res.success ? '\u2713 Saved' : '\u2717 ' + res.data, res.success);
             if (res.success && remote) csMarkProviderConfigured('cs-cloud-dropbox-enabled');
@@ -2542,7 +3100,7 @@ window.csDropboxSave = function () {
 
 window.csDropboxTest = function () {
     csDropboxMsg('Testing\u2026', true);
-    csDropboxPost('cs_test_dropbox', '', function (res) {
+    csDropboxPost('csbr_test_dropbox', '', function (res) {
         csDropboxMsg(res.success ? '\u2713 ' + res.data : '\u2717 ' + (res.data || 'Connection failed'), res.success);
         if (res.success) csMarkProviderConfigured('cs-cloud-dropbox-enabled');
     });
@@ -2561,7 +3119,119 @@ window.csDropboxDiagnose = function () {
 };
 
 window.csDropboxSyncLatest = function () {
-    csCheckSpaceThenSync('dropbox', 'cs_start_sync_dropbox', csDropboxMsg);
+    csCheckSpaceThenSync('dropbox', 'csbr_start_sync_dropbox', csDropboxMsg);
+};
+
+// ================================================================
+// OneDrive helpers
+// ================================================================
+
+function csOneDriveMsg(text, ok) {
+    var el = document.getElementById('cs-onedrive-msg');
+    if (el) { el.innerHTML = text; el.style.color = ok ? '#2e7d32' : '#c62828'; }
+}
+
+function csOneDrivePost(action, extra, onDone) {
+    csGDrivePost(action, extra, onDone); // reuse transport
+}
+
+window.csOneDriveExplain = function () {
+    var $ = window.jQuery;
+    setTimeout(function () {
+        $('#cs-explain-modal').css('max-width', '640px');
+        $('#cs-explain-body').css({'max-height': '65vh', 'overflow-y': 'auto', 'padding-right': '6px'});
+    }, 10);
+    function cmd(text) {
+        return '<code style="display:block;background:#1e1e1e;color:#d4d4d4;padding:8px 12px;border-radius:4px;margin:4px 0 10px;font-size:0.82rem;white-space:pre;">' + text + '</code>';
+    }
+    function h(text) { return '<p style="margin:14px 0 4px;font-weight:700;font-size:0.93rem;">' + text + '</p>'; }
+    function hr() { return '<hr style="margin:12px 0;border:none;border-top:1px solid #e0e0e0;">'; }
+    csShowExplain('OneDrive Backup — Setup Guide',
+        '<p style="margin:0 0 8px;">After every local backup, the most recent backup zip is automatically copied to your Microsoft OneDrive via <strong>rclone</strong>. This uses the same rclone tool as Google Drive and Dropbox — if rclone is already installed you just need to add a OneDrive remote.</p>' +
+        '<p style="margin:0 0 4px;"><strong>Buttons:</strong></p>' +
+        '<ul style="margin:0 0 10px 18px;padding:0;">' +
+        '<li><strong>Save OneDrive Settings</strong> — saves the rclone remote name and destination folder.</li>' +
+        '<li><strong>Test Connection</strong> — runs <code>rclone lsd</code> to verify the remote is reachable.</li>' +
+        '<li><strong>Diagnose</strong> — shows rclone version, remote name, and troubleshooting tips.</li>' +
+        '<li><strong>Copy Last Backup to Cloud</strong> — immediately copies the <em>most recent local backup zip</em> to OneDrive without creating a new backup.</li>' +
+        '</ul>' +
+        hr() +
+        h('Step 1 — Install rclone (if not already installed)') +
+        cmd('curl -fsSL https://rclone.org/install.sh | sudo bash') +
+        hr() +
+        h('Step 2 — Fix apache home directory permissions') +
+        cmd('sudo mkdir -p /usr/share/httpd/.config/rclone\nsudo chown -R apache:apache /usr/share/httpd/.config\nsudo chmod 700 /usr/share/httpd/.config/rclone\nsudo chown apache:apache /usr/share/httpd\nsudo chmod 755 /usr/share/httpd') +
+        hr() +
+        h('Step 3 — Run the setup wizard as apache') +
+        cmd('sudo -u apache rclone config') +
+        '<table style="width:100%;border-collapse:collapse;font-size:0.85rem;margin:6px 0 10px;">' +
+        '<thead><tr>' +
+        '<th style="text-align:left;padding:4px 8px;background:#f5f5f5;border:1px solid #e0e0e0;width:55%;">Prompt</th>' +
+        '<th style="text-align:left;padding:4px 8px;background:#f5f5f5;border:1px solid #e0e0e0;">Type this</th>' +
+        '</tr></thead><tbody>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">e/n/d/r/c/s/q&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>n</code> (New remote)</td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">name&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>onedrive</code></td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">Storage&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>34</code> (Microsoft OneDrive)</td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">client_id&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;">Enter (leave blank)</td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">client_secret&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;">Enter (leave blank)</td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">region&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>1</code> (Microsoft Cloud Global)</td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">Edit advanced config?</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>n</code></td></tr>' +
+        '<tr style="background:#fff8e1;"><td style="padding:4px 8px;border:1px solid #e0e0e0;">Use web browser to automatically authenticate? / Use auto config?</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>n</code> — server has no browser</td></tr>' +
+        '<tr style="background:#fff8e1;"><td style="padding:4px 8px;border:1px solid #e0e0e0;">config_token&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;">Paste token from laptop (see below)</td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">Drive type to use?</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>1</code> (OneDrive Personal or Business)</td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">Select drive (choose from list)</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>0</code> (first drive)</td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">Is that okay?</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>y</code></td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">Keep this "onedrive" remote? y/e/d&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>y</code></td></tr>' +
+        '<tr><td style="padding:4px 8px;border:1px solid #e0e0e0;">e/n/d/r/c/s/q&gt;</td><td style="padding:4px 8px;border:1px solid #e0e0e0;"><code>q</code> (Quit)</td></tr>' +
+        '</tbody></table>' +
+        '<p style="margin:0 0 6px;">For the highlighted <strong>config_token&gt;</strong> step, run this on your <strong>laptop</strong> (rclone must be installed on your laptop too):</p>' +
+        cmd('rclone authorize "onedrive"') +
+        '<p style="margin:0 0 8px;">A browser window opens — sign in with your Microsoft account and click <strong>Accept</strong>. The browser shows <strong>"Success! All done."</strong> Rclone prints a long token like <code>{"access_token":"..."}</code> — copy the entire thing and paste it at the <strong>config_token&gt;</strong> prompt on the server.</p>' +
+        hr() +
+        h('Step 4 — Enter remote name above and save') +
+        '<p style="margin:0 0 8px;">Enter your remote name in <strong>[Enter Remote Name]</strong> (e.g. <code>onedrive</code>) and a destination folder in <strong>[Enter Folder Path]</strong> (e.g. <code>cloudscale-backups/</code>), then click <strong>Save OneDrive Settings</strong> and <strong>Test Connection</strong>.</p>' +
+        '<p style="margin:0;font-size:0.85rem;color:#555;">Full documentation: <a href="https://rclone.org/onedrive/" target="_blank" rel="noopener">rclone.org/onedrive</a></p>'
+    );
+};
+
+window.csOneDriveSave = function () {
+    var remoteEl = document.getElementById('cs-onedrive-remote');
+    var pathEl   = document.getElementById('cs-onedrive-path');
+    if (!remoteEl || !pathEl) return;
+    var remote = remoteEl.value.trim();
+    var path   = pathEl.value.trim() || 'cloudscale-backups/';
+    csOneDriveMsg('Saving\u2026', true);
+    csOneDrivePost('csbr_save_onedrive', 'remote=' + encodeURIComponent(remote) + '&path=' + encodeURIComponent(path),
+        function (res) {
+            csOneDriveMsg(res.success ? '\u2713 Saved' : '\u2717 ' + res.data, res.success);
+            if (res.success && remote) csMarkProviderConfigured('cs-cloud-onedrive-enabled');
+        }
+    );
+};
+
+window.csOneDriveTest = function () {
+    csOneDriveMsg('Testing\u2026', true);
+    csOneDrivePost('csbr_test_onedrive', '', function (res) {
+        csOneDriveMsg(res.success ? '\u2713 ' + res.data : '\u2717 ' + (res.data || 'Connection failed'), res.success);
+        if (res.success) csMarkProviderConfigured('cs-cloud-onedrive-enabled');
+    });
+};
+
+window.csOneDriveDiagnose = function () {
+    csShowExplain('OneDrive Diagnose',
+        '<p>Run <strong>Test Connection</strong> first. If it fails, check:</p>' +
+        '<ul style="margin:8px 0 0 18px;padding:0;">' +
+        '<li>rclone is installed: <code>which rclone</code></li>' +
+        '<li>A OneDrive remote exists: <code>sudo -u apache rclone listremotes</code></li>' +
+        '<li>The remote name matches what you entered above</li>' +
+        '<li>The apache user can write to the rclone config: <code>ls -la /usr/share/httpd/.config/rclone/</code></li>' +
+        '<li>Token not expired — re-run <code>sudo -u apache rclone config reconnect onedrive:</code> to refresh</li>' +
+        '</ul>'
+    );
+};
+
+window.csOneDriveSyncLatest = function () {
+    csCheckSpaceThenSync('onedrive', 'csbr_start_sync_onedrive', csOneDriveMsg);
 };
 
 // ================================================================
@@ -2593,7 +3263,7 @@ window.csDropboxHistoryRefresh = function () {
     var btn = document.getElementById('cs-db-refresh-btn');
     if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Querying Dropbox\u2026'; }
     csDropboxHMsg('Refreshing\u2026', true);
-    csDropboxHPost('cs_dropbox_refresh_history', '', function (res) {
+    csDropboxHPost('csbr_dropbox_refresh_history', '', function (res) {
         if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh'; }
         if (!res.success) {
             csDropboxHMsg('\u2717 ' + (res.data || 'Refresh failed'), false);
@@ -2620,7 +3290,7 @@ window.csDropboxHistoryRefresh = function () {
             var goldenD   = isGolden ? '1' : '0';
             var goldenSt  = isGolden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '';
             var goldenTit = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
-            var dlUrl     = CS.admin_post_url + '?action=cs_dropbox_download&file=' + encodeURIComponent(name) + '&nonce=' + CS.nonce;
+            var dlUrl     = CSBR.admin_post_url + '?action=csbr_dropbox_download&file=' + encodeURIComponent(name) + '&nonce=' + CSBR.nonce;
             var tr = document.createElement('tr');
             tr.id = 'cs-db-row-' + keyE;
             if (isGolden) { tr.className = 'cs-row-golden'; tr.style.background = 'linear-gradient(90deg,#fff8e1 0%,#fff 80%)'; tr.style.borderLeft = '3px solid #f9a825'; }
@@ -2664,7 +3334,7 @@ window.csDropboxHistoryTagEdit = function (filename, currentTag) {
     var filenameJs = filename.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     var doSave = function () {
         var tag = inp ? inp.value.trim().substring(0, 40) : '';
-        csDropboxHPost('cs_dropbox_set_tag', 'filename=' + encodeURIComponent(filename) + '&tag=' + encodeURIComponent(tag), function (res) {
+        csDropboxHPost('csbr_dropbox_set_tag', 'filename=' + encodeURIComponent(filename) + '&tag=' + encodeURIComponent(tag), function (res) {
             if (res.success) {
                 var tagJs = tag.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 cell.innerHTML =
@@ -2688,7 +3358,7 @@ window.csDropboxHistoryTagEdit = function (filename, currentTag) {
 
 window.csDropboxHistorySetGolden = function (filename) {
     var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
-    csDropboxHPost('cs_dropbox_set_golden', 'filename=' + encodeURIComponent(filename), function (res) {
+    csDropboxHPost('csbr_dropbox_set_golden', 'filename=' + encodeURIComponent(filename), function (res) {
         if (res.success) {
             var isGolden = !!(res.data && res.data.golden);
             var btn = document.getElementById('cs-db-golden-btn-' + keyE);
@@ -2722,7 +3392,7 @@ window.csDropboxHistoryDelete = function (filename) {
         function () {
             var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
             csDropboxHMsg('Deleting\u2026', true);
-            csDropboxHPost('cs_dropbox_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
+            csDropboxHPost('csbr_dropbox_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
                 if (res.success) {
                     csDropboxHMsg('\u2713 Deleted', true);
                     var row = document.getElementById('cs-db-row-' + keyE);
@@ -2736,3 +3406,177 @@ window.csDropboxHistoryDelete = function (filename) {
             });
         }, 'Delete');
 };
+
+// ================================================================
+// ONEDRIVE HISTORY
+// ================================================================
+
+function csOneDriveHMsg(text, ok) {
+    var el = document.getElementById('cs-od-msg');
+    if (el) { el.textContent = text; el.style.color = ok ? '#2e7d32' : '#c62828'; }
+}
+
+function csOneDriveHPost(action, extra, onDone) {
+    csGDrivePost(action, extra, onDone); // reuse transport
+}
+
+function csOneDriveHUpdateGoldenCount() {
+    var el = document.getElementById('cs-od-golden-count');
+    if (!el) return;
+    var rows    = document.querySelectorAll('#cs-od-tbody tr');
+    var golden  = document.querySelectorAll('#cs-od-tbody tr.cs-row-golden').length;
+    var regular = rows.length - golden;
+    var m       = el.innerHTML.match(/\/\s*(\d+)\s*max/);
+    var max     = m ? m[1] : '?';
+    el.innerHTML = '\u2b50 ' + golden + ' / 4 golden&emsp;' + regular + ' / ' + max + ' max backups';
+}
+
+window.csOneDriveHistoryRefresh = function () {
+    var $ = window.jQuery;
+    var btn = document.getElementById('cs-od-refresh-btn');
+    if (btn) { btn.disabled = true; btn.textContent = '\u23f3 Querying OneDrive\u2026'; }
+    csOneDriveHMsg('Refreshing\u2026', true);
+    csOneDriveHPost('csbr_onedrive_refresh_history', '', function (res) {
+        if (btn) { btn.disabled = false; btn.innerHTML = '&#8635; Refresh'; }
+        if (!res.success) {
+            csOneDriveHMsg('\u2717 ' + (res.data || 'Refresh failed'), false);
+            return;
+        }
+        var files = (res.data && res.data.files) ? res.data.files : (res.data || []);
+        var count = (res.data && res.data.count != null) ? res.data.count : files.length;
+        var cEl   = document.getElementById('cs-onedrive-count-val');
+        if (cEl) cEl.innerHTML = count + ' in OneDrive &nbsp;&middot;&nbsp; ' + cEl.innerHTML.replace(/.*·\s*/, '');
+        var tbody = document.getElementById('cs-od-tbody');
+        var wrap  = document.getElementById('cs-od-table-wrap');
+        var empty = document.getElementById('cs-od-empty');
+        if (!tbody) { csOneDriveHMsg('\u2717 Table element missing — reload page', false); return; }
+        tbody.innerHTML = '';
+        if (wrap)  wrap.style.display  = files.length ? '' : 'none';
+        if (empty) empty.style.display = files.length ? 'none' : '';
+        files.forEach(function (odf) {
+            var name      = odf.name || '';
+            var keyE      = name.replace(/[^a-zA-Z0-9_\-]/g, '_');
+            var nameJs    = name.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            var tag       = odf.tag || '';
+            var tagJs     = tag.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+            var isGolden  = !!odf.golden;
+            var goldenD   = isGolden ? '1' : '0';
+            var goldenSt  = isGolden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '';
+            var goldenTit = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+            var dlUrl     = CSBR.admin_post_url + '?action=csbr_onedrive_download&file=' + encodeURIComponent(name) + '&nonce=' + CSBR.nonce;
+            var tr = document.createElement('tr');
+            tr.id = 'cs-od-row-' + keyE;
+            if (isGolden) { tr.className = 'cs-row-golden'; tr.style.background = 'linear-gradient(90deg,#fff8e1 0%,#fff 80%)'; tr.style.borderLeft = '3px solid #f9a825'; }
+            tr.innerHTML =
+                '<td>' + $('<span>').text(name).html() + '<span class="cs-od-golden-star"' + (isGolden ? '' : ' style="display:none;"') + '> &#11088;</span></td>' +
+                '<td id="cs-od-tag-cell-' + keyE + '" style="white-space:nowrap;">' +
+                    '<span class="cs-od-tag-text">' + (tag ? $('<span>').text(tag).html() : '<span class="cs-muted-text">No tag</span>') + '</span> ' +
+                    '<button type="button" onclick="csOneDriveHistoryTagEdit(\'' + nameJs + '\',\'' + tagJs + '\')" class="button button-small" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;">Edit</button>' +
+                '</td>' +
+                '<td>' + $('<span>').text(odf.size_fmt || '\u2014').html() + '</td>' +
+                '<td>' + $('<span>').text(odf.date_fmt || (odf.time ? new Date(odf.time * 1000).toLocaleDateString() : '\u2014')).html() + '</td>' +
+                '<td id="cs-od-actions-' + keyE + '" style="white-space:nowrap;vertical-align:middle;">' +
+                    '<button type="button" onclick="csOneDriveHistorySetGolden(\'' + nameJs + '\')" class="button button-small" id="cs-od-golden-btn-' + keyE + '" data-golden="' + goldenD + '" title="' + goldenTit + '" style="min-width:0;padding:2px 6px;margin-bottom:3px;' + goldenSt + '">&#11088;</button> ' +
+                    '<a href="' + dlUrl + '" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; Download</a> ' +
+                    '<button type="button" onclick="csOneDriveHistoryDelete(\'' + nameJs + '\')" class="button button-small" title="Delete from OneDrive" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; Delete</button>' +
+                '</td>';
+            tbody.appendChild(tr);
+        });
+        csOneDriveHMsg('\u2713 ' + files.length + ' file' + (files.length !== 1 ? 's' : '') + ' found', true);
+        csOneDriveHUpdateGoldenCount();
+    });
+};
+
+window.csOneDriveHistoryTagEdit = function (filename, currentTag) {
+    var $ = window.jQuery;
+    var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    var cell = document.getElementById('cs-od-tag-cell-' + keyE);
+    if (!cell) return;
+    var saved = cell.innerHTML;
+    cell.innerHTML =
+        '<input type="text" value="' + $('<span>').text(currentTag).html() + '" ' +
+        'style="width:90px;font-size:0.8rem;padding:1px 4px;vertical-align:middle;" maxlength="40"> ' +
+        '<button type="button" class="button button-small" style="padding:1px 6px;font-size:0.78rem;">Save</button> ' +
+        '<button type="button" class="button button-small" style="padding:1px 6px;font-size:0.78rem;">\u00d7</button>';
+    var btns      = cell.querySelectorAll('button');
+    var inp       = cell.querySelector('input');
+    var saveBtn   = btns[0];
+    var cancelBtn = btns[1];
+    if (inp) inp.focus();
+    cancelBtn.addEventListener('click', function () { cell.innerHTML = saved; });
+    var filenameJs = filename.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    var doSave = function () {
+        var tag = inp ? inp.value.trim().substring(0, 40) : '';
+        csOneDriveHPost('csbr_onedrive_set_tag', 'filename=' + encodeURIComponent(filename) + '&tag=' + encodeURIComponent(tag), function (res) {
+            if (res.success) {
+                var tagJs = tag.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                cell.innerHTML =
+                    '<span class="cs-od-tag-text">' + (tag ? $('<span>').text(tag).html() : '<span class="cs-muted-text">No tag</span>') + '</span> ' +
+                    '<button type="button" onclick="csOneDriveHistoryTagEdit(\'' + filenameJs + '\',\'' + tagJs + '\')" class="button button-small" style="min-width:0;padding:1px 5px;font-size:0.75rem;vertical-align:middle;">Edit</button>';
+                csOneDriveHMsg('\u2713 Tag saved', true);
+            } else {
+                cell.innerHTML = saved;
+                csOneDriveHMsg('\u2717 ' + (res.data || 'Save failed'), false);
+            }
+        });
+    };
+    saveBtn.addEventListener('click', doSave);
+    if (inp) {
+        inp.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter')  { doSave(); }
+            if (e.key === 'Escape') { cell.innerHTML = saved; }
+        });
+    }
+};
+
+window.csOneDriveHistorySetGolden = function (filename) {
+    var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+    csOneDriveHPost('csbr_onedrive_set_golden', 'filename=' + encodeURIComponent(filename), function (res) {
+        if (res.success) {
+            var isGolden = !!(res.data && res.data.golden);
+            var btn = document.getElementById('cs-od-golden-btn-' + keyE);
+            if (btn) {
+                btn.dataset.golden    = isGolden ? '1' : '0';
+                btn.title             = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+                btn.style.color       = isGolden ? '#f57f17' : '';
+                btn.style.borderColor = isGolden ? '#f57f17' : '';
+                btn.style.fontWeight  = isGolden ? '700' : '';
+            }
+            var row = document.getElementById('cs-od-row-' + keyE);
+            if (row) {
+                row.classList.toggle('cs-row-golden', isGolden);
+                var star = row.querySelector('.cs-od-golden-star');
+                if (star) star.style.display = isGolden ? '' : 'none';
+            }
+            csOneDriveHUpdateGoldenCount();
+            csOneDriveHMsg(isGolden ? '&#11088; Marked as golden image' : 'Golden image removed', true);
+        } else {
+            csOneDriveHMsg('\u2717 ' + (res.data || 'Failed'), false);
+        }
+    });
+};
+
+window.csOneDriveHistoryDelete = function (filename) {
+    csConfirm('&#128465;', 'Delete from OneDrive',
+        '<span style="color:#c62828;">This file will be permanently deleted from your OneDrive.</span>',
+        '<p>File: <strong>' + csEscHtml(filename) + '</strong></p>' +
+        '<p>The file will be removed from OneDrive immediately. Your local backup copy on this server is <strong>not affected</strong>.</p>' +
+        '<p>This action <strong>cannot be undone</strong>.</p>',
+        function () {
+            var keyE = filename.replace(/[^a-zA-Z0-9_\-]/g, '_');
+            csOneDriveHMsg('Deleting\u2026', true);
+            csOneDriveHPost('csbr_onedrive_delete_remote', 'filename=' + encodeURIComponent(filename), function (res) {
+                if (res.success) {
+                    csOneDriveHMsg('\u2713 Deleted', true);
+                    var row = document.getElementById('cs-od-row-' + keyE);
+                    if (row) row.remove();
+                    csOneDriveHUpdateGoldenCount();
+                    var cEl = document.getElementById('cs-onedrive-count-val');
+                    if (cEl) { var m = cEl.innerHTML.match(/^(\d+)/); if (m) cEl.innerHTML = cEl.innerHTML.replace(/^\d+/, Math.max(0, parseInt(m[1], 10) - 1)); }
+                } else {
+                    csOneDriveHMsg('\u2717 ' + (res.data || 'Delete failed'), false);
+                }
+            });
+        }, 'Delete');
+};
+

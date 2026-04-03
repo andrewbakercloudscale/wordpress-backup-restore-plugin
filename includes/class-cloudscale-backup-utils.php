@@ -1,6 +1,6 @@
 <?php
 /**
- * Shared utility helpers for CloudScale Free Backup and Restore.
+ * Shared utility helpers for CloudScale Backup & Restore.
  *
  * Single source of truth for pure helper logic used across the plugin.
  * The main plugin file delegates to this class; new helpers belong here first.
@@ -12,7 +12,7 @@
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Utility helpers for CloudScale Free Backup and Restore.
+ * Utility helpers for CloudScale Backup & Restore.
  *
  * All methods are static — no instantiation required.
  *
@@ -43,7 +43,7 @@ class CloudScale_Backup_Utils {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
 			$rows = $wpdb->get_results( "SELECT option_name, option_value FROM {$wpdb->options} WHERE option_name LIKE 'cs\_log\_%' ORDER BY option_name", ARRAY_A );
 			if ( $rows ) {
-				$entries = (array) get_option( 'cs_activity_log', [] );
+				$entries = (array) get_option( 'csbr_activity_log', [] );
 				foreach ( $rows as $row ) {
 					$val = maybe_unserialize( $row['option_value'] ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_maybe_unserialize -- value written only by this plugin via log()
 					if ( is_array( $val ) && isset( $val['t'], $val['m'] ) ) {
@@ -56,7 +56,7 @@ class CloudScale_Backup_Utils {
 				if ( count( $entries ) > 200 ) {
 					$entries = array_slice( $entries, -200 );
 				}
-				update_option( 'cs_activity_log', $entries, false );
+				update_option( 'csbr_activity_log', $entries, false );
 			}
 		}
 	}
