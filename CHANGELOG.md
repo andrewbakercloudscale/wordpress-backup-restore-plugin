@@ -3,6 +3,54 @@
 All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [3.2.271] - 2026-04-04
+
+### Added
+- AMI card: "Create AMI Now" button is no longer disabled when not on EC2 — clicking it now shows an informational modal explaining that AMI snapshots require AWS EC2, with alternatives listed (local zip + S3/GDrive/Dropbox)
+- Dashboard widget: AMI row now shows "Not running on AWS" in green when the server is not an EC2 instance, replacing the stale last-snapshot timestamp from the previous server
+- `CSBR.on_ec2` flag passed to JS via `wp_localize_script` so the client can detect non-EC2 environments without an AJAX round-trip
+
+### Changed
+- Dashboard widget: "Last backup" label renamed to "Last local backup" to distinguish it from cloud sync timestamps
+- Dashboard widget: color thresholds relaxed — green now covers up to 48 hours (was 24 h), amber covers 2–7 days, red covers > 7 days; a backup from yesterday now correctly shows green
+- Dashboard widget: OneDrive row only shown when `csbr_onedrive_remote` is non-empty; previously the row appeared on any server where the option existed in the DB (even unconfigured), showing "Never"
+
+## [3.2.269] - 2026-04-04
+
+### Fixed
+- PCP `WordPress.Security.EscapeOutput.ExceptionNotEscaped`: added `phpcs:ignore` on all nine `throw new RuntimeException(...)` calls in `class-plugin-auto-recovery.php` — these are internal error messages, not user-facing output
+- PCP `WordPress.WP.AlternativeFunctions.file_system_operations_rmdir`: consolidated standalone + inline `phpcs:ignore` comments onto a single inline suppress covering both `file_system_operations_rmdir` and `NoSilencedErrors`
+- PCP `WordPress.WP.AlternativeFunctions.file_system_operations_fsockopen`: moved standalone `phpcs:ignore` comment to inline on the `fsockopen()` call so the suppression actually applies
+- PCP `WordPress.Security.ValidatedSanitizedInput.MissingUnslash`: wrapped `$_POST['par_window']` with `wp_unslash()` before the `(int)` cast in `ajax_save_settings()`
+
+## [3.2.268] - 2026-04-04
+
+### Fixed
+- Performance: `CSBR_Plugin_Auto_Recovery::on_admin_init()` runs on every WordPress admin page load; `write_fatal_handler_dropin()` was unconditionally reading the dropin file with `file_get_contents()`, generating a ~2 KB PHP string, and writing it with `file_put_contents()` on every request even when nothing had changed — now guarded by a one-hour transient (`csbr_par_dropin_ok`); file is only rewritten when content actually differs; `force: true` parameter bypasses the cache on explicit settings saves
+- Performance: `expire_stale_monitors()` ran a DB query on every admin page load with no throttle — now guarded by a two-minute transient (`csbr_par_expire_check`)
+- `remove_fatal_handler_dropin()`: clears `csbr_par_dropin_ok` transient so the dropin is regenerated correctly after a disable/re-enable cycle
+
+## [3.2.266] - 2026-04-04
+
+### Changed
+- Performance: `csbr_dir_size()` now caches results in a one-hour transient (key: `csbr_dsize_{hash}`); eliminates five recursive filesystem walks on every admin page load (uploads, plugins, themes, mu-plugins, languages directories)
+- Performance: `csbr_find_aws()` and `csbr_find_rclone()` cache the resolved binary path in a 12-hour transient (`csbr_aws_path`, `csbr_rclone_path`), replacing a `which` shell exec on every load
+- Performance: `aws --version` and `rclone version` shell execs cached for 12 hours (`csbr_aws_ver`, `csbr_rclone_ver`)
+- Performance: `csbr_mysqldump_available()` and `csbr_mysql_cli_available()` cache the `which` result in a 12-hour transient (`csbr_mysqldump_avail`, `csbr_mysql_cli_avail`)
+- Performance: `information_schema` database size and InnoDB overhead queries cached in one-hour transients (`csbr_db_size`, `csbr_db_overhead`)
+- Performance: ZipArchive encryption detection in `csbr_list_backups()` cached per-file by filename + mtime (`csbr_enc_{hash}`, 7-day TTL); eliminates one ZipArchive open per backup file per page load
+- Performance: `csbr_get_instance_id()` and `csbr_get_instance_region()` now persist results across requests via transients (`csbr_instance_id`, `csbr_instance_region`); real EC2 values cached one hour, non-EC2 empty results cached five minutes to avoid repeated IMDS timeout delays — the docblock had documented transient caching but it was never implemented
+
+## [3.2.258] - 2026-04-03
+
+### Fixed
+- PCP `NonceVerification.Missing`: replaced `csbr_verify_nonce()` helper delegation with direct `check_ajax_referer( 'csbr_nonce', 'nonce' )` in all six Automatic Crash Recovery AJAX handlers (`ajax_save_settings`, `ajax_test_health`, `ajax_test_sms`, `ajax_get_status`, `ajax_dismiss_history`, `ajax_manual_rollback`)
+- Missing `phpcs:ignore` on `file_put_contents()` call writing `index.php` to backup dir (`csbr_ensure_backup_dir`)
+- `phpcs:ignore` for `rmdir()` in `delete_backup_dir()` was on the line before the code; moved inline so the suppression actually applies
+
+### Added
+- `phpcs.xml` — PHPCS/PCP configuration declaring `csbr`, `CSBR`, and `CloudScale` as valid prefixes and `cloudscale-backup-restore` as the text domain; eliminates `PrefixAllGlobals` false positives
+
 ## [3.2.225] - 2026-04-02
 
 ### Added

@@ -4,7 +4,7 @@ Tags: backup, restore, database, scheduled backup, maintenance mode
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 3.2.251
+Stable tag: 3.2.281
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -165,7 +165,7 @@ Yes. Run a full backup on the old site, install WordPress on the new host, insta
 
 == Changelog ==
 
-= 3.2.251 =
+= 3.2.257 =
 * FIX: PCP compliance — `cs_admin_page()` now independently checks `current_user_can('manage_options')`
 * FIX: PCP compliance — `wp_unslash()` added to `$_POST['cs_action']` and `$_POST['schedule_enabled']`; `phpcs:ignore` annotations added
 * FIX: PCP compliance — `data-free-bytes` attribute annotated with `phpcs:ignore EscapeOutput.OutputNotEscaped`
@@ -276,6 +276,27 @@ installation commands for the site administrator to run manually. The plugin
 itself does not download or contact awscli.amazonaws.com at any time.
 Terms of Service: https://aws.amazon.com/service-terms/
 Privacy Policy: https://aws.amazon.com/privacy/
+
+= Automatic Crash Recovery — health check probe (optional) =
+When Automatic Crash Recovery is enabled, the plugin periodically sends an HTTP
+request to the administrator-configured health check URL to verify the site is
+responding. The URL defaults to the site's own home URL. No personal data is
+transmitted — the request is a plain GET with no authentication payload. The
+same probe is made when the administrator clicks "Test Health Check" in the
+plugin settings. If a system-cron watchdog script is installed on the server,
+that script also probes this URL independently via curl. The health check URL
+is set by the administrator and is never shared with any third party.
+No Terms of Service or Privacy Policy apply (the request goes to a URL you own).
+
+= Twilio (optional SMS crash alerts) =
+When Twilio SMS alerting is configured, the plugin sends an SMS notification to
+the administrator's phone number via the Twilio Messaging API whenever Automatic
+Crash Recovery rolls back a plugin. Only the alert text, the configured "from"
+number, and the configured "to" number are transmitted. No backup data or
+personal user data is sent. No data is transmitted unless Twilio credentials
+have been explicitly entered and the SMS feature is enabled.
+Terms of Service: https://www.twilio.com/en-us/legal/tos
+Privacy Policy: https://www.twilio.com/en-us/legal/privacy
 
 == Privacy Policy ==
 
