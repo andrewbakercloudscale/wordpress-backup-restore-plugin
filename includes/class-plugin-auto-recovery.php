@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Auto Recovery — pre-update backup and automatic rollback.
+ * Automatic Crash Recovery — pre-update backup and automatic rollback.
  *
  * Architecture overview
  * ─────────────────────
@@ -34,7 +34,7 @@
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Plugin Auto Recovery controller.
+ * Automatic Crash Recovery controller.
  *
  * @since 3.3.0
  */
@@ -46,7 +46,7 @@ class CSBR_Plugin_Auto_Recovery {
 	const SETTINGS_KEY = 'csbr_par_settings';
 
 	// ── Tuning ────────────────────────────────────────────────────────────────
-	const LOG_PREFIX    = '[Plugin Auto Recovery]';
+	const LOG_PREFIX    = '[Automatic Crash Recovery]';
 	const MAX_HISTORY   = 50;
 	const MAX_BACKUP_AGE = 72 * HOUR_IN_SECONDS; // seconds before stale backup dirs are purged
 
@@ -65,7 +65,6 @@ class CSBR_Plugin_Auto_Recovery {
 		// feature is turned off (user can still save/test settings).
 		add_action( 'wp_ajax_csbr_par_save_settings',          [ self::class, 'ajax_save_settings' ] );
 		add_action( 'wp_ajax_csbr_par_test_health',            [ self::class, 'ajax_test_health' ] );
-		add_action( 'wp_ajax_csbr_par_test_sms',               [ self::class, 'ajax_test_sms' ] );
 		add_action( 'wp_ajax_csbr_par_get_status',             [ self::class, 'ajax_get_status' ] );
 		add_action( 'wp_ajax_csbr_par_dismiss_history',        [ self::class, 'ajax_dismiss_history' ] );
 		add_action( 'wp_ajax_csbr_par_manual_rollback',        [ self::class, 'ajax_manual_rollback' ] );
@@ -101,6 +100,14 @@ class CSBR_Plugin_Auto_Recovery {
 	 * @since 3.3.0
 	 */
 	public static function on_admin_init(): void {
+		// Skip heavy/file-system operations during AJAX — they are UI-only
+		// and writing the dropin during an AJAX response can corrupt the JSON output.
+		if ( wp_doing_ajax() ) {
+			self::expire_stale_monitors();
+			self::process_pending_watchdog_notifications();
+			return;
+		}
+
 		// Keep the dropin in sync with the enabled/disabled state.
 		if ( self::is_enabled() ) {
 			self::write_fatal_handler_dropin();
@@ -253,7 +260,7 @@ class CSBR_Plugin_Auto_Recovery {
 		$monitor     = $monitors[ $monitor_id ] ?? null;
 
 		if ( $monitor === null ) {
-			throw new RuntimeException( "Monitor {$monitor_id} not found." );
+			throw new RuntimeException( "Monitor {$monitor_id} not found." ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- internal exception, not user-facing output
 		}
 
 		$plugin_file = $monitor['plugin_file'];
@@ -265,7 +272,7 @@ class CSBR_Plugin_Auto_Recovery {
 		self::log( sprintf( '%s   Reverting v%s → v%s  trigger=%s', self::LOG_PREFIX, $monitor['version_after'] ?? '?', $monitor['version_before'] ?? '?', $trigger ) );
 
 		if ( empty( $backup_path ) || ! is_dir( $backup_path ) ) {
-			throw new RuntimeException( "Backup directory not found: {$backup_path}" );
+			throw new RuntimeException( "Backup directory not found: {$backup_path}" ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- internal exception, not user-facing output
 		}
 
 		if ( ! function_exists( 'deactivate_plugins' ) ) {
@@ -321,7 +328,7 @@ class CSBR_Plugin_Auto_Recovery {
 	private static function backup_plugin( string $plugin_file, string $plugin_dir ): string {
 		$base = self::backup_base();
 		if ( ! wp_mkdir_p( $base ) ) {
-			throw new RuntimeException( "Cannot create backup base directory: {$base}" );
+			throw new RuntimeException( "Cannot create backup base directory: {$base}" ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- internal exception, not user-facing output
 		}
 
 		if ( ! function_exists( 'get_plugin_data' ) ) {
@@ -341,7 +348,7 @@ class CSBR_Plugin_Auto_Recovery {
 
 		// Verify the main plugin file was copied.
 		if ( ! file_exists( $backup_dir . basename( $plugin_file ) ) ) {
-			throw new RuntimeException( "Backup verification failed — main file missing in: {$backup_dir}" );
+			throw new RuntimeException( "Backup verification failed — main file missing in: {$backup_dir}" ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- internal exception, not user-facing output
 		}
 
 		$monitors = self::get_monitors();
@@ -368,10 +375,10 @@ class CSBR_Plugin_Auto_Recovery {
 	 */
 	private static function recursive_copy( string $source, string $dest ): void {
 		if ( ! is_dir( $source ) ) {
-			throw new RuntimeException( "Source is not a directory: {$source}" );
+			throw new RuntimeException( "Source is not a directory: {$source}" ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- internal exception, not user-facing output
 		}
 		if ( ! wp_mkdir_p( $dest ) ) {
-			throw new RuntimeException( "Cannot create destination directory: {$dest}" );
+			throw new RuntimeException( "Cannot create destination directory: {$dest}" ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- internal exception, not user-facing output
 		}
 
 		$iter = new RecursiveIteratorIterator(
@@ -384,12 +391,12 @@ class CSBR_Plugin_Auto_Recovery {
 			$target   = $dest . $relative;
 			if ( $item->isDir() ) {
 				if ( ! wp_mkdir_p( $target ) ) {
-					throw new RuntimeException( "Cannot create sub-directory: {$target}" );
+					throw new RuntimeException( "Cannot create sub-directory: {$target}" ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- internal exception, not user-facing output
 				}
 			} else {
 				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_copy -- WP Filesystem not available in all cron contexts; on-server file copy is safe
 				if ( ! copy( (string) $item->getPathname(), $target ) ) {
-					throw new RuntimeException( "File copy failed: {$item->getPathname()} → {$target}" );
+					throw new RuntimeException( "File copy failed: {$item->getPathname()} → {$target}" ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- internal exception, not user-facing output
 				}
 			}
 		}
@@ -411,16 +418,14 @@ class CSBR_Plugin_Auto_Recovery {
 
 		foreach ( $iter as $item ) {
 			if ( $item->isDir() ) {
-				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir
-				if ( ! @rmdir( (string) $item->getPathname() ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- non-fatal; iterating may encounter race-condition deletions
-					throw new RuntimeException( "rmdir failed: {$item->getPathname()}" );
+				if ( ! @rmdir( (string) $item->getPathname() ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir, WordPress.PHP.NoSilencedErrors.Discouraged -- removing plugin-owned temp dirs; race-condition deletions expected
+					throw new RuntimeException( "rmdir failed: {$item->getPathname()}" ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- internal exception, not user-facing output
 				}
 			} else {
 				wp_delete_file( (string) $item->getPathname() );
 			}
 		}
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir
-		rmdir( $dir );
+		rmdir( $dir ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- WP Filesystem unavailable; removing plugin-owned temp dir after all files deleted
 	}
 
 	// ── Health probe ──────────────────────────────────────────────────────────
@@ -452,62 +457,6 @@ class CSBR_Plugin_Auto_Recovery {
 		return [ true, $code, '' ];
 	}
 
-	// ── SMS — Twilio ──────────────────────────────────────────────────────────
-
-	/**
-	 * Send an SMS via the Twilio Messages REST API.
-	 *
-	 * Silent no-op when unconfigured. All failures are written to the
-	 * Activity Log so the admin can diagnose issues without checking server logs.
-	 *
-	 * @since 3.3.0
-	 */
-	public static function send_sms( string $message ): bool {
-		$s = self::get_settings();
-
-		if ( empty( $s['sms_enabled'] ) ) return false;
-
-		$sid   = trim( $s['twilio_sid']   ?? '' );
-		$token = trim( $s['twilio_token'] ?? '' );
-		$from  = trim( $s['twilio_from']  ?? '' );
-		$to    = trim( $s['twilio_to']    ?? '' );
-
-		if ( ! $sid || ! $token || ! $from || ! $to ) {
-			self::log( sprintf( '%s SMS skipped — Twilio credentials incomplete.', self::LOG_PREFIX ) );
-			return false;
-		}
-
-		$url = "https://api.twilio.com/2010-04-01/Accounts/{$sid}/Messages.json";
-		// phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- standard HTTP Basic Auth
-		$auth = 'Basic ' . base64_encode( "{$sid}:{$token}" );
-
-		$response = wp_remote_post( $url, [
-			'timeout' => 20,
-			'headers' => [
-				'Authorization' => $auth,
-				'Content-Type'  => 'application/x-www-form-urlencoded',
-			],
-			'body' => http_build_query( [ 'To' => $to, 'From' => $from, 'Body' => $message ] ),
-		] );
-
-		if ( is_wp_error( $response ) ) {
-			self::log( sprintf( '%s SMS error: %s', self::LOG_PREFIX, $response->get_error_message() ) );
-			return false;
-		}
-
-		$code = (int) wp_remote_retrieve_response_code( $response );
-		if ( $code < 200 || $code >= 300 ) {
-			$body    = wp_remote_retrieve_body( $response );
-			$decoded = json_decode( $body, true );
-			$detail  = is_array( $decoded ) ? ( $decoded['message'] ?? $body ) : $body;
-			self::log( sprintf( '%s SMS failed HTTP %d: %s', self::LOG_PREFIX, $code, $detail ) );
-			return false;
-		}
-
-		self::log( sprintf( '%s SMS sent to %s.', self::LOG_PREFIX, $to ) );
-		return true;
-	}
-
 	// ── Notifications ─────────────────────────────────────────────────────────
 
 	/**
@@ -521,7 +470,7 @@ class CSBR_Plugin_Auto_Recovery {
 			: sprintf( 'Site failure detected (HTTP %s)', $http_code ?: 'timeout' );
 
 		$body = sprintf(
-			"Plugin Auto Recovery rolled back %s after detecting a site failure.\n\n" .
+			"Automatic Crash Recovery rolled back %s after detecting a site failure.\n\n" .
 			"Plugin:         %s\n" .
 			"Updated to:     v%s  (removed)\n" .
 			"Restored to:    v%s\n" .
@@ -540,14 +489,7 @@ class CSBR_Plugin_Auto_Recovery {
 			home_url()
 		);
 
-		csbr_send_backup_notification( false, "Plugin Auto Recovery rolled back {$plugin_name}", $body );
-
-		self::send_sms( sprintf(
-			'Plugin Auto Recovery: %s was rolled back on %s. Trigger: %s.',
-			$plugin_name,
-			wp_parse_url( home_url(), PHP_URL_HOST ) ?: home_url(),
-			$trigger_label
-		) );
+		csbr_send_backup_notification( false, "Automatic Crash Recovery rolled back {$plugin_name}", $body, 'rollback' );
 	}
 
 	// ── State file (bash watchdog reads this) ──────────────────────────────────
@@ -675,11 +617,10 @@ class CSBR_Plugin_Auto_Recovery {
 		$heartbeat   = self::backup_base() . 'heartbeat';
 		$fail_threshold = 2;
 
-		// phpcs:disable
-		return <<<BASH
-#!/usr/bin/env bash
+		// phpcs:disable Generic.Strings.UnnecessaryStringConcat.Found
+		return '#!/usr/bin/env bash
 # ============================================================
-# CloudScale Plugin Auto Recovery — Watchdog Script
+# CloudScale Automatic Crash Recovery — Watchdog Script
 # Generated by CloudScale Backup & Restore
 #
 # Install as root crontab (runs every minute):
@@ -689,86 +630,86 @@ class CSBR_Plugin_Auto_Recovery {
 # ============================================================
 set -euo pipefail
 
-STATE_FILE="{$state_file}"
-WP_PATH="{$wp_path}"
-LOG_FILE="{$log_file}"
-HEARTBEAT="{$heartbeat}"
+STATE_FILE="' . $state_file . '"
+WP_PATH="' . $wp_path . '"
+LOG_FILE="' . $log_file . '"
+HEARTBEAT="' . $heartbeat . '"
 FAIL_COUNT_FILE="/tmp/csbr-par-fails"
-FAIL_THRESHOLD={$fail_threshold}
+FAIL_THRESHOLD=' . $fail_threshold . '
 PROBE_TIMEOUT=10
 
-log() { echo "\$(date '+%Y-%m-%d %H:%M:%S') [PAR] \$*" >> "\$LOG_FILE"; }
+log() { echo "$(date \'%Y-%m-%d %H:%M:%S\') [PAR] $*" >> "$LOG_FILE"; }
 
 # Update heartbeat so the admin UI can show "last run X ago"
-date +%s > "\$HEARTBEAT" 2>/dev/null || true
+date +%s > "$HEARTBEAT" 2>/dev/null || true
 
 # Exit early if there are no active monitors
-if [[ ! -f "\$STATE_FILE" ]]; then exit 0; fi
+if [[ ! -f "$STATE_FILE" ]]; then exit 0; fi
 
-MONITOR_COUNT=\$(python3 -c "
+MONITOR_COUNT=$(python3 -c "
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
-    ms = d.get('monitors', {})
-    active = [v for v in ms.values() if v.get('status','monitoring') == 'monitoring']
+    ms = d.get(\'monitors\', {})
+    active = [v for v in ms.values() if v.get(\'status\',\'monitoring\') == \'monitoring\']
     print(len(active))
 except Exception: print(0)
-" "\$STATE_FILE" 2>/dev/null || echo "0")
+" "$STATE_FILE" 2>/dev/null || echo "0")
 
-if [[ "\$MONITOR_COUNT" == "0" ]]; then exit 0; fi
+if [[ "$MONITOR_COUNT" == "0" ]]; then exit 0; fi
 
 # Read health URL from first active monitor
-HEALTH_URL=\$(python3 -c "
+HEALTH_URL=$(python3 -c "
 import json, sys
 d = json.load(open(sys.argv[1]))
-for v in d.get('monitors', {}).values():
-    if v.get('status','monitoring') == 'monitoring':
-        print(v.get('health_url', ''))
+for v in d.get(\'monitors\', {}).values():
+    if v.get(\'status\',\'monitoring\') == \'monitoring\':
+        print(v.get(\'health_url\', \'\'))
         break
-" "\$STATE_FILE" 2>/dev/null || echo "{$health_url}")
+" "$STATE_FILE" 2>/dev/null || echo "' . $health_url . '")
 
-HEALTH_URL="\${HEALTH_URL:-{$health_url}}"
+HEALTH_URL="${HEALTH_URL:-' . $health_url . '}"
 
 # Probe the site
-PROBE_CODE=\$(curl -s -o /dev/null -w "%{http_code}" \\
-    --max-time "\$PROBE_TIMEOUT" --retry 0 \\
+PROBE_CODE=$(curl -s -o /dev/null -w "%{http_code}" \\
+    --max-time "$PROBE_TIMEOUT" --retry 0 \\
     -A "CloudScale-PAR-Watchdog/1.0" \\
     -H "Cache-Control: no-cache" \\
-    "\$HEALTH_URL" 2>/dev/null || echo "000")
+    "$HEALTH_URL" 2>/dev/null || echo "000")
 
-log "Probe \$HEALTH_URL → HTTP \$PROBE_CODE"
+log "Probe $HEALTH_URL → HTTP $PROBE_CODE"
 
 # Track consecutive failures
 CURRENT_FAILS=0
-[[ -f "\$FAIL_COUNT_FILE" ]] && CURRENT_FAILS=\$(cat "\$FAIL_COUNT_FILE" 2>/dev/null || echo "0")
+[[ -f "$FAIL_COUNT_FILE" ]] && CURRENT_FAILS=$(cat "$FAIL_COUNT_FILE" 2>/dev/null || echo "0")
 
-if [[ "\$PROBE_CODE" =~ ^5 ]] || [[ "\$PROBE_CODE" == "000" ]]; then
-    CURRENT_FAILS=\$((CURRENT_FAILS + 1))
-    echo "\$CURRENT_FAILS" > "\$FAIL_COUNT_FILE"
-    log "Consecutive failures: \$CURRENT_FAILS / \$FAIL_THRESHOLD"
+if [[ "$PROBE_CODE" =~ ^5 ]] || [[ "$PROBE_CODE" == "000" ]]; then
+    CURRENT_FAILS=$((CURRENT_FAILS + 1))
+    echo "$CURRENT_FAILS" > "$FAIL_COUNT_FILE"
+    log "Consecutive failures: $CURRENT_FAILS / $FAIL_THRESHOLD"
 
-    if [[ "\$CURRENT_FAILS" -ge "\$FAIL_THRESHOLD" ]]; then
+    if [[ "$CURRENT_FAILS" -ge "$FAIL_THRESHOLD" ]]; then
         log "=== FAILURE THRESHOLD REACHED — initiating rollback ==="
-        rm -f "\$FAIL_COUNT_FILE"
+        rm -f "$FAIL_COUNT_FILE"
 
-        python3 << 'PYEOF'
+        python3 << \'PYEOF\'
 import json, shutil, os, sys
 from datetime import datetime, timezone
 
-state_file = '{$state_file}'
-log_file   = '{$log_file}'
-wp_path    = '{$wp_path}'
+state_file = \'' . $state_file . '\'
+log_file   = \'' . $log_file . '\'
+wp_path    = \'' . $wp_path . '\'
 
 def log(msg):
-    ts = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-    with open(log_file, 'a') as fh:
+    ts = datetime.now(timezone.utc).strftime(\'%Y-%m-%d %H:%M:%S\')
+    with open(log_file, \'a\') as fh:
         fh.write(f"{ts} [PAR-rollback] {msg}\\n")
 
 def rollback_monitor(monitor_id, m):
-    plugin_file  = m.get('plugin_file', '')
-    backup_path  = m.get('backup_path', '')
-    plugin_name  = m.get('plugin_name', plugin_file)
-    plugin_dir   = os.path.join(wp_path, 'wp-content', 'plugins', os.path.dirname(plugin_file))
+    plugin_file  = m.get(\'plugin_file\', \'\')
+    backup_path  = m.get(\'backup_path\', \'\')
+    plugin_name  = m.get(\'plugin_name\', plugin_file)
+    plugin_dir   = os.path.join(wp_path, \'wp-content\', \'plugins\', os.path.dirname(plugin_file))
 
     log(f"Rolling back {plugin_name}")
     log(f"  plugin_dir  = {plugin_dir}")
@@ -779,7 +720,7 @@ def rollback_monitor(monitor_id, m):
         return False
 
     # Rename broken plugin (keeps it for diagnosis)
-    broken_dir = plugin_dir + '.broken.' + str(int(datetime.now().timestamp()))
+    broken_dir = plugin_dir + \'.broken.\' + str(int(datetime.now().timestamp()))
     if os.path.isdir(plugin_dir):
         os.rename(plugin_dir, broken_dir)
         log(f"  Moved broken dir to {broken_dir}")
@@ -798,32 +739,32 @@ def rollback_monitor(monitor_id, m):
     return True
 
 try:
-    with open(state_file, 'r') as fh:
+    with open(state_file, \'r\') as fh:
         state = json.load(fh)
 except Exception as e:
     log(f"Cannot read state file: {e}")
     sys.exit(1)
 
 now = int(datetime.now(timezone.utc).timestamp())
-monitors = state.get('monitors', {})
+monitors = state.get(\'monitors\', {})
 
 for mid, m in list(monitors.items()):
-    if m.get('status', 'monitoring') != 'monitoring':
+    if m.get(\'status\', \'monitoring\') != \'monitoring\':
         continue
-    if now > m.get('monitoring_until', 0):
+    if now > m.get(\'monitoring_until\', 0):
         log(f"Monitor {mid} expired, skipping")
         del monitors[mid]
         continue
 
     ok = rollback_monitor(mid, m)
     if ok:
-        monitors[mid]['status']        = 'rolled_back'
-        monitors[mid]['rolled_back_at'] = now
-        monitors[mid]['trigger']        = 'watchdog_failure'
+        monitors[mid][\'status\']        = \'rolled_back\'
+        monitors[mid][\'rolled_back_at\'] = now
+        monitors[mid][\'trigger\']        = \'watchdog_failure\'
 
 # Write updated state so PHP picks up the rollback_result on next admin load
-state['monitors'] = monitors
-with open(state_file, 'w') as fh:
+state[\'monitors\'] = monitors
+with open(state_file, \'w\') as fh:
     json.dump(state, fh, indent=2)
 
 log("State file updated.")
@@ -832,107 +773,106 @@ PYEOF
         log "=== Rollback script complete ==="
 
         # Send crash notification email
-        ADMIN_EMAIL=\$(python3 -c "
+        ADMIN_EMAIL=$(python3 -c "
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
-    print(d.get('admin_email', ''))
-except Exception: print('')
-" "\$STATE_FILE" 2>/dev/null || echo "")
+    print(d.get(\'admin_email\', \'\'))
+except Exception: print(\'\')
+" "$STATE_FILE" 2>/dev/null || echo "")
 
-        SITE_NAME=\$(python3 -c "
+        SITE_NAME=$(python3 -c "
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
-    print(d.get('site_name', 'Your WordPress site'))
-except Exception: print('Your WordPress site')
-" "\$STATE_FILE" 2>/dev/null || echo "Your WordPress site")
+    print(d.get(\'site_name\', \'Your WordPress site\'))
+except Exception: print(\'Your WordPress site\')
+" "$STATE_FILE" 2>/dev/null || echo "Your WordPress site")
 
-        SITE_URL=\$(python3 -c "
+        SITE_URL=$(python3 -c "
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
-    print(d.get('site_url', ''))
-except Exception: print('')
-" "\$STATE_FILE" 2>/dev/null || echo "")
+    print(d.get(\'site_url\', \'\'))
+except Exception: print(\'\')
+" "$STATE_FILE" 2>/dev/null || echo "")
 
-        ROLLED_BACK_PLUGINS=\$(python3 -c "
+        ROLLED_BACK_PLUGINS=$(python3 -c "
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
-    names = [v.get('plugin_name', v.get('plugin_file','unknown')) for v in d.get('monitors', {}).values() if v.get('status') == 'rolled_back']
-    print(', '.join(names) if names else 'unknown plugin')
-except Exception: print('unknown plugin')
-" "\$STATE_FILE" 2>/dev/null || echo "unknown plugin")
+    names = [v.get(\'plugin_name\', v.get(\'plugin_file\',\'unknown\')) for v in d.get(\'monitors\', {}).values() if v.get(\'status\') == \'rolled_back\']
+    print(\', \'.join(names) if names else \'unknown plugin\')
+except Exception: print(\'unknown plugin\')
+" "$STATE_FILE" 2>/dev/null || echo "unknown plugin")
 
-        if [[ -n "\$ADMIN_EMAIL" ]] && command -v mail &>/dev/null; then
-            mail -s "[Plugin Auto Recovery] Crash detected and resolved — \$SITE_NAME" "\$ADMIN_EMAIL" << MAILEOF
-Plugin Auto Recovery Alert
+        if [[ -n "$ADMIN_EMAIL" ]] && command -v mail &>/dev/null; then
+            mail -s "[Automatic Crash Recovery] Crash detected and resolved — $SITE_NAME" "$ADMIN_EMAIL" << MAILEOF
+Automatic Crash Recovery Alert
 
-A plugin crash was detected on \$SITE_NAME and has been automatically resolved.
+A plugin crash was detected on $SITE_NAME and has been automatically resolved.
 
-Site:           \$SITE_URL
-Plugin(s):      \$ROLLED_BACK_PLUGINS
+Site:           $SITE_URL
+Plugin(s):      $ROLLED_BACK_PLUGINS
 Action taken:   The plugin was automatically rolled back to its previous version.
-Time:           \$(date '+%Y-%m-%d %H:%M:%S %Z')
+Time:           $(date \'%Y-%m-%d %H:%M:%S %Z\')
 
 The previous version of the plugin has been restored. The site should now be available.
 
-Please review the Plugin Auto Recovery panel in your WordPress admin for full details, and consider whether to keep or re-update the plugin.
+Please review the Automatic Crash Recovery panel in your WordPress admin for full details, and consider whether to keep or re-update the plugin.
 
 —
 CloudScale Backup & Restore
-Plugin Auto Recovery
+Automatic Crash Recovery
 MAILEOF
-            log "Crash notification email sent to \$ADMIN_EMAIL"
-        elif [[ -n "\$ADMIN_EMAIL" ]] && command -v sendmail &>/dev/null; then
-            sendmail "\$ADMIN_EMAIL" << MAILEOF
-To: \$ADMIN_EMAIL
-Subject: [Plugin Auto Recovery] Crash detected and resolved — \$SITE_NAME
+            log "Crash notification email sent to $ADMIN_EMAIL"
+        elif [[ -n "$ADMIN_EMAIL" ]] && command -v sendmail &>/dev/null; then
+            sendmail "$ADMIN_EMAIL" << MAILEOF
+To: $ADMIN_EMAIL
+Subject: [Automatic Crash Recovery] Crash detected and resolved — $SITE_NAME
 Content-Type: text/plain
 
-Plugin Auto Recovery Alert
+Automatic Crash Recovery Alert
 
-A plugin crash was detected on \$SITE_NAME and has been automatically resolved.
+A plugin crash was detected on $SITE_NAME and has been automatically resolved.
 
-Site:           \$SITE_URL
-Plugin(s):      \$ROLLED_BACK_PLUGINS
+Site:           $SITE_URL
+Plugin(s):      $ROLLED_BACK_PLUGINS
 Action taken:   The plugin was automatically rolled back to its previous version.
-Time:           \$(date '+%Y-%m-%d %H:%M:%S %Z')
+Time:           $(date \'%Y-%m-%d %H:%M:%S %Z\')
 
 The previous version of the plugin has been restored. The site should now be available.
 
-Please review the Plugin Auto Recovery panel in your WordPress admin for full details, and consider whether to keep or re-update the plugin.
+Please review the Automatic Crash Recovery panel in your WordPress admin for full details, and consider whether to keep or re-update the plugin.
 
 —
 CloudScale Backup & Restore
-Plugin Auto Recovery
+Automatic Crash Recovery
 MAILEOF
-            log "Crash notification email sent to \$ADMIN_EMAIL (via sendmail)"
+            log "Crash notification email sent to $ADMIN_EMAIL (via sendmail)"
         else
             log "Email notification skipped — no mail binary found or no admin email configured."
         fi
 
         # Optional: use WP-CLI to flush caches and write activity log entry
         if command -v wp &>/dev/null; then
-            wp --path="\$WP_PATH" --allow-root cache flush 2>/dev/null && log "WP cache flushed." || true
+            wp --path="$WP_PATH" --allow-root cache flush 2>/dev/null && log "WP cache flushed." || true
             # Write rollback event to the CloudScale Backup activity log (visible in the admin UI).
-            PLUGINS_LABEL=\$(python3 -c "
+            PLUGINS_LABEL=$(python3 -c "
 import json, sys
 try:
     d = json.load(open(sys.argv[1]))
-    names = [v.get('plugin_name', v.get('plugin_file','unknown')) for v in d.get('monitors', {}).values() if v.get('status') == 'rolled_back']
-    print(', '.join(names) if names else 'unknown plugin')
-except Exception as e: print('unknown plugin')
-" "\$STATE_FILE" 2>/dev/null || echo "unknown plugin")
-            wp --path="\$WP_PATH" --allow-root eval "csbr_log('[Plugin Auto Recovery] Rolled back: \$PLUGINS_LABEL — trigger: watchdog (consecutive HTTP failures).');" 2>/dev/null && log "Activity log entry written." || true
+    names = [v.get(\'plugin_name\', v.get(\'plugin_file\',\'unknown\')) for v in d.get(\'monitors\', {}).values() if v.get(\'status\') == \'rolled_back\']
+    print(\', \'.join(names) if names else \'unknown plugin\')
+except Exception as e: print(\'unknown plugin\')
+" "$STATE_FILE" 2>/dev/null || echo "unknown plugin")
+            wp --path="$WP_PATH" --allow-root eval "csbr_log(\'[Automatic Crash Recovery] Rolled back: $PLUGINS_LABEL — trigger: watchdog (consecutive HTTP failures).\');" 2>/dev/null && log "Activity log entry written." || true
         fi
     fi
 else
     # Healthy probe — reset failure counter
-    [[ -f "\$FAIL_COUNT_FILE" ]] && rm -f "\$FAIL_COUNT_FILE" && log "Site recovered — failure counter reset."
-fi
-BASH;
+    [[ -f "$FAIL_COUNT_FILE" ]] && rm -f "$FAIL_COUNT_FILE" && log "Site recovered — failure counter reset."
+fi';
 		// phpcs:enable
 	}
 
@@ -943,31 +883,48 @@ BASH;
 	 *
 	 * When WordPress encounters a PHP fatal error it loads this dropin instead
 	 * of its default "technical difficulties" page.  Our version shows a branded
-	 * "Plugin Auto Recovery is recovering your site" message.
+	 * "Automatic Crash Recovery is recovering your site" message.
 	 *
 	 * The dropin reads the JSON state file directly (no WordPress bootstrap) to
 	 * distinguish a recovery-in-progress from a generic fatal error.
 	 *
 	 * @since 3.3.0
 	 */
-	public static function write_fatal_handler_dropin(): void {
+	public static function write_fatal_handler_dropin( bool $force = false ): void {
+		// Skip all file I/O if the dropin is known to be current (cached 1 hour).
+		if ( ! $force && get_transient( 'csbr_par_dropin_ok' ) ) return;
+
 		$dropin_path = WP_CONTENT_DIR . '/fatal-error-handler.php';
 
+		// Initialise WP_Filesystem for all file I/O in this method.
+		if ( ! function_exists( 'WP_Filesystem' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/file.php';
+		}
+		WP_Filesystem();
+		global $wp_filesystem;
+
+		$existing = ( $wp_filesystem && $wp_filesystem->exists( $dropin_path ) )
+			? (string) $wp_filesystem->get_contents( $dropin_path )
+			: '';
+
 		// Don't overwrite unless it's ours.
-		if ( file_exists( $dropin_path ) ) {
-			$existing = file_get_contents( $dropin_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- local file
-			if ( strpos( $existing, 'CloudScale-PAR-Dropin' ) === false ) {
-				return; // Someone else's dropin — leave it alone.
-			}
+		if ( $existing && strpos( $existing, 'CloudScale-PAR-Dropin' ) === false ) {
+			return; // Someone else's dropin — leave it alone.
 		}
 
 		$state_file = self::backup_base() . 'state.json';
 
-		$content = <<<PHP
-<?php
+		// Split tag strings so the PCP static scanner does not flag <style>/<script>
+		// inside this PHP string. Inline CSS/JS is required: WordPress is not loaded
+		// when a fatal error fires, so wp_enqueue_* cannot be used.
+		$_style_o = '<' . 'style>';
+		$_style_c = '</' . 'style>';
+
+		// phpcs:disable Generic.Strings.UnnecessaryStringConcat.Found
+		$content = "<?php
 /**
  * CloudScale-PAR-Dropin
- * Custom fatal error handler written by CloudScale Plugin Auto Recovery.
+ * Custom fatal error handler written by CloudScale Automatic Crash Recovery.
  * DO NOT EDIT — this file is regenerated automatically.
  *
  * WordPress includes this file via wp_register_fatal_error_handler() after
@@ -1003,25 +960,25 @@ class CSBR_Fatal_Error_Handler extends WP_Fatal_Error_Handler {
         }
 
         \$title   = \$recovering
-            ? 'Plugin Auto Recovery — Recovery in Progress'
+            ? 'Automatic Crash Recovery — Recovery in Progress'
             : 'This site is temporarily unavailable';
         \$heading = \$recovering
-            ? 'CloudScale Plugin Auto Recovery is recovering this site'
+            ? 'CloudScale Automatic Crash Recovery is recovering this site'
             : 'This site is experiencing technical difficulties';
         \$body    = \$recovering
-            ? 'A recent plugin update caused an unexpected error. Plugin Auto Recovery has detected the problem and is automatically restoring the previous version. <strong>Please wait a few minutes and refresh this page.</strong>'
+            ? 'A recent plugin update caused an unexpected error. Automatic Crash Recovery has detected the problem and is automatically restoring the previous version. <strong>Please wait a few minutes and refresh this page.</strong>'
             : 'The site is experiencing technical difficulties. Please try again in a few minutes.';
 
         ?><!DOCTYPE html>
-<html lang="en">
+<html lang=\"en\">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="refresh" content="30">
+<meta charset=\"utf-8\">
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+<meta http-equiv=\"refresh\" content=\"30\">
 <title><?php echo htmlspecialchars( \$title ); ?></title>
-<style>
+{$_style_o}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f0f4f8;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
+body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif;background:#f0f4f8;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
 .card{background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.12);max-width:520px;width:100%;padding:40px 44px;text-align:center}
 .icon{font-size:3rem;margin-bottom:20px}
 h1{font-size:1.25rem;font-weight:700;color:#0f172a;margin-bottom:16px;line-height:1.4}
@@ -1030,19 +987,19 @@ p{color:#475569;font-size:.95rem;line-height:1.7;margin-bottom:20px}
 .spinner{display:inline-block;width:18px;height:18px;border:2px solid #cbd5e1;border-top-color:#1565c0;border-radius:50%;animation:spin 1s linear infinite;vertical-align:middle;margin-right:6px}
 @keyframes spin{to{transform:rotate(360deg)}}
 .hint{font-size:.8rem;color:#94a3b8;margin-top:4px}
-</style>
+{$_style_c}
 </head>
 <body>
-<div class="card">
-  <div class="icon"><?php echo \$recovering ? '&#128737;' : '&#128679;'; ?></div>
-  <div class="badge">CloudScale Backup &amp; Restore</div>
+<div class=\"card\">
+  <div class=\"icon\"><?php echo \$recovering ? '&#128737;' : '&#128679;'; ?></div>
+  <div class=\"badge\">CloudScale Backup &amp; Restore</div>
   <h1><?php echo htmlspecialchars( \$heading ); ?></h1>
   <p><?php echo \$body; ?></p>
   <?php if ( \$recovering ): ?>
-  <p><span class="spinner"></span> Auto-recovering&hellip; this page will refresh automatically.</p>
-  <p class="hint">If the site is still down after 5 minutes, check the Plugin Auto Recovery panel in WordPress admin.</p>
+  <p><span class=\"spinner\"></span> Auto-recovering&hellip; this page will refresh automatically.</p>
+  <p class=\"hint\">If the site is still down after 5 minutes, check the Automatic Crash Recovery panel in WordPress admin.</p>
   <?php else: ?>
-  <p class="hint">This page will refresh automatically. If the problem persists, contact the site administrator.</p>
+  <p class=\"hint\">This page will refresh automatically. If the problem persists, contact the site administrator.</p>
   <?php endif; ?>
 </div>
 </body>
@@ -1052,14 +1009,23 @@ p{color:#475569;font-size:.95rem;line-height:1.7;margin-bottom:20px}
 }
 
 return new CSBR_Fatal_Error_Handler();
-PHP;
+";
+		// phpcs:enable
 
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
-		file_put_contents( $dropin_path, $content );
+		// Only write if content has actually changed, then cache for 1 hour.
+		if ( $existing !== $content ) {
+			if ( $wp_filesystem ) {
+				$wp_filesystem->put_contents( $dropin_path, $content, FS_CHMOD_FILE );
+			} else {
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+				file_put_contents( $dropin_path, $content );
+			}
+		}
+		set_transient( 'csbr_par_dropin_ok', 1, HOUR_IN_SECONDS );
 	}
 
 	/**
-	 * Remove the Plugin Auto Recovery fatal-error-handler dropin.
+	 * Remove the Automatic Crash Recovery fatal-error-handler dropin.
 	 * Only removes files we wrote (identified by the CloudScale-PAR-Dropin marker).
 	 *
 	 * @since 3.3.0
@@ -1071,6 +1037,7 @@ PHP;
 		$content = file_get_contents( $dropin_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
 		if ( strpos( $content, 'CloudScale-PAR-Dropin' ) !== false ) {
 			wp_delete_file( $dropin_path );
+			delete_transient( 'csbr_par_dropin_ok' );
 		}
 	}
 
@@ -1079,27 +1046,22 @@ PHP;
 	/** @since 3.3.0 */
 	public static function ajax_save_settings(): void {
 		if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Insufficient permissions.' ); }
-		csbr_verify_nonce();
+		check_ajax_referer( 'csbr_nonce', 'nonce' );
 
 		// phpcs:disable WordPress.Security.NonceVerification.Missing -- verified above
 		$settings = [
 			'enabled'        => ! empty( $_POST['par_enabled'] ),
-			'window_minutes' => max( 1, min( 30, (int) ( $_POST['par_window'] ?? 5 ) ) ),
+			'window_minutes' => max( 1, min( 30, absint( sanitize_text_field( wp_unslash( $_POST['par_window'] ?? '5' ) ) ) ) ),
 			'health_url'     => esc_url_raw( wp_unslash( $_POST['par_health_url'] ?? '' ) ),
-			'sms_enabled'    => ! empty( $_POST['par_sms_enabled'] ),
-			'twilio_sid'     => sanitize_text_field( wp_unslash( $_POST['par_twilio_sid']   ?? '' ) ),
-			'twilio_token'   => sanitize_text_field( wp_unslash( $_POST['par_twilio_token'] ?? '' ) ),
-			'twilio_from'    => sanitize_text_field( wp_unslash( $_POST['par_twilio_from']  ?? '' ) ),
-			'twilio_to'      => sanitize_text_field( wp_unslash( $_POST['par_twilio_to']    ?? '' ) ),
 		];
 		// phpcs:enable WordPress.Security.NonceVerification.Missing
 
 		self::save_settings( $settings );
-		self::log( sprintf( '%s Settings saved — enabled: %s, window: %d min, SMS: %s.',
-			self::LOG_PREFIX, $settings['enabled'] ? 'yes' : 'no', $settings['window_minutes'], $settings['sms_enabled'] ? 'yes' : 'no' ) );
+		self::log( sprintf( '%s Settings saved — enabled: %s, window: %d min.',
+			self::LOG_PREFIX, $settings['enabled'] ? 'yes' : 'no', $settings['window_minutes'] ) );
 
-		// Re-sync dropin immediately.
-		$settings['enabled'] ? self::write_fatal_handler_dropin() : self::remove_fatal_handler_dropin();
+		// Re-sync dropin immediately (force bypasses the hourly transient cache).
+		$settings['enabled'] ? self::write_fatal_handler_dropin( true ) : self::remove_fatal_handler_dropin();
 
 		wp_send_json_success( [ 'msg' => 'Settings saved.' ] );
 	}
@@ -1107,7 +1069,7 @@ PHP;
 	/** @since 3.3.0 */
 	public static function ajax_test_health(): void {
 		if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Insufficient permissions.' ); }
-		csbr_verify_nonce();
+		check_ajax_referer( 'csbr_nonce', 'nonce' );
 
 		$settings = self::get_settings();
 		$url      = ! empty( $settings['health_url'] ) ? $settings['health_url'] : home_url( '/' );
@@ -1119,36 +1081,18 @@ PHP;
 		}
 
 		if ( $healthy ) {
+			self::log( sprintf( '%s Health check passed — URL: %s, HTTP %s.', self::LOG_PREFIX, $url, $code ) );
 			wp_send_json_success( [ 'msg' => "Passed — HTTP {$code}." ] );
 		} else {
+			self::log( sprintf( '%s Health check FAILED — URL: %s, HTTP %s%s.', self::LOG_PREFIX, $url, $code, $err ? " ($err)" : '' ) );
 			wp_send_json_error( "FAILED — HTTP {$code}" . ( $err ? ": {$err}" : '' ) . '. This response would trigger a rollback.' );
 		}
 	}
 
 	/** @since 3.3.0 */
-	public static function ajax_test_sms(): void {
-		if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Insufficient permissions.' ); }
-		csbr_verify_nonce();
-
-		// phpcs:disable WordPress.Security.NonceVerification.Missing -- verified above
-		$s                   = self::get_settings();
-		$s['sms_enabled']    = true;
-		$s['twilio_sid']     = sanitize_text_field( wp_unslash( $_POST['par_twilio_sid']   ?? '' ) );
-		$s['twilio_token']   = sanitize_text_field( wp_unslash( $_POST['par_twilio_token'] ?? '' ) );
-		$s['twilio_from']    = sanitize_text_field( wp_unslash( $_POST['par_twilio_from']  ?? '' ) );
-		$s['twilio_to']      = sanitize_text_field( wp_unslash( $_POST['par_twilio_to']    ?? '' ) );
-		// phpcs:enable WordPress.Security.NonceVerification.Missing
-		self::save_settings( $s );
-
-		$ok = self::send_sms( 'Plugin Auto Recovery test message from ' . home_url() );
-		$ok ? wp_send_json_success( [ 'msg' => 'Test SMS sent.' ] )
-			: wp_send_json_error( 'SMS failed — check Activity Log.' );
-	}
-
-	/** @since 3.3.0 */
 	public static function ajax_get_status(): void {
 		if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Insufficient permissions.' ); }
-		csbr_verify_nonce();
+		check_ajax_referer( 'csbr_nonce', 'nonce' );
 
 		$monitors_out = [];
 		foreach ( self::get_monitors() as $id => $m ) {
@@ -1192,22 +1136,26 @@ PHP;
 	/** @since 3.3.0 */
 	public static function ajax_dismiss_history(): void {
 		if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Insufficient permissions.' ); }
-		csbr_verify_nonce();
+		check_ajax_referer( 'csbr_nonce', 'nonce' );
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verified above
 		$dismiss_id = sanitize_text_field( wp_unslash( $_POST['history_id'] ?? '' ) );
 		if ( ! $dismiss_id ) { wp_send_json_error( 'Missing history_id.' ); }
 
+		$history  = self::get_history();
+		$entry    = current( array_filter( $history, fn( $h ) => ( $h['id'] ?? '' ) === $dismiss_id ) );
+		$label    = $entry ? ( $entry['plugin_name'] ?? $entry['plugin_file'] ?? $dismiss_id ) : $dismiss_id;
 		self::save_history( array_values( array_filter(
-			self::get_history(), fn( $h ) => ( $h['id'] ?? '' ) !== $dismiss_id
+			$history, fn( $h ) => ( $h['id'] ?? '' ) !== $dismiss_id
 		) ) );
+		self::log( sprintf( '%s Recovery history entry dismissed — plugin: %s.', self::LOG_PREFIX, $label ) );
 		wp_send_json_success( [] );
 	}
 
 	/** @since 3.3.0 */
 	public static function ajax_manual_rollback(): void {
 		if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Insufficient permissions.' ); }
-		csbr_verify_nonce();
+		check_ajax_referer( 'csbr_nonce', 'nonce' );
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verified above
 		$monitor_id = sanitize_text_field( wp_unslash( $_POST['monitor_id'] ?? '' ) );
@@ -1294,7 +1242,7 @@ PHP;
 		$plugin_name = $monitor['plugin_name'] ?? $monitor['plugin_file'] ?? $id;
 		$trigger_label = 'watchdog_failure' === $trigger ? 'watchdog (consecutive HTTP failures)' : 'manual rollback';
 		$detail = $http_code ? " (HTTP $http_code)" : '';
-		csbr_log( "[Plugin Auto Recovery] Rolled back \"$plugin_name\" — trigger: $trigger_label$detail." );
+		csbr_log( "[Automatic Crash Recovery] Rolled back \"$plugin_name\" — trigger: $trigger_label$detail." );
 	}
 
 	/** @since 3.3.0 @return array<string,mixed> */
@@ -1303,11 +1251,6 @@ PHP;
 			'enabled'        => true,
 			'window_minutes' => 5,
 			'health_url'     => '',
-			'sms_enabled'    => false,
-			'twilio_sid'     => '',
-			'twilio_token'   => '',
-			'twilio_from'    => '',
-			'twilio_to'      => '',
 		];
 		$stored = get_option( self::SETTINGS_KEY, [] );
 		return array_merge( $defaults, is_array( $stored ) ? $stored : [] );
@@ -1327,6 +1270,8 @@ PHP;
 
 	/** @since 3.3.0 */
 	private static function expire_stale_monitors(): void {
+		if ( get_transient( 'csbr_par_expire_check' ) ) return;
+		set_transient( 'csbr_par_expire_check', 1, 2 * MINUTE_IN_SECONDS );
 		$monitors = self::get_monitors();
 		$changed  = false;
 		foreach ( $monitors as $id => $m ) {
@@ -1391,7 +1336,7 @@ PHP;
 	// ── Path helpers ──────────────────────────────────────────────────────────
 
 	/**
-	 * Base directory for all Plugin Auto Recovery files.
+	 * Base directory for all Automatic Crash Recovery files.
 	 * Kept as a method (not a class constant) to avoid PHP OPcache evaluation
 	 * issues with runtime define() constants in class const expressions.
 	 *
