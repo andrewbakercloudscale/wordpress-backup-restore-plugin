@@ -4,7 +4,7 @@ Tags: backup, restore, database, scheduled backup, maintenance mode
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 3.2.281
+Stable tag: 3.2.326
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -297,6 +297,35 @@ personal user data is sent. No data is transmitted unless Twilio credentials
 have been explicitly entered and the SMS feature is enabled.
 Terms of Service: https://www.twilio.com/en-us/legal/tos
 Privacy Policy: https://www.twilio.com/en-us/legal/privacy
+
+= ntfy (optional push notifications) =
+When ntfy is enabled, the plugin sends a push notification to the
+administrator-configured ntfy topic URL on backup, restore, and plugin rollback
+events. The notification contains the site name and a brief status message (e.g.
+"Backup completed" or "Plugin rolled back"). No backup data, no personal user
+data, and no authentication credentials are transmitted in the notification
+payload. No data is sent unless ntfy has been explicitly enabled and a topic URL
+entered by the administrator.
+
+The plugin defaults to the hosted ntfy.sh service, but any self-hosted ntfy
+server URL may be entered instead. When using the hosted ntfy.sh service:
+Terms of Service: https://ntfy.sh/tos
+Privacy Policy: https://ntfy.sh/privacy
+
+== Files written outside the plugin folder ==
+
+The Automatic Crash Recovery feature writes a single file outside the plugin
+folder when it is enabled: `wp-content/fatal-error-handler.php`. This is a
+WordPress-recognised drop-in file (documented in the WordPress Developer
+Handbook under `get_dropins()`). WordPress core checks for this file on every
+request; if present, it replaces the default fatal-error screen with a custom
+handler. The plugin uses this mechanism to show a branded recovery page to
+visitors while a crash is being fixed, instead of a blank white screen.
+
+The file is written using the WordPress Filesystem API (WP_Filesystem). It is
+only written when the feature is enabled, only overwritten if it was written by
+this plugin (identified by an internal marker), and is deleted when the feature
+is disabled or the plugin is uninstalled. No personal data is stored in this file.
 
 == Privacy Policy ==
 
