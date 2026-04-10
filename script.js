@@ -30,10 +30,10 @@ jQuery(function ($) {
         applyScheduleState($(this).is(':checked'));
     });
 
-    // Notify toggle
-    $('#cs-notify-enabled').on('change', function () {
-        $('#cs-notify-controls').toggle($(this).is(':checked'));
-    });
+
+    // Show/hide success-failure filter when backup checkbox is toggled
+    $('#cs-sms-on-backup').on('change',  function () { $('#cs-sms-backup-filter').toggle($(this).is(':checked')); });
+    $('#cs-ntfy-on-backup').on('change', function () { $('#cs-ntfy-backup-filter').toggle($(this).is(':checked')); });
 
     // Size email + password inputs to fit the email address text + 20px buffer
     (function () {
@@ -81,6 +81,88 @@ jQuery(function ($) {
             complete: function () {
                 $btn.prop('disabled', false);
             }
+        });
+    });
+
+    // Send test SMS
+    $('#cs-sms-test-btn').on('click', function () {
+        var $btn = $(this).prop('disabled', true);
+        var $msg = $('#cs-sms-test-msg');
+        $msg.text('Sending\u2026').css('color', '#666');
+        $.ajax({
+            url: CSBR.ajax_url, method: 'POST',
+            data: {
+                action: 'csbr_send_test_sms', nonce: CSBR.nonce,
+                sms_sid:   $('#cs-sms-sid').val(),
+                sms_token: $('#cs-sms-token').val(),
+                sms_from:  $('#cs-sms-from').val(),
+                sms_to:    $('#cs-sms-to').val(),
+            },
+            success: function (res) {
+                var d = res.data || {};
+                if (res.success) { $msg.text('\u2713 ' + (d.msg || 'Sent.')).css('color', '#2e7d32'); }
+                else             { $msg.text('\u2717 Failed \u2014 Please set up Twilio.').css('color', '#c62828'); }
+            },
+            error: function () { $msg.text('\u2717 Request error.').css('color', '#c62828'); },
+            complete: function () { $btn.prop('disabled', false); }
+        });
+    });
+
+    // Send test ntfy
+    $('#cs-ntfy-test-btn').on('click', function () {
+        var $btn = $(this).prop('disabled', true);
+        var $msg = $('#cs-ntfy-test-msg');
+        $msg.text('Sending\u2026').css('color', '#666');
+        $.ajax({
+            url: CSBR.ajax_url, method: 'POST',
+            data: { action: 'csbr_send_test_ntfy', nonce: CSBR.nonce, ntfy_url: $('#cs-ntfy-url').val() },
+            success: function (res) {
+                var d = res.data || {};
+                if (res.success) { $msg.text('\u2713 ' + (d.msg || 'Sent.')).css('color', '#2e7d32'); }
+                else             { $msg.text('\u2717 ' + (d.msg || 'Failed.')).css('color', '#c62828'); }
+            },
+            error: function () { $msg.text('\u2717 Request error.').css('color', '#c62828'); },
+            complete: function () { $btn.prop('disabled', false); }
+        });
+    });
+
+    // Save notification settings
+    $('#cs-notify-save-btn').on('click', function () {
+        var $btn = $(this).prop('disabled', true).text('Saving\u2026');
+        var $msg = $('#cs-notify-save-msg');
+        $msg.text('').css('color', '#666');
+        $.ajax({
+            url: CSBR.ajax_url, method: 'POST',
+            data: {
+                action: 'csbr_save_notifications', nonce: CSBR.nonce,
+                // Email
+                notify_enabled:     $('#cs-notify-enabled').is(':checked') ? '1' : '',
+                notify_email:       $('#cs-notify-email').val(),
+                notify_on:          $('input[name="notify_on"]:checked').val() || 'both',
+                notify_on_rollback: $('#cs-notify-on-rollback').is(':checked') ? '1' : '',
+                // SMS
+                sms_enabled:        $('#cs-sms-enabled').is(':checked') ? '1' : '',
+                sms_sid:            $('#cs-sms-sid').val(),
+                sms_token:          $('#cs-sms-token').val(),
+                sms_from:           $('#cs-sms-from').val(),
+                sms_to:             $('#cs-sms-to').val(),
+                sms_on_backup:      $('#cs-sms-on-backup').is(':checked') ? '1' : '',
+                sms_on_rollback:    $('#cs-sms-on-rollback').is(':checked') ? '1' : '',
+                sms_on:             $('input[name="sms_on"]:checked').val() || 'both',
+                // ntfy
+                ntfy_enabled:       $('#cs-ntfy-enabled').is(':checked') ? '1' : '',
+                ntfy_url:           $('#cs-ntfy-url').val(),
+                ntfy_on_backup:     $('#cs-ntfy-on-backup').is(':checked') ? '1' : '',
+                ntfy_on_rollback:   $('#cs-ntfy-on-rollback').is(':checked') ? '1' : '',
+                ntfy_on:            $('input[name="ntfy_on"]:checked').val() || 'both',
+            },
+            success: function (res) {
+                var d = res.data || {};
+                if (res.success) { $msg.text('\u2713 ' + (d.msg || 'Saved.')).css('color', '#2e7d32'); }
+                else             { $msg.text('\u2717 ' + (d.msg || 'Error.')).css('color', '#c62828'); }
+            },
+            error: function () { $msg.text('\u2717 Request error.').css('color', '#c62828'); },
+            complete: function () { $btn.prop('disabled', false).text('Save Notification Settings'); }
         });
     });
 
@@ -209,74 +291,6 @@ jQuery(function ($) {
         return bytes.toFixed(i === 0 ? 0 : 2) + ' ' + units[i];
     }
 
-    function updateBackupTotal() {
-        var sizes = window.CSBR_SIZES || {};
-
-        // Sum raw uncompressed filesystem sizes
-        var total = 0;
-        var unknown = false;
-
-        if ($('#cs-include-db').is(':checked')) {
-            if (sizes.db > 0) total += sizes.db; else unknown = true;
-        }
-        if ($('#cs-include-media').is(':checked'))     total += sizes.media     || 0;
-        if ($('#cs-include-plugins').is(':checked'))   total += sizes.plugins   || 0;
-        if ($('#cs-include-themes').is(':checked'))    total += sizes.themes    || 0;
-        if ($('#cs-include-mu').is(':checked'))        total += sizes.mu        || 0;
-        if ($('#cs-include-languages').is(':checked')) total += sizes.languages || 0;
-        if ($('#cs-include-dropins').is(':checked'))      total += sizes.dropins      || 0;
-        if ($('#cs-include-htaccess').is(':checked'))    total += sizes.htaccess     || 0;
-        if ($('#cs-include-wpconfig').is(':checked'))    total += sizes.wpconfig     || 0;
-
-        var totalText;
-        if (total === 0 && unknown) {
-            totalText = '~unknown';
-        } else if (total === 0) {
-            totalText = '—';
-        } else {
-            var uncompressed = (unknown ? '~' : '') + formatBytes(total);
-            if (sizes.latest > 0) {
-                // We have a real prior backup — use its compression ratio to estimate zip size
-                // Ratio = last zip size / last uncompressed total (approximated from current filesystem)
-                // Simpler: just show actual last zip size as the compressed estimate
-                totalText = uncompressed + ' uncompressed'
-                    + ' <span class="cs-est-note">/ ~' + formatBytes(sizes.latest) + ' zipped (based on last backup)</span>';
-            } else {
-                // No prior backup — rough 50% compression guess for text-heavy sites
-                var guessed = Math.round(total * 0.5);
-                totalText = uncompressed + ' uncompressed'
-                    + ' <span class="cs-est-note">/ ~' + formatBytes(guessed) + ' zipped (est.)</span>';
-            }
-        }
-        $('#cs-total-size').html(totalText);
-
-        // Warn if estimated total exceeds free space
-        var free = sizes.free || 0;
-        var $warnRow = $('#cs-space-warn-row');
-        var $warn    = $('#cs-space-warn');
-
-        if (free > 0 && total > 0) {
-            if (total > free) {
-                $warn.text('⚠ Estimated backup exceeds free disk space — backup may fail.');
-                $warnRow.show();
-            } else if (total > free * 0.8) {
-                $warn.text('⚠ Estimated backup will use over 80% of remaining free space.');
-                $warnRow.show();
-            } else {
-                $warnRow.hide();
-            }
-        } else {
-            $warnRow.hide();
-        }
-    }
-
-    // Run on load and whenever a backup option checkbox changes
-    updateBackupTotal();
-    $('#cs-include-db, #cs-include-media, #cs-include-plugins, #cs-include-themes, ' +
-       '#cs-include-mu, #cs-include-languages, #cs-include-dropins, ' +
-       '#cs-include-htaccess, #cs-include-wpconfig')
-        .on('change', updateBackupTotal);
-
     // ================================================================
     // Run Backup
     // ================================================================
@@ -285,15 +299,16 @@ jQuery(function ($) {
         return {
             action:          'csbr_start_backup',
             nonce:           CSBR.nonce,
-            include_db:        $('#cs-include-db').is(':checked')        ? 1 : 0,
-            include_media:     $('#cs-include-media').is(':checked')     ? 1 : 0,
-            include_plugins:   $('#cs-include-plugins').is(':checked')   ? 1 : 0,
-            include_themes:    $('#cs-include-themes').is(':checked')    ? 1 : 0,
-            include_mu:        $('#cs-include-mu').is(':checked')        ? 1 : 0,
-            include_languages: $('#cs-include-languages').is(':checked') ? 1 : 0,
-            include_dropins:   $('#cs-include-dropins').is(':checked')   ? 1 : 0,
-            include_htaccess:  $('#cs-include-htaccess').is(':checked')  ? 1 : 0,
-            include_wpconfig:  $('#cs-include-wpconfig').is(':checked')  ? 1 : 0,
+            include_db:        $('#cs-sched-db').is(':checked')        ? 1 : 0,
+            include_media:     $('#cs-sched-media').is(':checked')     ? 1 : 0,
+            include_plugins:   $('#cs-sched-plugins').is(':checked')   ? 1 : 0,
+            include_themes:    $('#cs-sched-themes').is(':checked')    ? 1 : 0,
+            include_mu:        $('#cs-sched-mu').is(':checked')        ? 1 : 0,
+            include_languages: $('#cs-sched-languages').is(':checked') ? 1 : 0,
+            include_dropins:   $('#cs-sched-dropins').is(':checked')   ? 1 : 0,
+            include_htaccess:  $('#cs-sched-htaccess').is(':checked')  ? 1 : 0,
+            include_wpconfig:  $('#cs-sched-wpconfig').is(':checked')  ? 1 : 0,
+            include_core:      $('#cs-sched-core').is(':checked')      ? 1 : 0,
         };
     }
 
@@ -310,12 +325,12 @@ jQuery(function ($) {
                     csStartBackupPoll(res.data.job_id, $btn, $prog);
                 } else {
                     progress('cs-backup-fill', 'cs-backup-msg', '\u2717 Error: ' + res.data, 'error');
-                    $btn.prop('disabled', false).text('\u25b6 Create Local Backup Now');
+                    $btn.prop('disabled', false).text('\u25b6 Run Backup Now');
                 }
             },
             error: function (xhr, status) {
                 progress('cs-backup-fill', 'cs-backup-msg', '\u2717 Could not start backup (' + status + '). Check server error log.', 'error');
-                $btn.prop('disabled', false).text('\u25b6 Create Local Backup Now');
+                $btn.prop('disabled', false).text('\u25b6 Run Backup Now');
             }
         });
     }
@@ -342,9 +357,9 @@ jQuery(function ($) {
     }
 
     $('#cs-run-backup').on('click', function () {
-        var anyChecked = $('#cs-include-db, #cs-include-media, #cs-include-plugins, #cs-include-themes, ' +
-            '#cs-include-mu, #cs-include-languages, #cs-include-dropins, ' +
-            '#cs-include-htaccess, #cs-include-wpconfig')
+        var anyChecked = $('#cs-sched-db, #cs-sched-media, #cs-sched-plugins, #cs-sched-themes, ' +
+            '#cs-sched-mu, #cs-sched-languages, #cs-sched-dropins, ' +
+            '#cs-sched-htaccess, #cs-sched-wpconfig, #cs-sched-core')
             .is(':checked');
         if (!anyChecked) {
             csAlert('&#9888;', 'No Components Selected',
@@ -354,28 +369,39 @@ jQuery(function ($) {
         }
 
         var $btn = $(this);
-        $btn.prop('disabled', true).text('Checking cloud storage\u2026');
+        $btn.prop('disabled', true).text('Saving settings\u2026');
+
+        // Auto-save schedule settings before starting backup, then proceed regardless
+        function csRunAfterSave() {
+            $btn.text('Checking cloud storage\u2026');
+            $.ajax({
+                url: CSBR.ajax_url, method: 'POST', timeout: 30000,
+                data: { action: 'csbr_cloud_space_check', nonce: CSBR.nonce },
+                success: function (res) {
+                    if (!res.success || $.isEmptyObject(res.data)) {
+                        csDoStartBackup($btn);
+                        return;
+                    }
+                    var hasWarning = false;
+                    $.each(res.data, function (p, info) { if (!info.ok) hasWarning = true; });
+                    if (!hasWarning) { csDoStartBackup($btn); return; }
+
+                    // Show warning panel
+                    var rows = '';
+                    $.each(res.data, function (p, info) { rows += csRenderSpaceRow(p, info); });
+                    $('#cs-cloud-space-rows').html(rows);
+                    $('#cs-cloud-space-warn').show();
+                    $btn.prop('disabled', false).text('\u25b6 Run Backup Now');
+                },
+                error: function () { csDoStartBackup($btn); }
+            });
+        }
 
         $.ajax({
-            url: CSBR.ajax_url, method: 'POST', timeout: 30000,
-            data: { action: 'csbr_cloud_space_check', nonce: CSBR.nonce },
-            success: function (res) {
-                if (!res.success || $.isEmptyObject(res.data)) {
-                    csDoStartBackup($btn);
-                    return;
-                }
-                var hasWarning = false;
-                $.each(res.data, function (p, info) { if (!info.ok) hasWarning = true; });
-                if (!hasWarning) { csDoStartBackup($btn); return; }
-
-                // Show warning panel
-                var rows = '';
-                $.each(res.data, function (p, info) { rows += csRenderSpaceRow(p, info); });
-                $('#cs-cloud-space-rows').html(rows);
-                $('#cs-cloud-space-warn').show();
-                $btn.prop('disabled', false).text('\u25b6 Create Local Backup Now');
-            },
-            error: function () { csDoStartBackup($btn); }
+            url: CSBR.ajax_url, method: 'POST', timeout: 15000,
+            data: $('#cs-schedule-form').serialize() + '&action=csbr_save_schedule_ajax',
+            success: function () { csRunAfterSave(); },
+            error: function ()   { csRunAfterSave(); } // proceed even if save fails
         });
     });
 
@@ -440,7 +466,7 @@ jQuery(function ($) {
                     if (!res.success) {
                         clearInterval(timer);
                         progress('cs-backup-fill', 'cs-backup-msg', '\u2717 ' + res.data, 'error');
-                        $btn.prop('disabled', false).text('\u25b6 Create Local Backup Now');
+                        $btn.prop('disabled', false).text('\u25b6 Run Backup Now');
                         return;
                     }
                     var d = res.data;
@@ -456,7 +482,7 @@ jQuery(function ($) {
                     } else if (d.status === 'error') {
                         clearInterval(timer);
                         progress('cs-backup-fill', 'cs-backup-msg', '\u2717 ' + (d.message || 'Backup failed'), 'error');
-                        $btn.prop('disabled', false).text('\u25b6 Create Local Backup Now');
+                        $btn.prop('disabled', false).text('\u25b6 Run Backup Now');
                     }
                     // status === 'queued' or 'running' — keep polling
                 },
@@ -604,44 +630,6 @@ jQuery(function ($) {
 
 
     // ================================================================
-    // Save manual backup defaults
-    // ================================================================
-
-    $('#cs-save-manual-defaults').on('click', function () {
-        var $btn = $(this);
-        var $msg = $('#cs-manual-defaults-msg');
-
-        var components = [];
-        if ($('#cs-include-db').is(':checked'))          components.push('db');
-        if ($('#cs-include-media').is(':checked'))       components.push('media');
-        if ($('#cs-include-plugins').is(':checked'))     components.push('plugins');
-        if ($('#cs-include-themes').is(':checked'))      components.push('themes');
-        if ($('#cs-include-mu').is(':checked'))          components.push('mu');
-        if ($('#cs-include-languages').is(':checked'))   components.push('languages');
-        if ($('#cs-include-dropins').is(':checked'))     components.push('dropins');
-        if ($('#cs-include-htaccess').is(':checked'))    components.push('htaccess');
-        if ($('#cs-include-wpconfig').is(':checked'))    components.push('wpconfig');
-
-        $btn.prop('disabled', true);
-        $msg.text('Saving…').css('color', '#888').show();
-
-        $.post(CSBR.ajax_url, { action: 'csbr_save_manual_defaults', nonce: CSBR.nonce, components: components },
-            function (res) {
-                if (res.success) {
-                    $msg.text('✓ Saved').css('color', '#2e7d32');
-                } else {
-                    $msg.text('✗ ' + res.data).css('color', '#c62828');
-                }
-            }
-        ).fail(function () {
-            $msg.text('✗ Request failed').css('color', '#c62828');
-        }).always(function () {
-            $btn.prop('disabled', false);
-            setTimeout(function () { $msg.fadeOut(); }, 3000);
-        });
-    });
-
-    // ================================================================
     // Delete Backup
     // ================================================================
 
@@ -668,6 +656,14 @@ jQuery(function ($) {
                     }
                 );
             }, 'Delete');
+    });
+
+    // ================================================================
+    // Verify Backup Integrity
+    // ================================================================
+
+    $(document).on('click', '.cs-verify-btn', function () {
+        csVerifyFile(this, $(this).data('file'));
     });
 
     // ================================================================
@@ -1365,9 +1361,11 @@ jQuery(function ($) {
     var _csLogTimer = null;
 
     function csLogEntry(entry) {
-        var d   = new Date(entry.t * 1000);
-        var ts  = ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
-        var msg = entry.m.replace(/\[CloudScale Backup\]\s*/i, '');
+        var d      = new Date(entry.t * 1000);
+        var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+        var ts  = months[d.getMonth()] + ' ' + ('0'+d.getDate()).slice(-2) + ' ' +
+                  ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)+':'+('0'+d.getSeconds()).slice(-2);
+        var msg = entry.m.replace(/\[CloudScale Backup(?:\s*&\s*Restore)?\]\s*/i, '');
         var col = '#9e9e9e';
         if (/error|fail|skip|abort|not enough|denied/i.test(msg))  col = '#ef9a9a';
         else if (/\bok\b|complet|synced|creat|delet.*ok/i.test(msg)) col = '#a5d6a7';
@@ -1605,13 +1603,24 @@ function csConfirm(icon, title, subtitle, body, onConfirm, confirmLabel, confirm
     });
 }
 
+window.csNotifyExplain = function () {
+    csShowExplain('Notifications',
+        '<p>Configure where alerts are sent when backups, restores, or plugin rollbacks occur. Each channel is independent — mix and match however you like.</p>' +
+        '<p><strong>Email</strong> — sends an email via WordPress\'s <code>wp_mail()</code>. If mail is silently dropped, install the WP Mail SMTP plugin and configure it with your SMTP credentials (port 587). Choose success &amp; failures, failures only, or successes only for backup events. Enable "Plugin rollbacks" to also receive an email when Automatic Crash Recovery rolls back a plugin.</p>' +
+        '<p><strong>SMS via Twilio</strong> — sends a text message via the Twilio API. You\'ll need a free Twilio account (twilio.com), an Account SID, Auth Token, a "From" number (your Twilio number), and a "To" number. Choose which events trigger an SMS. Plugin rollback alerts are always treated as failures.</p>' +
+        '<p><strong>Push via ntfy</strong> — instant push notifications to your phone using the free <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy.sh</a> service. No account needed: install the ntfy app on your phone, subscribe to a topic, then enter the exact topic name in the Topic field. Topics are case-sensitive — the topic you enter here must match exactly what you subscribed to in the app (e.g. if you subscribed to <code>mysite-backups</code>, enter <code>mysite-backups</code>, not <code>MySite-Backups</code>). Use an obscure topic name since ntfy.sh topics are public. Choose which events and results trigger a push.</p>' +
+        '<p><strong>Send Test</strong> — fires a test message using the credentials currently in the form (you do not need to save first).</p>'
+    );
+};
+
 window.csScheduleExplain = function () {
-    csShowExplain('Local Backup Schedule',
-        '<p>Automatically runs a file backup on the days and time you choose. The backup packages your selected components (database, media, plugins, themes, etc.) into a single <code>.zip</code> stored on the server.</p>' +
-        '<p><strong>Days</strong> — tick one or more days of the week. You can pick multiple days, e.g. Monday, Wednesday, Friday.</p>' +
-        '<p><strong>Components</strong> — choose what to include in each scheduled backup. Manual backups always let you choose individually regardless of this setting.</p>' +
-        '<p><strong>Time</strong> — when the backup fires (server time). Backups run via WP-Cron, which triggers on the next page load at or after the scheduled time. On low-traffic sites add a real server cron for accurate timing: <code>*/5 * * * * wget -q -O- yoursite.com/wp-cron.php</code></p>' +
-        '<p>Leave all days unchecked or disable the toggle to turn off automatic local backups and run manually only.</p>'
+    csShowExplain('Backup Schedule',
+        '<p>Controls both <strong>automatic scheduled backups</strong> and <strong>on-demand backups</strong> from this card.</p>' +
+        '<p><strong>Days</strong> — tick one or more days of the week for the automatic schedule. Multiple days are supported, e.g. Mon / Wed / Fri.</p>' +
+        '<p><strong>Components</strong> — the set of components selected here is used for <em>both</em> scheduled runs and the <strong>Run Backup Now</strong> button below.</p>' +
+        '<p><strong>Time</strong> — when the scheduled backup fires (server time). WP-Cron triggers on the next page load at or after the scheduled time. On low-traffic sites add a real system cron for reliable timing: <code>* * * * * curl -s yoursite.com/wp-cron.php?doing_wp_cron</code></p>' +
+        '<p><strong>Run Backup Now</strong> — triggers an immediate backup using the currently selected components. Settings are auto-saved before the backup starts, so you do not need to click Save Schedule first.</p>' +
+        '<p>Disable the toggle or leave all days unchecked to stop automatic backups while still being able to run on-demand backups via the button.</p>'
     );
 };
 
@@ -1838,7 +1847,22 @@ window.csRepairTables = function () {
     $msg.text('').css('color', '');
     $.post(CSBR.ajax_url, { action: 'csbr_repair_tables', nonce: CSBR.nonce }, function (res) {
         if (res.success) {
-            $msg.text('\u2713 ' + res.data).css('color', '#2e7d32');
+            $msg.text('\u2713 ' + (res.data.msg || res.data)).css('color', '#2e7d32');
+            // Update overhead badge with the freshly recalculated value
+            var badge = document.getElementById('cs-overhead-badge');
+            if (badge && res.data.status) {
+                var bg  = res.data.status === 'green' ? '#2e7d32' : (res.data.status === 'amber' ? '#fb8c00' : '#c62828');
+                var lbl = res.data.status === 'green' ? 'OK' : (res.data.status === 'amber' ? 'Warning' : 'High');
+                var icon = res.data.status !== 'green' ? '\u26a0 ' : '';
+                badge.style.background = bg;
+                badge.textContent = icon + lbl + ' \u2014 ' + res.data.overhead_mb + ' MB overhead';
+            }
+            // Update "Last repaired" line
+            if (res.data.repaired_at) {
+                var $lastP = $('#cs-repair-last');
+                $('#cs-repair-last-time').text(res.data.repaired_at);
+                $lastP.show();
+            }
         } else {
             $msg.text('\u2717 ' + (res.data || 'Repair failed')).css('color', '#c62828');
         }
@@ -1857,7 +1881,8 @@ window.csRepairExplain = function () {
         '<li><strong style="color:#e65100;">Amber (&gt; 24 MB, &lt; 52 MB)</strong> — worth running a repair when convenient.</li>' +
         '<li><strong style="color:#c62828;">Red (&#8805; 52 MB)</strong> — high fragmentation; run repair now to reclaim space and improve performance.</li>' +
         '</ul>' +
-        '<p><strong>Run Repair Now</strong> runs <code>OPTIMIZE TABLE</code> on every table with overhead. Tables stay readable during the operation — no downtime. On large databases it may take a minute or two.</p>'
+        '<p><strong>Run Repair Now</strong> runs <code>OPTIMIZE TABLE</code> on every table with overhead. Tables stay readable during the operation — no downtime. On large databases it may take a minute or two.</p>' +
+        '<p>Enable <strong>Run Table Repairs automatically after each scheduled backup</strong> in the Backup Schedule card to run this automatically after every scheduled backup. The <em>Last repaired</em> time updates whether the repair was triggered manually or automatically.</p>'
     );
 };
 
@@ -1874,8 +1899,8 @@ window.csSystemExplain = function () {
 };
 
 window.csBackupExplain = function () {
-    csShowExplain('Create Local Backup Now',
-        '<p>Creates a backup zip immediately with the components you select. Sizes shown are uncompressed estimates — the final zip is typically smaller.</p>' +
+    csShowExplain('Run Backup Now',
+        '<p>Runs an immediate backup using the components currently selected in the Backup Schedule card. Settings are auto-saved before the backup starts.</p>' +
         '<ul style="margin:8px 0 8px 18px;padding:0;">' +
         '<li><strong>Database</strong> — full SQL dump of all MySQL tables via <code>mysqldump</code>. Required for a restorable backup.</li>' +
         '<li><strong>Media uploads</strong> — <code>wp-content/uploads/</code>. Often the largest component on media-heavy sites.</li>' +
@@ -1886,7 +1911,7 @@ window.csBackupExplain = function () {
         '<li><strong>.htaccess</strong> — Apache rewrite rules and server config.</li>' +
         '<li><strong>wp-config.php</strong> — contains database credentials. Handle the resulting zip with care.</li>' +
         '</ul>' +
-        '<p>The zip is stored on the server. If S3 is configured it is synced off-site immediately after.</p>'
+        '<p>The zip is stored on the server. Any configured cloud providers (S3, Google Drive, Dropbox) sync the result automatically after the backup completes.</p>'
     );
 };
 
@@ -1983,14 +2008,26 @@ function csMarkProviderConfigured(checkboxId) {
 }
 
 window.csS3Save = function () {
-    var bucket = document.getElementById('cs-s3-bucket').value.trim();
-    var prefix = document.getElementById('cs-s3-prefix').value.trim() || 'backups/';
+    var bucket    = document.getElementById('cs-s3-bucket').value.trim();
+    var prefix    = document.getElementById('cs-s3-prefix').value.trim() || 'backups/';
+    var keyIdEl   = document.getElementById('cs-s3-key-id');
+    var secretEl  = document.getElementById('cs-s3-secret-key');
+    var regionEl  = document.getElementById('cs-s3-region');
+    var keyId     = keyIdEl  ? keyIdEl.value.trim()  : '';
+    var secretKey = secretEl ? secretEl.value.trim() : '';
+    var region    = regionEl ? regionEl.value.trim()  : '';
     csS3Msg('Saving...', true);
     csS3Post('csbr_save_s3',
-        'bucket=' + encodeURIComponent(bucket) + '&prefix=' + encodeURIComponent(prefix),
+        'bucket='      + encodeURIComponent(bucket) +
+        '&prefix='     + encodeURIComponent(prefix) +
+        '&key_id='     + encodeURIComponent(keyId) +
+        '&secret_key=' + encodeURIComponent(secretKey) +
+        '&region='     + encodeURIComponent(region),
         function (res) {
             csS3Msg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success);
             if (res.success && bucket) csMarkProviderConfigured('cs-cloud-s3-enabled');
+            // Clear secret field after save so credentials don't linger in the DOM
+            if (res.success && secretEl) secretEl.value = '';
         }
     );
 };
@@ -2025,6 +2062,40 @@ window.csS3SyncFile = function (btn, filename) {
     });
 };
 
+/**
+ * Generic per-file sync helper used by GDrive, Dropbox, and OneDrive table buttons.
+ */
+function csSyncFileGeneric(btn, filename, action, providerLabel) {
+    btn.disabled = true;
+    btn.textContent = '…';
+    csS3Post(action, 'filename=' + encodeURIComponent(filename), function (res) {
+        if (res.success) {
+            var td = btn.closest ? btn.closest('td') : btn.parentNode;
+            if (td) td.innerHTML = '<span style="color:#2e7d32;font-size:16px;">&#10003;</span>';
+        } else {
+            btn.disabled = false;
+            btn.textContent = '↑ Retry';
+            var errEl = btn.previousElementSibling;
+            if (errEl) errEl.textContent = res.data || 'Sync failed';
+            else csAlert('&#10007;', providerLabel + ' Sync Failed',
+                'The file could not be uploaded to ' + providerLabel + '.',
+                '<p>' + csEscHtml(res.data || 'Unknown error') + '</p>');
+        }
+    });
+}
+
+window.csGDriveSyncFile = function (btn, filename) {
+    csSyncFileGeneric(btn, filename, 'csbr_gdrive_sync_file', 'Google Drive');
+};
+
+window.csDropboxSyncFile = function (btn, filename) {
+    csSyncFileGeneric(btn, filename, 'csbr_dropbox_sync_file', 'Dropbox');
+};
+
+window.csOneDriveSyncFile = function (btn, filename) {
+    csSyncFileGeneric(btn, filename, 'csbr_onedrive_sync_file', 'OneDrive');
+};
+
 // ================================================================
 // Google Drive card functions
 // ================================================================
@@ -2051,14 +2122,16 @@ function csGDrivePost(action, extra, onDone) {
 }
 
 window.csGDriveSave = function () {
-    var remoteEl = document.getElementById('cs-gdrive-remote');
-    var pathEl   = document.getElementById('cs-gdrive-path');
+    var remoteEl     = document.getElementById('cs-gdrive-remote');
+    var pathEl       = document.getElementById('cs-gdrive-path');
+    var configPathEl = document.getElementById('cs-rclone-config-path');
     if (!remoteEl || !pathEl) return;
-    var remote = remoteEl.value.trim();
-    var path   = pathEl.value.trim() || 'cloudscale-backups/';
+    var remote     = remoteEl.value.trim();
+    var path       = pathEl.value.trim() || 'cloudscale-backups/';
+    var configPath = configPathEl ? configPathEl.value.trim() : '';
     csGDriveMsg('Saving\u2026', true);
     csGDrivePost('csbr_save_gdrive',
-        'remote=' + encodeURIComponent(remote) + '&path=' + encodeURIComponent(path),
+        'remote=' + encodeURIComponent(remote) + '&path=' + encodeURIComponent(path) + '&config_path=' + encodeURIComponent(configPath),
         function (res) {
             csGDriveMsg(res.success ? '&#10003; Saved' : '&#10007; ' + res.data, res.success);
             if (res.success && remote) csMarkProviderConfigured('cs-cloud-gdrive-enabled');
@@ -2273,6 +2346,21 @@ window.csAmiSave = function () {
 };
 
 window.csAmiCreate = function () {
+    if (!CSBR.on_ec2) {
+        csShowExplain('AWS EC2 AMI — Not Running on AWS',
+            '<p>AMI (Amazon Machine Image) snapshots are only available when WordPress is running on an <strong>AWS EC2 instance</strong>.</p>' +
+            '<p>This server is not an EC2 instance, so AMI creation is not possible here.</p>' +
+            '<h4 style="margin:16px 0 6px">What is an AMI?</h4>' +
+            '<p>An AMI is a full disk-level image of your entire server — OS, web server, PHP, files, and database. Unlike a zip backup, it lets you recover a completely broken or unbootable server in minutes directly from AWS.</p>' +
+            '<h4 style="margin:16px 0 6px">Alternatives on this server</h4>' +
+            '<ul style="padding-left:18px;line-height:1.8">' +
+            '<li><strong>Local Backups</strong> — full zip archives of your site, stored on this server.</li>' +
+            '<li><strong>S3 / Google Drive / Dropbox</strong> — cloud copies of those zip backups for off-site redundancy.</li>' +
+            '</ul>' +
+            '<p style="margin-top:16px;color:#555;font-size:0.9rem;">To use AMI snapshots, move WordPress back to an AWS EC2 instance and configure an IAM role with <code>ec2:CreateImage</code> permission.</p>'
+        );
+        return;
+    }
     var prefixEl = document.getElementById('cs-ami-prefix');
     var rebootEl = document.getElementById('cs-ami-reboot');
     if (!prefixEl || !rebootEl) return;
@@ -2654,6 +2742,7 @@ function csS3HUpdateGoldenCount() {
     var nonGolden   = totalRows - goldenCount;
     var s3Max       = (window.CSBR && CSBR.ami_max) ? parseInt(CSBR.ami_max, 10) : '?';
     el.innerHTML = '&#11088; ' + goldenCount + ' / 4 golden\u2003' + nonGolden + ' of ' + s3Max + ' max backups';
+    el.style.color = (typeof s3Max === 'number' && nonGolden > s3Max) ? '#b71c1c' : '#f57f17';
 }
 
 window.csS3HistoryRefresh = function () {
@@ -2711,6 +2800,23 @@ window.csS3HistoryRefresh = function () {
                 '</td>';
             tbody.appendChild(tr);
         });
+        // Mark oldest non-golden backups that will be deleted on the next backup run.
+        var s3MaxBr           = (window.CSBR && CSBR.ami_max) ? parseInt(CSBR.ami_max, 10) : 0;
+        var s3NgList          = files.filter(function (f) { return !f.golden; });
+        var s3DeleteSoonCount = s3MaxBr ? Math.max(0, s3NgList.length - s3MaxBr + 1) : 0;
+        if (s3DeleteSoonCount > 0) {
+            s3NgList.slice(s3NgList.length - s3DeleteSoonCount).forEach(function (sf) {
+                var dsKey = (sf.name || '').replace(/[^a-zA-Z0-9_\-]/g, '_');
+                var dsRow = document.getElementById('cs-s3h-row-' + dsKey);
+                if (dsRow) {
+                    var s3Ftd = dsRow.querySelector('td');
+                    if (s3Ftd) s3Ftd.insertAdjacentHTML('beforeend',
+                        ' <span style="display:inline-block;font-size:0.72rem;font-weight:600;color:#b71c1c;background:#ffebee;border:1px solid #ef9a9a;border-radius:3px;padding:1px 5px;vertical-align:middle;">Delete Soon</span>');
+                    dsRow.style.background = 'linear-gradient(90deg,#fff3e0 0%,#fff 80%)';
+                    dsRow.style.borderLeft = '3px solid #e65100';
+                }
+            });
+        }
         csS3HMsg('\u2713 ' + files.length + ' file' + (files.length !== 1 ? 's' : '') + ' found', true);
         csS3HUpdateGoldenCount();
     });
@@ -2858,6 +2964,7 @@ function csGDriveHUpdateGoldenCount() {
     var nonGolden   = totalRows - goldenCount;
     var maxB        = (window.CSBR && CSBR.ami_max) ? parseInt(CSBR.ami_max, 10) : '?';
     el.innerHTML = '&#11088; ' + goldenCount + ' / 4 golden\u2003' + nonGolden + ' of ' + maxB + ' max backups';
+    el.style.color = (typeof maxB === 'number' && nonGolden > maxB) ? '#b71c1c' : '#f57f17';
 }
 
 window.csGDriveHistoryRefresh = function () {
@@ -2915,6 +3022,25 @@ window.csGDriveHistoryRefresh = function () {
                 '</td>';
             tbody.appendChild(tr);
         });
+        // Mark oldest non-golden backups that will be deleted on the next backup run.
+        // Next run adds 1 new file, then enforcement deletes (N+1 - max) files.
+        // So mark max(0, N - max + 1) oldest non-golden rows.
+        var maxBr          = (window.CSBR && CSBR.ami_max) ? parseInt(CSBR.ami_max, 10) : 0;
+        var ngList         = files.filter(function (f) { return !f.golden; });
+        var deleteSoonCount = maxBr ? Math.max(0, ngList.length - maxBr + 1) : 0;
+        if (deleteSoonCount > 0) {
+            ngList.slice(ngList.length - deleteSoonCount).forEach(function (gf) {
+                var dsKey = (gf.name || '').replace(/[^a-zA-Z0-9_\-]/g, '_');
+                var dsRow = document.getElementById('cs-gd-row-' + dsKey);
+                if (dsRow) {
+                    var ftd = dsRow.querySelector('td');
+                    if (ftd) ftd.insertAdjacentHTML('beforeend',
+                        ' <span style="display:inline-block;font-size:0.72rem;font-weight:600;color:#b71c1c;background:#ffebee;border:1px solid #ef9a9a;border-radius:3px;padding:1px 5px;vertical-align:middle;">Delete Soon</span>');
+                    dsRow.style.background = 'linear-gradient(90deg,#fff3e0 0%,#fff 80%)';
+                    dsRow.style.borderLeft = '3px solid #e65100';
+                }
+            });
+        }
         csGDriveHMsg('\u2713 ' + files.length + ' file' + (files.length !== 1 ? 's' : '') + ' found', true);
         csGDriveHUpdateGoldenCount();
     });
@@ -3253,9 +3379,9 @@ function csDropboxHUpdateGoldenCount() {
     var rows    = document.querySelectorAll('#cs-db-tbody tr');
     var golden  = document.querySelectorAll('#cs-db-tbody tr.cs-row-golden').length;
     var regular = rows.length - golden;
-    var m       = el.innerHTML.match(/\/\s*(\d+)\s*max/);
-    var max     = m ? m[1] : '?';
-    el.innerHTML = '\u2b50 ' + golden + ' / 4 golden&emsp;' + regular + ' / ' + max + ' max backups';
+    var maxB    = (window.CSBR && CSBR.ami_max) ? parseInt(CSBR.ami_max, 10) : '?';
+    el.innerHTML = '\u2b50 ' + golden + ' / 4 golden&emsp;' + regular + ' / ' + maxB + ' max backups';
+    el.style.color = (typeof maxB === 'number' && regular > maxB) ? '#b71c1c' : '#f57f17';
 }
 
 window.csDropboxHistoryRefresh = function () {
@@ -3309,6 +3435,23 @@ window.csDropboxHistoryRefresh = function () {
                 '</td>';
             tbody.appendChild(tr);
         });
+        // Mark oldest non-golden backups that will be deleted on the next backup run.
+        var dbMaxBr           = (window.CSBR && CSBR.ami_max) ? parseInt(CSBR.ami_max, 10) : 0;
+        var dbNgList          = files.filter(function (f) { return !f.golden; });
+        var dbDeleteSoonCount = dbMaxBr ? Math.max(0, dbNgList.length - dbMaxBr + 1) : 0;
+        if (dbDeleteSoonCount > 0) {
+            dbNgList.slice(dbNgList.length - dbDeleteSoonCount).forEach(function (dbf) {
+                var dsKey = (dbf.name || '').replace(/[^a-zA-Z0-9_\-]/g, '_');
+                var dsRow = document.getElementById('cs-db-row-' + dsKey);
+                if (dsRow) {
+                    var dbFtd = dsRow.querySelector('td');
+                    if (dbFtd) dbFtd.insertAdjacentHTML('beforeend',
+                        ' <span style="display:inline-block;font-size:0.72rem;font-weight:600;color:#b71c1c;background:#ffebee;border:1px solid #ef9a9a;border-radius:3px;padding:1px 5px;vertical-align:middle;">Delete Soon</span>');
+                    dsRow.style.background = 'linear-gradient(90deg,#fff3e0 0%,#fff 80%)';
+                    dsRow.style.borderLeft = '3px solid #e65100';
+                }
+            });
+        }
         csDropboxHMsg('\u2713 ' + files.length + ' file' + (files.length !== 1 ? 's' : '') + ' found', true);
         csDropboxHUpdateGoldenCount();
     });
@@ -3426,9 +3569,9 @@ function csOneDriveHUpdateGoldenCount() {
     var rows    = document.querySelectorAll('#cs-od-tbody tr');
     var golden  = document.querySelectorAll('#cs-od-tbody tr.cs-row-golden').length;
     var regular = rows.length - golden;
-    var m       = el.innerHTML.match(/\/\s*(\d+)\s*max/);
-    var max     = m ? m[1] : '?';
-    el.innerHTML = '\u2b50 ' + golden + ' / 4 golden&emsp;' + regular + ' / ' + max + ' max backups';
+    var maxB    = (window.CSBR && CSBR.ami_max) ? parseInt(CSBR.ami_max, 10) : '?';
+    el.innerHTML = '\u2b50 ' + golden + ' / 4 golden&emsp;' + regular + ' / ' + maxB + ' max backups';
+    el.style.color = (typeof maxB === 'number' && regular > maxB) ? '#b71c1c' : '#f57f17';
 }
 
 window.csOneDriveHistoryRefresh = function () {
@@ -3482,6 +3625,23 @@ window.csOneDriveHistoryRefresh = function () {
                 '</td>';
             tbody.appendChild(tr);
         });
+        // Mark oldest non-golden backups that will be deleted on the next backup run.
+        var odMaxBr           = (window.CSBR && CSBR.ami_max) ? parseInt(CSBR.ami_max, 10) : 0;
+        var odNgList          = files.filter(function (f) { return !f.golden; });
+        var odDeleteSoonCount = odMaxBr ? Math.max(0, odNgList.length - odMaxBr + 1) : 0;
+        if (odDeleteSoonCount > 0) {
+            odNgList.slice(odNgList.length - odDeleteSoonCount).forEach(function (odf) {
+                var dsKey = (odf.name || '').replace(/[^a-zA-Z0-9_\-]/g, '_');
+                var dsRow = document.getElementById('cs-od-row-' + dsKey);
+                if (dsRow) {
+                    var odFtd = dsRow.querySelector('td');
+                    if (odFtd) odFtd.insertAdjacentHTML('beforeend',
+                        ' <span style="display:inline-block;font-size:0.72rem;font-weight:600;color:#b71c1c;background:#ffebee;border:1px solid #ef9a9a;border-radius:3px;padding:1px 5px;vertical-align:middle;">Delete Soon</span>');
+                    dsRow.style.background = 'linear-gradient(90deg,#fff3e0 0%,#fff 80%)';
+                    dsRow.style.borderLeft = '3px solid #e65100';
+                }
+            });
+        }
         csOneDriveHMsg('\u2713 ' + files.length + ' file' + (files.length !== 1 ? 's' : '') + ' found', true);
         csOneDriveHUpdateGoldenCount();
     });
@@ -3578,5 +3738,41 @@ window.csOneDriveHistoryDelete = function (filename) {
                 }
             });
         }, 'Delete');
+};
+
+/**
+ * Run an on-demand integrity verification for a single backup file.
+ * Updates the Verify cell in-place with the result.
+ */
+window.csVerifyFile = function (btn, filename) {
+    var td = btn.closest ? btn.closest('td') : btn.parentNode;
+    btn.disabled = true;
+    btn.textContent = '\u2026';
+    csS3Post('csbr_verify_backup', 'file=' + encodeURIComponent(filename), function (res) {
+        if (!td) {
+            btn.disabled = false;
+            btn.textContent = 'Verify';
+            return;
+        }
+        if (res.success) {
+            if (res.data.ok) {
+                td.innerHTML = '<span style="color:#2e7d32;font-size:16px;cursor:default;" title="Verified ' + csEscAttr(res.data.time || '') + '">\u2713</span>';
+            } else {
+                var err   = res.data.error || 'Verification failed';
+                var short = err.length > 60 ? err.substring(0, 60) + '\u2026' : err;
+                td.innerHTML =
+                    '<div style="font-size:10px;color:#c62828;line-height:1.3;text-align:left;">' +
+                    '<strong style="display:block;">\u2717 Failed</strong>' +
+                    '<span style="word-break:break-all;display:block;margin-bottom:3px;" title="' + csEscAttr(err) + '">' + csEscHtml(short) + '</span>' +
+                    '<button type="button" class="cs-verify-btn button button-small" data-file="' + csEscAttr(filename) + '" style="font-size:10px;padding:1px 7px;height:auto;line-height:1.6;">\u21bb Re-check</button>' +
+                    '</div>';
+            }
+        } else {
+            btn.disabled = false;
+            btn.textContent = 'Verify';
+            csAlert('\u26a0', 'Verification Error', 'Could not verify backup integrity.',
+                '<p>' + csEscHtml(res.data || 'Unknown error') + '</p>');
+        }
+    });
 };
 

@@ -10,9 +10,10 @@ helpLib.run({
 
     pluginName: 'CloudScale Backup & Restore',
     pluginDesc: 'The only WordPress backup plugin that is 100% free — including restore. UpdraftPlus, BackupBuddy, and Duplicator all charge $70–$200 per year the moment you need to actually recover your site. CloudScale Backup & Restore gives you scheduled backups, one-click restore, S3 cloud sync, Google Drive sync, Dropbox sync, Microsoft OneDrive sync, and AWS EC2 AMI snapshots at zero cost, forever. No upsell, no premium tier, no surprises.',
-    pageTitle:  'CloudScale Backup & Restore: Help & Documentation',
+    pageTitle:  'CloudScale Backup & Restore',
     pageSlug:   'backup-restore-help',
     downloadUrl: 'https://your-s3-bucket.s3.af-south-1.amazonaws.com/cloudscale-backup.zip',
+    repoUrl:     'https://github.com/andrewbakercloudscale/wordpress-backup-restore-plugin',
     adminUrl:   `${process.env.WP_BASE_URL}/wp-admin/tools.php?page=cloudscale-backup`,
 
     pluginFile: `${__dirname}/../cloudscale-backup.php`,
@@ -23,6 +24,7 @@ helpLib.run({
             elementSelector: '#cs-log-panel',
         },
         { id: 'schedule',       label: 'Backup Schedule',           file: 'panel-schedule.png',       tab: 'local', elementSelector: '#cs-tab-local .cs-card--blue'    },
+        { id: 'notifications',  label: 'Notifications',              file: 'panel-notifications.png',  tab: 'local', elementSelector: '#cs-notifications-card'           },
         { id: 'retention',      label: 'Retention & Storage',        file: 'panel-retention.png',      tab: 'local', elementSelector: '.cs-card--green'                 },
         { id: 'system-info',    label: 'System Info',                file: 'panel-system-info.png',    tab: 'local', elementSelector: '.cs-card--purple'                },
         { id: 'create-backup',  label: 'Create Local Backup Now',    file: 'panel-create-backup.png',  tab: 'local', elementSelector: '.cs-card--orange'                },
@@ -54,7 +56,7 @@ helpLib.run({
         { id: 'onedrive',       label: 'Microsoft OneDrive',         file: 'panel-onedrive.png',       tab: 'cloud', elementSelector: '.cs-card--onedrive'              },
         { id: 's3',             label: 'AWS S3',                     file: 'panel-s3.png',             tab: 'cloud', elementSelector: '.cs-card--pink'                  },
         { id: 'ami',            label: 'AWS EC2 AMI Snapshot',       file: 'panel-ami.png',            tab: 'cloud', elementSelector: '.cs-card--indigo'                },
-        { id: 'plugin-auto-recovery', label: 'Plugin Auto Recovery', file: 'panel-plugin-auto-recovery.png', tab: 'autorecovery', elementSelector: '#cs-tab-autorecovery .cs-card--blue' },
+        { id: 'plugin-auto-recovery', label: 'Automatic Crash Recovery', file: 'panel-plugin-auto-recovery.png', tab: 'autorecovery', elementSelector: '#cs-tab-autorecovery .cs-card--blue' },
         {
             id: 'cloud-history', label: 'Cloud Backup History', file: 'panel-cloud-history.png', tab: 'cloud',
             elementSelector: '#cs-history-panel',
@@ -75,12 +77,22 @@ helpLib.run({
 <p>The <strong>Activity Log</strong> panel appears at the top of the plugin admin page, above the Local Backups and Cloud Backups tabs. It gives you a real-time, timestamped record of everything the plugin does — useful for verifying that scheduled jobs ran, diagnosing sync failures, or copying a log dump for support.</p>
 <p><strong>What gets logged:</strong></p>
 <ul>
-<li>Backup job queued, starting, completed, or failed — with the zip filename and size.</li>
-<li>Cloud sync jobs: queued, starting, complete, or failed — for S3, Google Drive, Dropbox, OneDrive, and AMI.</li>
+<li>Backup created — filename and size (e.g. <code>bkup_f42.zip (18.3 MB)</code>).</li>
+<li>Scheduled backup starting — components included (database, media, plugins, etc.).</li>
+<li>Cloud sync result per provider — S3, Google Drive, Dropbox, and OneDrive each log success or failure immediately after a backup.</li>
+<li>Manual cloud sync — when you click Sync Latest for any provider.</li>
+<li>Cloud connection tests — pass or fail result for S3, Google Drive, Dropbox, and OneDrive.</li>
+<li>Settings saved — local schedule, retention, S3, Google Drive, Dropbox, OneDrive, AMI, and cloud schedule settings all log when saved.</li>
+<li>AMI creation started — AMI ID, name, and instance ID logged on success; error details logged on failure.</li>
 <li>AMI state transitions (<em>pending</em> → <em>available</em>) detected during background polling.</li>
-<li>Retention deletions — when old local or cloud backups are removed automatically.</li>
-<li>Space recovery events — when oldest cloud backups are deleted to free quota.</li>
-<li>Errors and skipped operations (e.g. sync skipped because a provider is not configured).</li>
+<li>Retention deletions — each local backup deleted by the retention policy is logged with the retention limit.</li>
+<li>Selective restore initiated and completed — filename and table list logged at start and finish.</li>
+<li>Full restore and restore-from-upload — start and completion (or failure) with filename.</li>
+<li>Backup downloaded — logged when an admin downloads a backup zip.</li>
+<li>Backup deleted — filename logged when an admin deletes a backup.</li>
+<li>Automatic Crash Recovery events — pre-update backup, monitoring start, rollback triggered (with trigger reason and HTTP code), rollback complete.</li>
+<li>Plugin activated and deactivated.</li>
+<li>Errors and exceptions — all caught exceptions log the message and context before returning an error to the UI.</li>
 </ul>
 <p><strong>Entry colours:</strong></p>
 <ul>
@@ -115,23 +127,9 @@ helpLib.run({
 <p>Manual backups always let you choose components individually at run time, regardless of what is saved here.</p>
 <p><strong>File backup time</strong> — the hour and minute (server time) at which the scheduled backup fires. The current server time and timezone are shown inline. The next scheduled run is displayed below the time picker once a schedule is saved.</p>
 <p><strong>Run Table Repairs automatically</strong> — when enabled, the plugin runs <code>OPTIMIZE TABLE</code> on any InnoDB tables that have accumulated overhead immediately after each scheduled backup completes. This is equivalent to clicking <em>Optimize tables</em> in phpMyAdmin and can recover disk space from deleted posts, spam comments, and transient accumulation. It has no effect on tables that do not need it.</p>
+<p><strong>Show Backup Now button in admin toolbar</strong> — adds a one-click backup button to the top WordPress admin bar on every admin page. Clicking it runs an immediate backup using the default component selection and shows a live progress indicator in the toolbar.</p>
 <p><strong>Save Schedule</strong> — saves the schedule configuration and registers or updates the WordPress cron event. For production sites, supplement WP-Cron with a real system cron to ensure the schedule fires regardless of traffic: <code>* * * * * curl -s https://yoursite.com/wp-cron.php?doing_wp_cron &gt; /dev/null</code></p>
-<hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
-<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Email Notifications</p>
-<p>The <strong>Email notifications</strong> checkbox (below the schedule controls) sends an email after every backup or restore operation. Enable it to expand the notification settings.</p>
-<ul>
-<li><strong>Send to</strong> — the address that receives the notification. Leave blank to use the WordPress admin email (<code>Settings → General → Administration email address</code>).</li>
-<li><strong>Success &amp; failures</strong> — sends an email whether the operation succeeded or failed. This is the default and the most reliable option for unattended monitoring.</li>
-<li><strong>Failures only</strong> — silent on success; sends an email only when something goes wrong. Good for set-it-and-forget-it installs where you only want to hear bad news.</li>
-<li><strong>Success only</strong> — sends a confirmation after every successful backup. Useful during initial setup to confirm the schedule is firing.</li>
-</ul>
-<p><strong>Send Test Email</strong> — sends a test message immediately to the configured address and reports success or failure inline. If email delivery is not working, the button shows a diagnostic banner explaining the likely cause:</p>
-<ul>
-<li><em>All outbound SMTP ports blocked</em> — your hosting provider is blocking ports 587, 465, and 25. WordPress uses the server's local <code>sendmail</code> binary to deliver email, so if those ports are blocked, nothing gets through. Install a plugin like <a href="https://wordpress.org/plugins/wp-mail-smtp/" target="_blank">WP Mail SMTP</a> to route mail through an external provider such as Gmail, SendGrid, or Mailgun instead.</li>
-<li><em>SMTP ports open but no local mail agent</em> — the server can reach mail servers, but no local MTA (Postfix, Sendmail, Exim) is installed. WordPress has no way to hand off the email. Use WP Mail SMTP to route through an external provider.</li>
-<li><em>Postfix running but no relay configured</em> — Postfix is installed but will attempt direct delivery on port 25, which most ISPs and cloud providers block to prevent spam. Configure Postfix to relay through your email provider, or use WP Mail SMTP.</li>
-</ul>
-<p>Any <code>wp_mail()</code> failure is also written to the Activity Log so you can see the exact error message without checking server logs.</p>
+<p>Email, SMS, and push notification settings are configured in the <strong>Notifications card</strong> (purple, directly below this card). Enable the relevant channels there to be alerted after each backup or restore completes.</p>
 <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
 <p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Backup Encryption</p>
 <p>The <strong>Encrypt backups (AES-256)</strong> checkbox password-protects every backup zip with AES-256 encryption. When enabled, a <strong>Password</strong> field appears — enter a strong password and click <strong>Save Schedule</strong>. Every subsequent backup will be encrypted with that password. Encrypted backups show a padlock icon in the Local Backup History table.</p>
@@ -142,6 +140,53 @@ helpLib.run({
 <li>If you change or clear the password, existing encrypted backups cannot be restored using the new password. Keep a record of the password that was active when each backup was created, or run new unencrypted backups before clearing the password.</li>
 <li>Encryption requires PHP's <code>libzip</code> to be compiled with AES-256 support (<code>ZipArchive::EM_AES_256</code>). If your server's libzip does not support it, a red error badge appears and the backups are created without encryption. Upgrade libzip (typically via <code>sudo dnf upgrade php-zip</code> on Amazon Linux or <code>sudo apt upgrade php-zip</code> on Ubuntu) to enable this feature.</li>
 </ul>`,
+
+        'notifications': `
+<p>The <strong>Notifications card</strong> (purple) configures all alerts sent after backup, restore, and plugin rollback events. Three channels are available simultaneously — enable any combination. All settings are saved with a single <strong>Save Notification Settings</strong> button at the bottom of the card.</p>
+<hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
+<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Email</p>
+<p>Enable <strong>Email</strong> to send an email after every backup or restore operation.</p>
+<ul>
+<li><strong>Send to</strong> — the address that receives notifications. Leave blank to use the WordPress admin email (<code>Settings → General → Administration email address</code>).</li>
+<li><strong>Success &amp; failures</strong> — sends an email after every operation regardless of outcome. The most reliable option for unattended monitoring.</li>
+<li><strong>Failures only</strong> — silent on success; sends an email only when something goes wrong. Good for set-it-and-forget-it installs where you only want to hear bad news.</li>
+<li><strong>Success only</strong> — confirmation after every successful backup. Useful during initial setup to confirm the schedule is firing.</li>
+<li><strong>Plugin rollbacks</strong> — sends an email whenever Automatic Crash Recovery rolls back a plugin update.</li>
+</ul>
+<p><strong>Send Test</strong> — sends a test message immediately to the configured address and reports success or failure inline. If email delivery is not working, a diagnostic banner appears explaining the likely cause:</p>
+<ul>
+<li><em>All outbound SMTP ports blocked</em> — your hosting provider is blocking ports 587, 465, and 25. WordPress uses the server's local <code>sendmail</code> binary to deliver email, so if those ports are blocked, nothing gets through. Install a plugin like <a href="https://wordpress.org/plugins/wp-mail-smtp/" target="_blank">WP Mail SMTP</a> to route mail through an external provider such as Gmail, SendGrid, or Mailgun.</li>
+<li><em>SMTP ports open but no local mail agent</em> — the server can reach mail servers, but no local MTA (Postfix, Sendmail, Exim) is installed. WordPress has no way to hand off the email. Use WP Mail SMTP.</li>
+<li><em>Postfix running but no relay configured</em> — Postfix is installed but will attempt direct delivery on port 25, which most ISPs and cloud providers block to prevent spam. Configure Postfix to relay through your email provider, or use WP Mail SMTP.</li>
+</ul>
+<p>Any <code>wp_mail()</code> failure is also written to the Activity Log so you can see the exact error message without checking server logs.</p>
+<hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
+<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">SMS via Twilio</p>
+<p>Enable <strong>SMS via Twilio</strong> to receive a text message alert. You will need a <a href="https://www.twilio.com" target="_blank">Twilio</a> account — a free trial is available with no credit card required for testing.</p>
+<ul>
+<li><strong>Account SID</strong> — found on your Twilio console dashboard (starts with <code>AC</code>).</li>
+<li><strong>Auth Token</strong> — the secret token shown alongside the Account SID.</li>
+<li><strong>From number</strong> — your Twilio phone number in E.164 format (e.g. <code>+12025551234</code>).</li>
+<li><strong>To number</strong> — the destination mobile number in E.164 format (e.g. <code>+12025556789</code>).</li>
+</ul>
+<p><strong>When to send SMS:</strong></p>
+<ul>
+<li><strong>Backup &amp; restore</strong> — enable to receive SMS after backup and restore operations, with a sub-filter for <em>All results</em>, <em>Failures only</em>, or <em>Successes only</em>.</li>
+<li><strong>Plugin rollbacks</strong> — enable to receive an SMS whenever Automatic Crash Recovery rolls back a plugin update.</li>
+</ul>
+<p><strong>Send Test</strong> — immediately sends a test SMS to verify credentials before saving.</p>
+<hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
+<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Push via ntfy</p>
+<p>Enable <strong>Push via ntfy</strong> for instant push notifications to your phone. <a href="https://ntfy.sh" target="_blank">ntfy.sh</a> is completely free with no account needed — install the ntfy app on your phone, enter a unique topic name here (e.g. <code>my-site-backups-a7x9</code>), and subscribe to that topic in the app. Alerts arrive within seconds.</p>
+<ul>
+<li><strong>Topic</strong> — a unique string appended to <code>https://ntfy.sh/</code>. Choose something non-guessable to prevent unauthorised subscriptions. The full URL is shown inline as you type.</li>
+</ul>
+<p><strong>When to send push:</strong></p>
+<ul>
+<li><strong>Backup &amp; restore</strong> — enable to receive push notifications after backup and restore operations, with a sub-filter for <em>All results</em>, <em>Failures only</em>, or <em>Successes only</em>.</li>
+<li><strong>Plugin rollbacks</strong> — enable to receive a push notification whenever Automatic Crash Recovery rolls back a plugin update.</li>
+</ul>
+<p><strong>Send Test</strong> — immediately sends a test notification to your ntfy topic to verify connectivity before saving.</p>`,
 
         'retention': `
 <p>The <strong>Retention &amp; Storage</strong> card (green) controls how many backups are kept on-server and lets you customise backup filenames.</p>
@@ -547,31 +592,32 @@ Default output format: json</pre>
 
         'plugin-auto-recovery': `
 <div style="background:#fff3e0;border-left:4px solid #f57c00;padding:14px 18px;border-radius:0 8px 8px 0;margin-bottom:20px;">
-<strong style="color:#e65100;">Did you know?</strong> Plugins are the single most common cause of WordPress site crashes. A bad update can introduce a PHP fatal error that takes your entire site offline — often at night or over a weekend when you are not watching. Plugin Auto Recovery detects this within minutes and restores the previous version automatically.
+<strong style="color:#e65100;">Did you know?</strong> Plugins are the single most common cause of WordPress site crashes. A bad update can introduce a PHP fatal error that takes your entire site offline — often at night or over a weekend when you are not watching. Automatic Crash Recovery detects this within minutes and restores the previous version automatically.
 </div>
-<p><strong>Plugin Auto Recovery</strong> automatically backs up each plugin directory before WordPress applies an update, then watches your site for failures. If something goes wrong, it rolls back to the previous version — with no manual intervention required.</p>
-<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">How it works</p>
+<p><strong>Automatic Crash Recovery</strong> automatically backs up each plugin directory before WordPress applies an update, then watches your site for failures. If something goes wrong, it rolls back to the previous version — with no manual intervention required.</p>
+<p style="margin:20px 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">How it works</p>
 <ol>
 <li><strong>Pre-update backup</strong> — the moment WordPress begins updating a plugin, the current plugin directory is copied to a secure location on the server before any new files are placed.</li>
-<li><strong>Monitoring window</strong> — after the update completes, a system-cron watchdog script probes the health check URL once per minute for the configured window (default 5 minutes).</li>
+<li><strong>Monitoring window</strong> — after the update completes, a system-cron watchdog script probes the health check URL once per minute for the configured window (default 10 minutes).</li>
 <li><strong>Automatic rollback</strong> — two consecutive probe failures (5xx error or connection timeout) trigger a rollback. The broken plugin directory is renamed and the backup is copied back. This happens entirely outside of WordPress, so it works even during a PHP fatal error.</li>
 <li><strong>Notification</strong> — on the next WordPress page load after recovery, the rollback is recorded in the Rollback History card and an email is sent to the WordPress admin address. If Twilio SMS is configured, an SMS is sent as well.</li>
-<li><strong>Branded recovery page</strong> — while the site is in a crash state, visitors see a "CloudScale Backup and Restore is automatically recovering this site" message instead of a white screen of death.</li>
+<li><strong>Branded recovery page</strong> — while the site is in a crash state, visitors see a branded "Automatic Crash Recovery is recovering this site" page with a live spinner instead of a white screen of death.</li>
 </ol>
 <div style="text-align:center;margin:20px 0;">
-<img src="https://your-s3-bucket.s3.af-south-1.amazonaws.com/docs/recovery-page-mobile.png" alt="CloudScale Plugin Auto Recovery — branded recovery page shown to visitors while the site recovers" style="max-width:320px;width:100%;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,.15);">
-<p style="margin:8px 0 0;font-size:.82rem;color:#64748b;">What visitors see while Plugin Auto Recovery is restoring the site — a branded page with a live spinner that auto-refreshes every 30 seconds.</p>
+<img src="https://your-s3-bucket.s3.af-south-1.amazonaws.com/docs/recovery-page-mobile.png" alt="CloudScale Automatic Crash Recovery — branded recovery page shown to visitors while the site recovers" style="max-width:320px;width:100%;border-radius:16px;box-shadow:0 4px 24px rgba(0,0,0,.15);">
+<p style="margin:8px 0 0;font-size:.82rem;color:#64748b;">What visitors see while Automatic Crash Recovery is restoring the site — a branded page with a live spinner that auto-refreshes every 30 seconds.</p>
 </div>
-<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Settings</p>
+<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Settings card</p>
+<p>The blue Settings card contains all configuration for this feature. An <strong>Explain…</strong> button in the card header opens a full feature overview modal.</p>
 <ul>
-<li><strong>Enable Plugin Auto Recovery</strong> — turn the feature on or off. When disabled, no backups are taken before updates and no monitoring occurs. Enabled by default.</li>
+<li><strong>Enable Automatic Crash Recovery</strong> — turn the feature on or off. When disabled, no backups are taken before updates and no monitoring occurs. Enabled by default.</li>
 <li><strong>Monitoring window</strong> — how many minutes after an update the watchdog actively probes the site. Increase this for sites that take longer to stabilise after a plugin update (for example, sites that run cache warming or build steps). Maximum 30 minutes.</li>
 <li><strong>Health check URL</strong> — the URL the watchdog fetches each minute to check site health. Leave blank to use the site home URL. A 5xx response or connection failure is treated as unhealthy; 4xx responses (including 404) are treated as healthy — the server is up even if the page is missing.</li>
 <li><strong>Test Health Check</strong> — fetches the health URL immediately from the server and shows the HTTP status code. Use this to confirm the watchdog can reach your site before relying on it.</li>
 </ul>
-<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Watchdog script setup</p>
-<p>The watchdog is a bash script that runs every minute via the server's system cron (root's crontab). It operates completely independently of WordPress and can detect and fix problems even when the entire site is returning errors.</p>
-<p><strong>Step 1</strong> — copy the script from the <strong>Watchdog Script</strong> card using the <strong>Copy</strong> button.</p>
+<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Watchdog Script card</p>
+<p>The watchdog is a bash script that runs every minute via the server's system cron (root's crontab). It operates completely independently of WordPress and can detect and fix problems even when the entire site is returning errors. An <strong>Explain…</strong> button in the card header explains the setup in detail. The <strong>Watchdog</strong> status indicator turns green once the script has run in the last 90 seconds; amber means it has not run recently.</p>
+<p><strong>Step 1</strong> — copy the script from the card using the <strong>Copy</strong> button.</p>
 <p><strong>Step 2</strong> — paste it onto the server:</p>
 <pre style="background:#1e1e1e;color:#d4d4d4;padding:12px 16px;border-radius:6px;font-size:.85em;overflow-x:auto;margin:0 0 12px;">sudo tee /usr/local/bin/csbr-par-watchdog.sh &lt;&lt;'EOF'
 (paste script here)
@@ -581,15 +627,28 @@ sudo chmod +x /usr/local/bin/csbr-par-watchdog.sh</pre>
 <pre style="background:#1e1e1e;color:#d4d4d4;padding:12px 16px;border-radius:6px;font-size:.85em;overflow-x:auto;margin:0 0 12px;">sudo crontab -e</pre>
 <p>Paste this line and save:</p>
 <pre style="background:#1e1e1e;color:#d4d4d4;padding:12px 16px;border-radius:6px;font-size:.85em;overflow-x:auto;margin:0 0 12px;">* * * * * root /usr/local/bin/csbr-par-watchdog.sh &gt;&gt; /var/log/cloudscale-par.log 2&gt;&amp;1</pre>
-<p>The <strong>Watchdog</strong> status indicator in the card header turns green once the script has run. If it shows amber, check that the cron job is active with <code>sudo crontab -l</code>.</p>
 <p><strong>Why system cron and not WP-Cron?</strong> If a plugin update causes a PHP fatal error, WordPress crashes completely — <code>wp-cron.php</code> never fires. A system cron job running every minute operates outside of WordPress entirely and can detect and recover from the problem before any visitor notices.</p>
 <p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Active Monitors card</p>
-<p>While a plugin is within its monitoring window, it appears in the <strong>Active Monitors</strong> table with a live countdown. The table refreshes every 15 seconds automatically. Each row shows the plugin name, the version transition (e.g. v2.1 → v2.2), time remaining in the window, and a <strong>Roll Back Now</strong> button for immediate manual rollback — for example if you notice a problem yourself before the watchdog detects it.</p>
+<p>After each plugin update a monitor is created automatically. It appears in the <strong>Active Monitors</strong> table with a live countdown timer. The table auto-refreshes every 15 seconds while monitors are active, and you can reload it at any time with the <strong>Refresh</strong> button. An <strong>Explain…</strong> button describes what each column means.</p>
+<ul>
+<li><strong>Plugin</strong> — the plugin being monitored.</li>
+<li><strong>Version</strong> — the version before the update (left) and after (right). A rollback restores the "before" version.</li>
+<li><strong>Time Remaining</strong> — countdown to when this monitor expires. A red fail badge shows consecutive probe failures detected so far — a second failure triggers a rollback.</li>
+<li><strong>Roll Back Now</strong> — manually trigger an immediate rollback without waiting for the watchdog. Use this if you spot a problem before the watchdog does.</li>
+</ul>
+<p>During a healthy update the monitor appears, counts down, then disappears automatically. No action is needed unless a problem is detected.</p>
 <p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Rollback History card</p>
-<p>Every automatic and manual rollback is recorded here with the plugin name, versions involved, timestamp, and what triggered the rollback (watchdog, manual, or health check failure). Entries can be dismissed individually once you have reviewed them.</p>
-<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">SMS alerts via Twilio</p>
-<p>Enable <strong>SMS alerts via Twilio</strong> to receive a text message whenever a rollback occurs. You will need a <a href="https://www.twilio.com" target="_blank">Twilio</a> account (free trial available — no credit card required for testing). Enter your Account SID, Auth Token, the Twilio phone number to send from, and the destination number. Click <strong>Send Test SMS</strong> to verify the credentials work before saving.</p>
-<p>Email notifications are always sent on rollback using the admin email address configured under <strong>Settings → General</strong> in WordPress (or the custom address in the Backup Schedule card). SMS is optional and in addition to email.</p>`,
+<p>Every automatic and manual rollback is recorded here. An <strong>Explain…</strong> button describes each column and what to do after a rollback.</p>
+<ul>
+<li><strong>Plugin</strong> — the plugin that was rolled back.</li>
+<li><strong>Versions</strong> — the failed version (left) and the version it was restored to (right).</li>
+<li><strong>Rolled Back</strong> — date and time the rollback completed (UTC).</li>
+<li><strong>Trigger</strong> — <em>Watchdog / site failure</em> (automatic) or <em>Manual rollback</em> (admin-initiated).</li>
+<li><strong>Dismiss</strong> — removes the entry from this list. Does not undo the rollback or reactivate the updated version.</li>
+</ul>
+<p>Each rollback also writes an entry to the Activity Log and sends a notification via whichever channels are enabled in the Notifications card.</p>
+<p style="margin:0 0 10px;font-size:1.1em;font-weight:800;color:#0f172a;">Rollback notifications</p>
+<p>Email, SMS (Twilio), and push (ntfy) alerts for plugin rollbacks are all configured in the <strong>Notifications card</strong> on the Local Backups tab. Each channel has a <strong>Plugin rollbacks</strong> checkbox — enable it on any channel you want to be alerted on when a rollback occurs. This means you can receive a rollback SMS without subscribing to backup success/failure SMS, or vice versa.</p>`,
 
         'cloud-history': `
 <p>The <strong>Cloud Backup History</strong> panel (teal, at the bottom of the Cloud Backups tab) gives you a unified view of all backups stored across your configured cloud providers. Use the <strong>View history for</strong> dropdown to switch between AWS S3, AWS EC2 AMI Snapshots, Google Drive, Dropbox, and Microsoft OneDrive.</p>

@@ -193,7 +193,7 @@ class CSBR_Plugin_Auto_Recovery {
 		}
 
 		$settings       = self::get_settings();
-		$window_seconds = max( 60, (int) round( ( $settings['window_minutes'] ?? 5 ) * 60 ) );
+		$window_seconds = max( 60, (int) round( ( $settings['window_minutes'] ?? 10 ) * 60 ) );
 		$health_url     = ! empty( $settings['health_url'] ) ? $settings['health_url'] : home_url( '/' );
 		$monitors       = self::get_monitors();
 		$changed        = false;
@@ -1249,7 +1249,7 @@ return new CSBR_Fatal_Error_Handler();
 	public static function get_settings(): array {
 		$defaults = [
 			'enabled'        => true,
-			'window_minutes' => 5,
+			'window_minutes' => 10,
 			'health_url'     => '',
 		];
 		$stored = get_option( self::SETTINGS_KEY, [] );
