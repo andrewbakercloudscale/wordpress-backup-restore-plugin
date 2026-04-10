@@ -13,6 +13,7 @@
 
 .cs-tab-bar {
     display: flex;
+    flex-wrap: wrap;
     gap: 4px;
     margin: 18px 0 0;
     border-bottom: 3px solid #37474f;
@@ -31,6 +32,13 @@
     top: 2px;
     transition: background 0.12s, color 0.12s;
     line-height: 1.4;
+    text-align: center;
+}
+@media (max-width: 780px) {
+    .cs-tab { padding: 8px 14px; font-size: 0.82rem; }
+}
+@media (max-width: 520px) {
+    .cs-tab { padding: 7px 10px; font-size: 0.76rem; flex: 1 1 auto; }
 }
 .cs-tab:hover { background: #0040ff; color: #fff; border-color: #0040ff; }
 .cs-tab--active {
@@ -642,10 +650,10 @@ select.cs-input-sm { width: 90px !important; }
    BACKUP HISTORY TABLE
    ================================================================ */
 
-.cs-table { margin-top: 6px; border: 1px solid #e0e0e0 !important; }
-.cs-table td { padding: 6px 8px !important; vertical-align: middle !important; white-space: nowrap; }
+.cs-table { margin-top: 6px; border: 1px solid #e0e0e0 !important; border-collapse: collapse !important; }
+.cs-table td { padding: 6px 8px !important; vertical-align: middle !important; white-space: nowrap; border-top: 1px solid #e0e0e0 !important; }
 .cs-table td:first-child { white-space: normal; } /* allow filename to wrap if needed */
-.cs-table th { padding: 8px 10px !important; }
+.cs-table th { padding: 8px 10px !important; border-bottom: 2px solid #cfd8dc !important; }
 .cs-table-wrap { display: block; width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .cs-table th { font-size: 0.77rem; font-weight: 700; color: #607d8b; text-transform: uppercase; letter-spacing: 0.06em; background: #eceff1 !important; }
 .cs-row-latest td { background: #e8f5e9 !important; }

@@ -18,7 +18,7 @@ defined( 'ABSPATH' ) || exit;
  *
  * @since 1.0.0
  */
-class CloudScale_Backup_Utils {
+class CSBR_Backup_Utils {
 
 	/**
 	 * Write a message to the PHP error log.
