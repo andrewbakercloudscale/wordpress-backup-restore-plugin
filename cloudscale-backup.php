@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Backup & Restore
  * Plugin URI:        https://cloudscale.consulting
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.332
+ * Version:           3.2.342
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CSBR_VERSION',    '3.2.332');
+define('CSBR_VERSION',    '3.2.342');
 define('CSBR_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CSBR_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CSBR_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -411,7 +411,9 @@ add_action('csbr_scheduled_backup', function () {
     }
 
     csbr_enforce_retention();
-    $verify_result = csbr_verify_backup( $filename );
+    $verify_result = get_option( 'csbr_run_integrity_check', true )
+        ? csbr_verify_backup( $filename )
+        : [ 'ok' => true, 'error' => null, 'skipped' => true ];
 
     // Cloud sync after scheduled local backup
     $zip_path     = CSBR_BACKUP_DIR . $filename;
@@ -448,11 +450,11 @@ add_action('csbr_scheduled_backup', function () {
                 : 'OK' ) . "\n";
         }
     }
-    $notify_body .= "\nIntegrity: " . ( $verify_result['ok']
-        ? 'Verified OK'
-        : 'FAILED — ' . ( $verify_result['error'] ?? 'Unknown' ) ) . "\n";
+    $notify_body .= "\nIntegrity: " . ( ! empty( $verify_result['skipped'] )
+        ? 'Skipped (disabled in settings)'
+        : ( $verify_result['ok'] ? 'Verified OK' : 'FAILED — ' . ( $verify_result['error'] ?? 'Unknown' ) ) ) . "\n";
     $notify_body .= "\nSite: " . home_url() . "\n";
-    csbr_send_backup_notification( $overall_ok && $verify_result['ok'], basename( $filename ), $notify_body );
+    csbr_send_backup_notification( $overall_ok && ( empty( $verify_result['skipped'] ) ? $verify_result['ok'] : true ), basename( $filename ), $notify_body );
 
     if ( get_option( 'csbr_auto_repair', false ) ) {
         csbr_run_table_repair();
@@ -830,18 +832,20 @@ function csbr_admin_page(): void {
         if (empty($clean_components)) { $clean_components = ['db', 'media', 'plugins', 'themes', 'core']; }
         update_option('csbr_schedule_components', $clean_components);
         update_option('csbr_auto_repair', ! empty( wp_unslash( $_POST['auto_repair'] ?? '' ) )); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_admin_referer(); checkbox presence only
+        update_option('csbr_run_integrity_check', ! empty( wp_unslash( $_POST['run_integrity_check'] ?? '' ) )); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_admin_referer(); checkbox presence only
         // Notification settings are saved via AJAX by the Notifications card — not this form.
         update_option('csbr_encrypt_password', sanitize_text_field( wp_unslash( $_POST['encrypt_password'] ?? '' ) ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
         update_option('csbr_toolbar_button', ! empty( wp_unslash( $_POST['toolbar_button'] ?? '' ) )); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- checkbox presence only
-        wp_cache_delete('csbr_run_days',            'options');
-        wp_cache_delete('csbr_run_days_saved',      'options');
-        wp_cache_delete('csbr_schedule_enabled',    'options');
-        wp_cache_delete('csbr_schedule_components', 'options');
-        wp_cache_delete('csbr_run_hour',            'options');
-        wp_cache_delete('csbr_run_minute',          'options');
-        wp_cache_delete('csbr_auto_repair',         'options');
-        wp_cache_delete('csbr_encrypt_password',    'options');
-        wp_cache_delete('csbr_toolbar_button',      'options');
+        wp_cache_delete('csbr_run_days',             'options');
+        wp_cache_delete('csbr_run_days_saved',       'options');
+        wp_cache_delete('csbr_schedule_enabled',     'options');
+        wp_cache_delete('csbr_schedule_components',  'options');
+        wp_cache_delete('csbr_run_hour',             'options');
+        wp_cache_delete('csbr_run_minute',           'options');
+        wp_cache_delete('csbr_auto_repair',          'options');
+        wp_cache_delete('csbr_run_integrity_check',  'options');
+        wp_cache_delete('csbr_encrypt_password',     'options');
+        wp_cache_delete('csbr_toolbar_button',       'options');
         wp_cache_delete('alloptions',             'options');
         csbr_reschedule();
         $day_names = ['','Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
@@ -856,6 +860,7 @@ function csbr_admin_page(): void {
     // Settings — read after any POST save so page shows updated values
     $enabled      = isset($_POST['csbr_action']) ? !empty($_POST['schedule_enabled']) : (bool) get_option('csbr_schedule_enabled', false); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- read-only display; nonce verified in save block above; boolean !empty() check only
     $auto_repair  = isset($_POST['csbr_action']) ? !empty($_POST['auto_repair']) : (bool) get_option('csbr_auto_repair', false); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- read-only display
+    $run_integrity_check = isset($_POST['csbr_action']) ? !empty($_POST['run_integrity_check']) : (bool) get_option('csbr_run_integrity_check', true); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- read-only display; defaults to true
     $notify_enabled     = (bool)   get_option('csbr_notify_enabled',     false);
     $notify_email       = (string) get_option('csbr_notify_email',       '');
     $notify_on          = (string) get_option('csbr_notify_on',          'both');
@@ -1181,6 +1186,14 @@ function csbr_admin_page(): void {
                             <?php esc_html_e( 'Run Table Repairs automatically after each scheduled backup', 'cloudscale-backup-restore' ); ?>
                         </label>
                         <p class="cs-help"><?php esc_html_e( 'Runs OPTIMIZE TABLE on any InnoDB tables with overhead after the scheduled backup completes.', 'cloudscale-backup-restore' ); ?></p>
+                    </div>
+
+                    <div class="cs-field-group">
+                        <label class="cs-option-label" style="margin:0;">
+                            <input type="checkbox" name="run_integrity_check" value="1" <?php checked( $run_integrity_check ); ?>>
+                            <?php esc_html_e( 'Run integrity check after each backup', 'cloudscale-backup-restore' ); ?>
+                        </label>
+                        <p class="cs-help"><?php esc_html_e( 'After every backup, the zip is automatically inspected to confirm it can be opened, contains valid metadata, and includes all expected components. Uncheck to skip this check and save a few seconds per backup.', 'cloudscale-backup-restore' ); ?></p>
                     </div>
 
                     <div class="cs-field-group">
@@ -2370,9 +2383,9 @@ function csbr_admin_page(): void {
 
                 <div class="cs-field-row">
                     <label for="cs-s3-secret-key"><strong>AWS Secret Access Key</strong></label>
-                    <input type="password" id="cs-s3-secret-key" class="regular-text" placeholder="<?php echo $s3_secret_key ? '••••••••••••••••••••••••••••••••••••••••' : 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'; ?>"
+                    <input type="password" id="cs-s3-secret-key" class="regular-text" placeholder="<?php echo esc_attr( $s3_secret_key ? '••••••••••••••••••••••••••••••••••••••••' : 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' ); ?>"
                            value="" autocomplete="new-password">
-                    <p class="cs-help"><?php echo $s3_secret_key ? 'A key is saved. Enter a new value to replace it, or leave blank to keep the current key.' : 'Paste your secret access key here.'; ?></p>
+                    <p class="cs-help"><?php echo esc_html( $s3_secret_key ? 'A key is saved. Enter a new value to replace it, or leave blank to keep the current key.' : 'Paste your secret access key here.' ); ?></p>
                 </div>
 
                 <div class="cs-field-row">
@@ -2845,12 +2858,13 @@ add_action( 'wp_ajax_csbr_save_schedule_ajax', function (): void {
     $clean_components = array_values( array_intersect( $raw_components, $valid_components ) );
     if ( empty( $clean_components ) ) { $clean_components = [ 'db', 'media', 'plugins', 'themes', 'core' ]; }
     update_option( 'csbr_schedule_components', $clean_components );
-    update_option( 'csbr_auto_repair',       ! empty( wp_unslash( $_POST['auto_repair']       ?? '' ) ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- checkbox presence only
-    update_option( 'csbr_encrypt_password',  sanitize_text_field( wp_unslash( $_POST['encrypt_password'] ?? '' ) ) );
-    update_option( 'csbr_toolbar_button',    ! empty( wp_unslash( $_POST['toolbar_button']    ?? '' ) ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- checkbox presence only
+    update_option( 'csbr_auto_repair',          ! empty( wp_unslash( $_POST['auto_repair']          ?? '' ) ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- checkbox presence only
+    update_option( 'csbr_run_integrity_check',  ! empty( wp_unslash( $_POST['run_integrity_check']  ?? '' ) ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- checkbox presence only
+    update_option( 'csbr_encrypt_password',     sanitize_text_field( wp_unslash( $_POST['encrypt_password'] ?? '' ) ) );
+    update_option( 'csbr_toolbar_button',       ! empty( wp_unslash( $_POST['toolbar_button']       ?? '' ) ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- checkbox presence only
     foreach ( [ 'csbr_run_days', 'csbr_run_days_saved', 'csbr_schedule_enabled', 'csbr_schedule_components',
-                'csbr_run_hour', 'csbr_run_minute', 'csbr_auto_repair', 'csbr_encrypt_password',
-                'csbr_toolbar_button', 'alloptions' ] as $_opt ) {
+                'csbr_run_hour', 'csbr_run_minute', 'csbr_auto_repair', 'csbr_run_integrity_check',
+                'csbr_encrypt_password', 'csbr_toolbar_button', 'alloptions' ] as $_opt ) {
         wp_cache_delete( $_opt, 'options' );
     }
     csbr_reschedule();
@@ -2896,7 +2910,9 @@ add_action('wp_ajax_csbr_run_backup', function (): void {
             $include_mu, $include_languages, $include_dropins, $include_htaccess, $include_wpconfig, $include_core
         );
         csbr_enforce_retention();
-        csbr_verify_backup( $filename );
+        if ( get_option( 'csbr_run_integrity_check', true ) ) {
+            csbr_verify_backup( $filename );
+        }
         $s3      = $GLOBALS['csbr_last_s3_result']      ?? ['skipped' => true];
         $gdrive  = $GLOBALS['csbr_last_gdrive_result']  ?? ['skipped' => true];
         $dropbox = $GLOBALS['csbr_last_dropbox_result'] ?? ['skipped' => true];
@@ -3005,6 +3021,84 @@ add_action( 'wp_ajax_csbr_backup_status', function (): void {
 // ============================================================
 
 /**
+ * Returns wp_mail() headers for an HTML email.
+ */
+function csbr_email_headers(): array {
+    return [ 'Content-Type: text/html; charset=UTF-8' ];
+}
+
+/**
+ * Converts a plain-text email body to simple HTML paragraphs.
+ * Paragraph breaks on double newlines; single newlines become <br>.
+ * Leading "Label:" patterns are bolded.
+ */
+function csbr_email_body_html( string $plain_text ): string {
+    $html = '';
+    foreach ( preg_split( '/\n{2,}/', trim( $plain_text ) ) as $p ) {
+        $p = trim( $p );
+        if ( $p === '' ) { continue; }
+        $p = preg_replace( '/^([A-Z][A-Za-z &]+:)/m', '<strong>$1</strong>', nl2br( esc_html( $p ) ) );
+        $html .= '<p style="margin:0 0 16px;font-size:15px;line-height:1.6;color:#374151;">' . $p . '</p>';
+    }
+    return $html;
+}
+
+/**
+ * Wraps content in the CloudScale branded HTML email shell.
+ *
+ * @param string $recipient_email  Used to look up a display name for the greeting.
+ * @param string $content_html     Inner HTML (from csbr_email_body_html or custom).
+ * @param string $btn_text         Optional CTA button label (empty to omit).
+ * @param string $btn_url          Optional CTA button URL.
+ */
+function csbr_email_html( string $recipient_email, string $content_html, string $btn_text = '', string $btn_url = '' ): string {
+    // Resolve display name from WP user record.
+    $display_name = '';
+    $user = get_user_by( 'email', $recipient_email );
+    if ( $user && $user->display_name ) {
+        $display_name = $user->display_name;
+    }
+
+    $greeting = $display_name
+        ? '<p style="margin:0 0 20px;font-size:16px;color:#111827;">Hi ' . esc_html( $display_name ) . ',</p>'
+        : '';
+
+    $btn_block = '';
+    if ( $btn_text && $btn_url ) {
+        $btn_block = '<div style="text-align:center;margin:28px 0;">'
+            . '<a href="' . esc_url( $btn_url ) . '" style="display:inline-block;background:#6C47FF;color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;padding:14px 32px;border-radius:8px;">'
+            . esc_html( $btn_text )
+            . '</a></div>';
+    }
+
+    $site_name = esc_html( wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES ) ?: home_url() );
+    $site_url  = esc_url( home_url() );
+
+    return '<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
+<body style="margin:0;padding:0;background:#f4f4f7;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f7;padding:40px 0;">
+    <tr><td align="center">
+      <table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;">
+        <tr><td style="background:#0d0d1f;border-radius:8px 8px 0 0;padding:28px 40px;text-align:center;">
+          <div style="font-size:22px;font-weight:800;color:#ffffff;letter-spacing:-0.3px;">&#9889; CloudScale</div>
+          <div style="font-size:11px;font-weight:600;color:#9ca3af;letter-spacing:2px;text-transform:uppercase;margin-top:4px;">CODE &amp; SECURITY</div>
+        </td></tr>
+        <tr><td style="background:#ffffff;padding:36px 40px;border-radius:0 0 8px 8px;">
+          ' . $greeting . $content_html . $btn_block . '
+        </td></tr>
+        <tr><td style="padding:16px 40px;text-align:center;">
+          <p style="margin:0;font-size:12px;color:#9ca3af;">' . $site_name . ' &mdash; <a href="' . $site_url . '" style="color:#9ca3af;">' . $site_url . '</a></p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>';
+}
+
+/**
  * Send notifications across all enabled channels for a backup/restore/rollback event.
  *
  * @since 3.2.257
@@ -3040,7 +3134,7 @@ function csbr_send_backup_notification( bool $success, string $subject_extra, st
                 $status  = $event === 'rollback' ? 'Rollback' : ( $success ? 'Success' : 'Failed' );
                 $subject = '[' . $site . '] Backup ' . $status . ': ' . $subject_extra;
                 csbr_log( '[CloudScale Backup & Restore] Sending notification email to ' . $to );
-                $sent = wp_mail( $to, $subject, $body );
+                $sent = wp_mail( $to, $subject, csbr_email_html( $to, csbr_email_body_html( $body ) ), csbr_email_headers() );
                 if ( $sent ) {
                     csbr_log( '[CloudScale Backup & Restore] Notification email sent to ' . $to );
                 } else {
@@ -3253,7 +3347,9 @@ function csbr_execute_backup_job( string $job_id, array $opts ): void {
             ! empty( $opts['include_core'] )
         );
         csbr_enforce_retention();
-        csbr_verify_backup( $filename );
+        if ( get_option( 'csbr_run_integrity_check', true ) ) {
+            csbr_verify_backup( $filename );
+        }
 
         // Manual backup is local-only — cloud sync is a separate action.
         csbr_set_job( $job_id, [
@@ -3664,6 +3760,11 @@ function csbr_run_email_diagnostics(): array {
                 // Stringify the callback for matching.
                 if ( is_array( $fn ) ) {
                     $fn_str = ( is_object( $fn[0] ) ? get_class( $fn[0] ) : (string) $fn[0] ) . '::' . $fn[1];
+                } elseif ( $fn instanceof Closure || is_object( $fn ) ) {
+                    // Anonymous function / invokable — can't inspect name.
+                    // Any Closure on phpmailer_init is almost certainly an SMTP plugin.
+                    $smtp_configured = true;
+                    break 2;
                 } else {
                     $fn_str = (string) $fn;
                 }
@@ -3755,13 +3856,13 @@ add_action( 'wp_ajax_csbr_send_test_email', function (): void {
 
     $site    = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES ) ?: home_url();
     $subject = '[' . $site . '] TEST: Backup notification test';
-    $body    = "This is a test notification from CloudScale Backup & Restore.\n\n"
+    $plain   = "This is a test notification from CloudScale Backup & Restore.\n\n"
              . "If you received this, email notifications are working correctly.\n\n"
-             . "Site: " . home_url() . "\n"
-             . "Sent to: " . $to . "\n";
+             . "Sent to: " . $to;
+    $html_body = csbr_email_html( $to, csbr_email_body_html( $plain ) );
 
     csbr_log( '[CloudScale Backup & Restore] Test email requested — sending to ' . $to );
-    $sent = wp_mail( $to, $subject, $body );
+    $sent = wp_mail( $to, $subject, $html_body, csbr_email_headers() );
     if ( $sent ) {
         $sent_msg = 'Test email dispatched to ' . $to . ( $port_warning ? ' — but see warning below' : '' );
         csbr_log( '[CloudScale Backup & Restore] Test email accepted by mail transport for ' . $to );
@@ -7050,7 +7151,7 @@ function csbr_gdrive_refresh_history( string &$rclone_error = '' ): array {
  * Convert raw rclone error output into a human-readable, actionable message
  * suitable for the activity log and admin UI.
  *
- * @since 3.2.332
+ * @since 3.2.338
  * @param string $raw Raw stderr/stdout from a failed rclone command.
  * @return string Actionable error message.
  */
@@ -8578,7 +8679,7 @@ function csbr_enforce_retention(): void {
  * in the csbr_verify_log option keyed by filename (same pattern as
  * csbr_s3_log).
  *
- * @since 3.2.332
+ * @since 3.2.338
  * @param string $filename Backup filename (basename only, no directory).
  * @return array{ok:bool,time:int,checks:array<string,array{ok:bool,detail:string}>,error:string|null}
  */
@@ -8715,7 +8816,7 @@ function csbr_verify_backup( string $filename ): array {
 /**
  * Store a verification result in the csbr_verify_log option.
  *
- * @since 3.2.332
+ * @since 3.2.338
  * @param string $filename Backup filename (basename).
  * @param array  $result   Result array from csbr_verify_backup().
  * @return void
