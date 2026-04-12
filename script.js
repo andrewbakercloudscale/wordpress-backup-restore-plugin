@@ -473,12 +473,13 @@ jQuery(function ($) {
                     if (d.status === 'complete') {
                         clearInterval(timer);
                         var msg = '\u2713 Backup complete: ' + d.filename;
+                        if (d.download_url) { msg += ' &nbsp;<a href="' + d.download_url + '" class="button button-small" style="vertical-align:middle;text-decoration:none;">\u2B07 Download</a>'; }
                         if (d.s3_msg)      { msg += '<br><span class="' + (d.s3_ok      ? 'cs-s3-ok' : 'cs-s3-error') + '">' + d.s3_msg      + '</span>'; }
                         if (d.gdrive_msg)  { msg += '<br><span class="' + (d.gdrive_ok  ? 'cs-s3-ok' : 'cs-s3-error') + '">' + d.gdrive_msg  + '</span>'; }
                         if (d.dropbox_msg) { msg += '<br><span class="' + (d.dropbox_ok ? 'cs-s3-ok' : 'cs-s3-error') + '">' + d.dropbox_msg + '</span>'; }
                         progress('cs-backup-fill', 'cs-backup-msg', msg, 'done');
                         var anyFail = (d.s3_msg && !d.s3_ok) || (d.gdrive_msg && !d.gdrive_ok) || (d.dropbox_msg && !d.dropbox_ok);
-                        setTimeout(function () { location.reload(); }, anyFail ? 6000 : 1800);
+                        setTimeout(function () { location.reload(); }, anyFail ? 6000 : 8000);
                     } else if (d.status === 'error') {
                         clearInterval(timer);
                         progress('cs-backup-fill', 'cs-backup-msg', '\u2717 ' + (d.message || 'Backup failed'), 'error');

@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Backup & Restore
  * Plugin URI:        https://cloudscale.consulting
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.345
+ * Version:           3.2.353
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CSBR_VERSION',    '3.2.345');
+define('CSBR_VERSION',    '3.2.353');
 define('CSBR_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CSBR_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CSBR_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -403,8 +403,9 @@ add_action('csbr_scheduled_backup', function () {
             in_array('wpconfig',  $c, true),
             in_array('core',      $c, true)
         );
-    } catch ( Exception $e ) {
-        csbr_log( '[CloudScale Backup & Restore] Scheduled backup FAILED: ' . $e->getMessage() );
+    } catch ( \Throwable $e ) {
+        $detail = sprintf( '%s: %s in %s:%d', get_class( $e ), $e->getMessage(), $e->getFile(), $e->getLine() );
+        csbr_log( '[CloudScale Backup & Restore] Scheduled backup FAILED: ' . $detail );
         update_option( 'csbr_last_backup_failed', true, false );
         csbr_send_backup_notification( false, 'Scheduled backup failed', "Scheduled backup failed.\n\nError: " . $e->getMessage() . "\n\nSite: " . home_url() . "\n" );
         return;
@@ -598,11 +599,20 @@ add_action('admin_enqueue_scripts', function (string $hook): void {
     if (!$on_dashboard && !$toolbar_on) return;
 
     $manual_defaults = get_option('csbr_manual_defaults', null);
-    $defaults = is_array($manual_defaults) ? $manual_defaults : [
-        'include_db' => 1, 'include_media' => 1, 'include_plugins' => 1, 'include_themes' => 1,
-        'include_mu' => 0, 'include_languages' => 0, 'include_dropins' => 0,
-        'include_htaccess' => 0, 'include_wpconfig' => 0, 'include_core' => 1,
-    ];
+    $all_components  = ['db', 'media', 'plugins', 'themes', 'mu', 'languages', 'dropins', 'htaccess', 'wpconfig', 'core'];
+    if ( is_array($manual_defaults) && ! empty($manual_defaults) ) {
+        // Stored as a flat list e.g. ['db', 'media', 'plugins'] — convert to include_* map.
+        $defaults = [];
+        foreach ( $all_components as $k ) {
+            $defaults['include_' . $k] = in_array($k, $manual_defaults, true) ? 1 : 0;
+        }
+    } else {
+        $defaults = [
+            'include_db' => 1, 'include_media' => 1, 'include_plugins' => 1, 'include_themes' => 1,
+            'include_mu' => 0, 'include_languages' => 0, 'include_dropins' => 0,
+            'include_htaccess' => 0, 'include_wpconfig' => 0, 'include_core' => 0,
+        ];
+    }
 
     wp_register_script('csbr-quick-backup', false, ['jquery'], CSBR_VERSION, true); // phpcs:ignore WordPress.WP.EnqueuedResourceParameters.MissingVersion -- inline-only script
     wp_enqueue_script('csbr-quick-backup');
@@ -647,8 +657,8 @@ function csbr_quick_backup_js(): string {
                         return;
                     }
                     var d = res.data;
-                    if (d.status === 'complete') { clearInterval(timer); onDone(true,  d.filename, elapsed); }
-                    else if (d.status === 'error') { clearInterval(timer); onDone(false, d.message || 'Backup failed', elapsed); }
+                    if (d.status === 'complete') { clearInterval(timer); onDone(true,  d.filename, elapsed, d); }
+                    else if (d.status === 'error') { clearInterval(timer); onDone(false, d.message || 'Backup failed', elapsed, d); }
                 }
             });
         }, 1000);
@@ -681,25 +691,33 @@ function csbr_quick_backup_js(): string {
         });
     }
 
-    /* ── Admin toolbar button ── */
+    /* ── Admin toolbar — Backup Now child ── */
     if (CSBR_QB.toolbar_on) {
-        $(document).on('click', '#wp-admin-bar-csbr-toolbar-backup > a', function(e){
+        $(document).on('click', '#wp-admin-bar-csbr-toolbar-backup-now > a', function(e){
             e.preventDefault();
-            var $item  = $('#wp-admin-bar-csbr-toolbar-backup');
-            var $link  = $item.find('> a.ab-item');
-            if ($item.hasClass('csbr-tb-running')) return;
-            $item.addClass('csbr-tb-running');
-            $link.html('<span class="ab-icon dashicons dashicons-update csbr-tb-spin"></span> Backing up\u2026');
+            var $parent = $('#wp-admin-bar-csbr-toolbar-backup');
+            var $plink  = $parent.find('> a.ab-item');
+            if ($parent.hasClass('csbr-tb-running')) return;
+            $parent.addClass('csbr-tb-running');
+            $plink.html('<span class="ab-icon dashicons dashicons-update csbr-tb-spin"></span> Backing up\u2026');
             csbqStart(
                 function(){},
-                function(ok, msg){
-                    $item.removeClass('csbr-tb-running');
+                function(ok, msg, elapsed, data){
+                    $parent.removeClass('csbr-tb-running');
                     if (ok) {
-                        $link.html('<span class="ab-icon dashicons dashicons-yes" style="color:#4caf50;"></span> Done');
-                        setTimeout(function(){ $link.html('<span class="ab-icon dashicons dashicons-backup"></span> Backup Now'); }, 4000);
+                        $plink.html('<span class="ab-icon dashicons dashicons-yes" style="color:#4caf50;"></span> Done');
+                        // Update the Download Latest link with the freshly-created backup
+                        if (data && data.download_url) {
+                            var $dlNode = $('#wp-admin-bar-csbr-toolbar-backup-download');
+                            if ($dlNode.length) {
+                                $dlNode.find('> a').attr('href', data.download_url);
+                            }
+                        }
+                        setTimeout(function(){ $plink.html('<span class="ab-icon dashicons dashicons-backup"></span> Backups'); }, 4000);
                     } else {
-                        $link.html('<span class="ab-icon dashicons dashicons-warning" style="color:#f44336;"></span> Failed');
-                        setTimeout(function(){ $link.html('<span class="ab-icon dashicons dashicons-backup"></span> Backup Now'); }, 5000);
+                        var shortMsg = msg ? String(msg).substring(0, 80) : 'Backup failed';
+                        $plink.attr('title', shortMsg).html('<span class="ab-icon dashicons dashicons-warning" style="color:#f44336;"></span> Failed \u2014 <span style="font-size:0.85em;opacity:0.85;">' + $('<span>').text(shortMsg).html() + '</span>');
+                        setTimeout(function(){ $plink.removeAttr('title').html('<span class="ab-icon dashicons dashicons-backup"></span> Backups'); }, 8000);
                     }
                 }
             );
@@ -716,12 +734,45 @@ JS;
 add_action('admin_bar_menu', function (WP_Admin_Bar $bar): void {
     if (!get_option('csbr_toolbar_button', false)) return;
     if (!current_user_can('manage_options')) return;
+
+    // Top-level "Backups" node — acts as dropdown trigger
     $bar->add_node([
         'id'    => 'csbr-toolbar-backup',
-        'title' => '<span class="ab-icon dashicons dashicons-backup" style="top:2px;font-size:17px;"></span> Backup Now',
+        'title' => '<span class="ab-icon dashicons dashicons-backup" style="top:2px;font-size:17px;"></span> Backups',
         'href'  => '#',
-        'meta'  => ['title' => 'CloudScale: run a local backup now'],
+        'meta'  => ['title' => 'CloudScale Backups'],
     ]);
+
+    // Child 1 — Backup Now
+    $bar->add_node([
+        'id'     => 'csbr-toolbar-backup-now',
+        'parent' => 'csbr-toolbar-backup',
+        'title'  => 'Backup Now',
+        'href'   => '#',
+        'meta'   => ['title' => 'Run a local backup now'],
+    ]);
+
+    // Child 2 — Download Latest (only shown when a backup exists)
+    $csbr_tb_latest = csbr_get_latest_backup_path();
+    if ( $csbr_tb_latest ) {
+        $csbr_tb_mtime  = (int) filemtime( $csbr_tb_latest );
+        if ( $csbr_tb_mtime >= strtotime( 'today' ) ) {
+            $csbr_tb_date = 'Today';
+        } elseif ( $csbr_tb_mtime >= strtotime( 'yesterday' ) ) {
+            $csbr_tb_date = 'Yesterday';
+        } else {
+            $csbr_tb_date = wp_date( 'j M', $csbr_tb_mtime ); // e.g. "10 Feb"
+        }
+        $csbr_tb_label  = 'Download Latest (' . $csbr_tb_date . ')';
+        $csbr_tb_dl_url = admin_url( 'admin-post.php?action=csbr_download&file=' . rawurlencode( basename( $csbr_tb_latest ) ) . '&_wpnonce=' . wp_create_nonce( 'csbr_download' ) );
+        $bar->add_node([
+            'id'     => 'csbr-toolbar-backup-download',
+            'parent' => 'csbr-toolbar-backup',
+            'title'  => $csbr_tb_label,
+            'href'   => $csbr_tb_dl_url,
+            'meta'   => ['title' => 'Download ' . basename( $csbr_tb_latest )],
+        ]);
+    }
 }, 100);
 
 // ============================================================
@@ -1112,6 +1163,25 @@ function csbr_admin_page(): void {
         </div>
 
         <div id="cs-tab-local" class="cs-tab-panel">
+
+        <!-- ===================== DOWNLOAD LATEST BAR ===================== -->
+        <?php
+        $csbr_latest_path = csbr_get_latest_backup_path();
+        if ( $csbr_latest_path ) :
+            $csbr_latest_name = basename( $csbr_latest_path );
+            $csbr_latest_size = csbr_format_size( (int) filesize( $csbr_latest_path ) );
+            $csbr_latest_age  = CSBR_Backup_Utils::human_age( (int) filemtime( $csbr_latest_path ) );
+            $csbr_dl_url      = admin_url( 'admin-post.php?action=csbr_download&file=' . rawurlencode( $csbr_latest_name ) . '&_wpnonce=' . wp_create_nonce( 'csbr_download' ) );
+        ?>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 14px;margin-top:14px;background:#e8f5e9;border:1px solid #388e3c;border-radius:6px;">
+            <span style="font-size:0.88rem;color:#1b5e20;">
+                <strong><?php echo esc_html( $csbr_latest_name ); ?></strong>
+                &nbsp;&middot;&nbsp;<?php echo esc_html( $csbr_latest_size ); ?>
+                &nbsp;&middot;&nbsp;<?php echo esc_html( $csbr_latest_age ); ?>
+            </span>
+            <a href="<?php echo esc_url( $csbr_dl_url ); ?>" class="button button-primary" style="background:#2e7d32;border-color:#1b5e20;white-space:nowrap;flex-shrink:0;text-decoration:none;">&#8659; <?php esc_html_e( 'Download Latest Backup', 'cloudscale-backup-restore' ); ?></a>
+        </div>
+        <?php endif; ?>
 
         <!-- ===================== SETTINGS ===================== -->
         <hr style="border:none;border-top:3px solid #37474f;margin:18px 0 16px;">
@@ -2978,6 +3048,7 @@ add_action( 'wp_ajax_csbr_start_backup', function (): void {
     // phpcs:enable WordPress.Security.NonceVerification.Missing
 
     if ( ! array_filter( $opts ) ) {
+        csbr_log( '[CloudScale Backup & Restore] Backup request rejected — no components selected.' );
         wp_send_json_error( 'Select at least one option.' );
     }
 
@@ -3014,6 +3085,12 @@ add_action( 'wp_ajax_csbr_backup_status', function (): void {
     $data = csbr_get_job( $job_id );
     if ( $data === false ) {
         wp_send_json_error( 'Job not found or expired.' );
+    }
+
+    if ( is_array( $data ) && ( $data['status'] ?? '' ) === 'complete' && ! empty( $data['filename'] ) ) {
+        $data['download_url'] = admin_url(
+            'admin-post.php?action=csbr_download&file=' . rawurlencode( basename( $data['filename'] ) ) . '&_wpnonce=' . wp_create_nonce( 'csbr_download' )
+        );
     }
 
     wp_send_json_success( $data );
@@ -3300,6 +3377,24 @@ function csbr_execute_backup_job( string $job_id, array $opts ): void {
     }
     csbr_set_job( $job_id, array_merge( $data, [ 'status' => 'running' ] ) );
     csbr_log( '[CloudScale Backup & Restore] Manual backup started.' );
+
+    // Safety net: if a PHP fatal error kills this process mid-backup (e.g. memory
+    // exhaustion), the try/catch below never runs.  A nested shutdown function
+    // detects that the job is still 'running' after the process exits, records
+    // the last PHP error, and marks the job as failed so the UI shows the reason.
+    register_shutdown_function( function () use ( $job_id ): void {
+        $job = csbr_get_job( $job_id );
+        if ( is_array( $job ) && ( $job['status'] ?? '' ) === 'running' ) {
+            $err = error_get_last();
+            $detail = $err
+                ? sprintf( '%s (type %d) in %s:%d', $err['message'], $err['type'], $err['file'], $err['line'] )
+                : 'Backup process terminated unexpectedly — check the PHP error log.';
+            csbr_log( '[CloudScale Backup & Restore] FATAL — backup job ' . $job_id . ' terminated while running: ' . $detail );
+            csbr_set_job( $job_id, [ 'status' => 'error', 'message' => 'Backup failed: ' . $detail ] );
+            update_option( 'csbr_last_backup_failed', true, false );
+        }
+    } );
+
     try {
         // Cloud space pre-check: estimate from the most recent local backup zip.
         // If any enabled rclone provider has less free space than that estimate, abort early.
@@ -3365,15 +3460,16 @@ function csbr_execute_backup_job( string $job_id, array $opts ): void {
         update_option( 'csbr_last_backup_failed', false, false );
 
         $cloud_lines = [];
-        $notify_body  = "Backup completed successfully.\n\nFile: " . basename( $filename ) . "\nSize: " . csbr_format_size( (int) filesize( $filename ) ) . "\n";
+        $notify_body  = "Backup completed successfully.\n\nFile: " . basename( $filename ) . "\nSize: " . csbr_format_size( (int) filesize( CSBR_BACKUP_DIR . basename( $filename ) ) ) . "\n";
         if ( $cloud_lines ) {
             $notify_body .= "\nCloud sync:\n" . implode( "\n", $cloud_lines ) . "\n";
         }
         $notify_body .= "\nSite: " . home_url() . "\n";
         csbr_send_backup_notification( true, basename( $filename ), $notify_body );
 
-    } catch ( Exception $e ) {
-        csbr_log( '[CloudScale Backup & Restore] EXCEPTION in backup job ' . $job_id . ': ' . $e->getMessage() );
+    } catch ( \Throwable $e ) {
+        $detail = sprintf( '%s: %s in %s:%d', get_class( $e ), $e->getMessage(), $e->getFile(), $e->getLine() );
+        csbr_log( '[CloudScale Backup & Restore] ERROR in backup job ' . $job_id . ': ' . $detail );
         update_option( 'csbr_last_backup_failed', true, false );
         csbr_set_job( $job_id, [ 'status' => 'error', 'message' => $e->getMessage() ] );
         csbr_send_backup_notification( false, 'Error', "Backup failed.\n\nError: " . $e->getMessage() . "\n\nSite: " . home_url() . "\n" );
@@ -6414,8 +6510,9 @@ add_action( 'admin_post_csbr_quick_backup', function (): void {
     try {
         csbr_create_backup( true, true, true, true );
         csbr_enforce_retention();
-    } catch ( Exception $e ) {
-        csbr_log( '[CloudScale Backup & Restore] Quick backup from dashboard widget failed: ' . $e->getMessage() );
+    } catch ( \Throwable $e ) {
+        $detail = sprintf( '%s: %s in %s:%d', get_class( $e ), $e->getMessage(), $e->getFile(), $e->getLine() );
+        csbr_log( '[CloudScale Backup & Restore] Quick backup from dashboard widget failed: ' . $detail );
     }
 
     wp_safe_redirect( admin_url( 'tools.php?page=cloudscale-backup' ) );
