@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Backup & Restore
  * Plugin URI:        https://cloudscale.consulting
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.353
+ * Version:           3.2.355
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CSBR_VERSION',    '3.2.353');
+define('CSBR_VERSION',    '3.2.355');
 define('CSBR_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CSBR_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CSBR_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -6366,25 +6366,85 @@ add_action('wp_ajax_csbr_save_retention', function (): void {
 // ============================================================
 
 add_action('admin_post_csbr_download', function (): void {
-    check_admin_referer('csbr_download');
+    // Log every attempt so we can diagnose failures from the activity log.
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- logged raw for diagnostics, sanitised below
+    $raw_file = $_GET['file'] ?? '';
+    csbr_log( '[CSBR Download] Handler called — file param: ' . $raw_file . ' user: ' . get_current_user_id() );
+
+    // Verify nonce manually so we can log the failure reason before dying.
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+    $nonce = $_REQUEST['_wpnonce'] ?? '';
+    if ( ! wp_verify_nonce( $nonce, 'csbr_download' ) ) {
+        csbr_log( '[CSBR Download] FAILED — nonce invalid for file: ' . $raw_file );
+        wp_die( esc_html__( 'Security check failed. Please reload the page and try again.', 'cloudscale-backup-restore' ) );
+    }
+
     if ( ! current_user_can( 'manage_options' ) ) {
+        csbr_log( '[CSBR Download] FAILED — permission denied for user: ' . get_current_user_id() );
         wp_die( esc_html__( 'Forbidden', 'cloudscale-backup-restore' ) );
     }
 
-    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- GET param sanitised immediately via sanitize_file_name()
-    $file = sanitize_file_name( wp_unslash( $_GET['file'] ?? '' ) );
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- sanitised immediately via sanitize_file_name()
+    $file = sanitize_file_name( wp_unslash( $raw_file ) );
     $path = CSBR_BACKUP_DIR . $file;
 
-    if (!file_exists($path) || strpos(realpath($path), realpath(CSBR_BACKUP_DIR)) !== 0) {
+    if ( empty( $file ) ) {
+        csbr_log( '[CSBR Download] FAILED — no file parameter' );
         wp_die( esc_html__( 'File not found.', 'cloudscale-backup-restore' ) );
     }
 
-    csbr_log( '[CloudScale Backup & Restore] Backup downloaded by admin: ' . $file );
-    header('Content-Type: application/zip');
-    header('Content-Disposition: attachment; filename="' . str_replace( [ "\r", "\n", '"', '\\' ], '', $file ) . '"');
-    header('Content-Length: ' . filesize($path));
-    header('Cache-Control: no-cache');
-    readfile($path); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- streaming binary download requires readfile(); WP_Filesystem has no streaming equivalent
+    if ( ! file_exists( $path ) ) {
+        csbr_log( '[CSBR Download] FAILED — file not found on disk: ' . $path );
+        wp_die( esc_html__( 'File not found.', 'cloudscale-backup-restore' ) );
+    }
+
+    $real_path = realpath( $path );
+    $real_dir  = realpath( CSBR_BACKUP_DIR );
+    if ( $real_path === false || $real_dir === false || strpos( $real_path, $real_dir ) !== 0 ) {
+        csbr_log( '[CSBR Download] FAILED — path traversal check failed: ' . $path );
+        wp_die( esc_html__( 'File not found.', 'cloudscale-backup-restore' ) );
+    }
+
+    $fsize = (int) filesize( $path );
+    csbr_log( '[CSBR Download] Serving file: ' . $file . ' (' . $fsize . ' bytes)' );
+
+    // Prepare for a clean binary stream: remove timeout, disable gzip compression
+    // (it's already a zip), and flush any WordPress output buffers so the file is
+    // streamed directly to the browser rather than buffered into PHP memory.
+    set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required for large file downloads
+    ignore_user_abort( true );
+    @ini_set( 'zlib.output_compression', 'Off' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort, non-fatal
+    while ( ob_get_level() ) ob_end_clean();
+
+    header( 'Content-Type: application/zip' );
+    header( 'Content-Disposition: attachment; filename="' . str_replace( [ "\r", "\n", '"', '\\' ], '', $file ) . '"' );
+    header( 'Content-Length: ' . $fsize );
+    header( 'Cache-Control: no-cache, no-store, must-revalidate' );
+    header( 'Pragma: no-cache' );
+    header( 'Expires: 0' );
+
+    // Stream in 1 MB chunks with explicit flush() so the web server sends data
+    // to the client continuously rather than buffering the entire zip first.
+    // readfile() alone fills Apache's send buffer (can hold hundreds of MB)
+    // before transmitting a single byte to Cloudflare/browser, causing timeouts
+    // on large files.  Chunked streaming + flush() forces pipeline delivery.
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- binary streaming requires fopen/fread; WP_Filesystem has no equivalent
+    $handle = fopen( $path, 'rb' );
+    if ( $handle === false ) {
+        csbr_log( '[CSBR Download] FAILED — fopen failed: ' . $path );
+        exit;
+    }
+    while ( ! feof( $handle ) ) {
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- see above
+        $chunk = fread( $handle, 1024 * 1024 ); // 1 MB
+        if ( $chunk !== false ) {
+            echo $chunk; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- raw binary, escaping would corrupt the zip
+            flush();
+        }
+    }
+    // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- paired with fopen above
+    fclose( $handle );
+    csbr_log( '[CSBR Download] Completed: ' . $file );
     exit;
 });
 
