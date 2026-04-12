@@ -29,3 +29,7 @@ rollback-wordpress.sh
 generate-help-docs.sh
 docs/screenshots/
 repo/
+
+# Playwright generated output
+playwright-report/
+test-results/
