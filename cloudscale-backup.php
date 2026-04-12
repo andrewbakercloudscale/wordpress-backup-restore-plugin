@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Backup & Restore
  * Plugin URI:        https://cloudscale.consulting
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.342
+ * Version:           3.2.345
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CSBR_VERSION',    '3.2.342');
+define('CSBR_VERSION',    '3.2.345');
 define('CSBR_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CSBR_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CSBR_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -459,6 +459,9 @@ add_action('csbr_scheduled_backup', function () {
     if ( get_option( 'csbr_auto_repair', false ) ) {
         csbr_run_table_repair();
     }
+
+    update_option( 'csbr_last_backup_time', time(), false );
+    update_option( 'csbr_last_backup_failed', false, false );
 
     /**
      * Fires after a scheduled local backup completes (cloud syncs and notifications already done).

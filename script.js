@@ -1517,6 +1517,18 @@ function csShowExplain(title, body) {
     $('#cs-explain-title').text(title);
     $('#cs-explain-body').html(body);
 
+    // Apply dark styling to all inline <code> elements
+    document.querySelectorAll('#cs-explain-body code').forEach(function (code) {
+        if (code.style.display === 'block') return;
+        code.style.background = '#1e2430';
+        code.style.color = '#e8b86d';
+        code.style.padding = '1px 6px';
+        code.style.borderRadius = '3px';
+        code.style.fontFamily = 'ui-monospace,SFMono-Regular,Consolas,monospace';
+        code.style.fontSize = '0.85em';
+        code.style.whiteSpace = 'nowrap';
+    });
+
     // Inject copy buttons into every block <code> snippet
     document.querySelectorAll('#cs-explain-body code').forEach(function (code) {
         if (code.style.display !== 'block') return;
@@ -1605,11 +1617,31 @@ function csConfirm(icon, title, subtitle, body, onConfirm, confirmLabel, confirm
 
 window.csNotifyExplain = function () {
     csShowExplain('Notifications',
-        '<p>Configure where alerts are sent when backups, restores, or plugin rollbacks occur. Each channel is independent — mix and match however you like.</p>' +
-        '<p><strong>Email</strong> — sends an email via WordPress\'s <code>wp_mail()</code>. If mail is silently dropped, install the WP Mail SMTP plugin and configure it with your SMTP credentials (port 587). Choose success &amp; failures, failures only, or successes only for backup events. Enable "Plugin rollbacks" to also receive an email when Automatic Crash Recovery rolls back a plugin.</p>' +
-        '<p><strong>SMS via Twilio</strong> — sends a text message via the Twilio API. You\'ll need a free Twilio account (twilio.com), an Account SID, Auth Token, a "From" number (your Twilio number), and a "To" number. Choose which events trigger an SMS. Plugin rollback alerts are always treated as failures.</p>' +
-        '<p><strong>Push via ntfy</strong> — instant push notifications to your phone using the free <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy.sh</a> service. No account needed: install the ntfy app on your phone, subscribe to a topic, then enter the exact topic name in the Topic field. Topics are case-sensitive — the topic you enter here must match exactly what you subscribed to in the app (e.g. if you subscribed to <code>mysite-backups</code>, enter <code>mysite-backups</code>, not <code>MySite-Backups</code>). Use an obscure topic name since ntfy.sh topics are public. Choose which events and results trigger a push.</p>' +
-        '<p><strong>Send Test</strong> — fires a test message using the credentials currently in the form (you do not need to save first).</p>'
+        '<p style="margin:0 0 12px;font-size:12px;color:#50575e;line-height:1.5;">Configure where alerts are sent when backups, restores, or plugin rollbacks occur. Each channel is independent — mix and match however you like.</p>' +
+        '<div style="display:flex;flex-direction:column;gap:8px;">' +
+
+        '<div style="border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;">' +
+        '<p style="margin:0 0 4px;font-size:13px;font-weight:700;color:#111;">📧 Email</p>' +
+        '<p style="margin:0;font-size:12px;color:#50575e;line-height:1.5;">Sends an email via WordPress\'s <code style="background:#f0f0f1;padding:1px 5px;border-radius:3px;font-size:11px;">wp_mail()</code>. If mail is silently dropped, install WP Mail SMTP and configure it with your SMTP credentials (port 587). Choose success &amp; failures, failures only, or successes only. Enable "Plugin rollbacks" to also alert when Automatic Crash Recovery rolls back a plugin.</p>' +
+        '</div>' +
+
+        '<div style="border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;">' +
+        '<p style="margin:0 0 4px;font-size:13px;font-weight:700;color:#111;">💬 SMS via Twilio</p>' +
+        '<p style="margin:0;font-size:12px;color:#50575e;line-height:1.5;">Sends a text message via the Twilio API. You\'ll need a free Twilio account, an Account SID, Auth Token, a "From" number (your Twilio number), and a "To" number. Plugin rollback alerts are always treated as failures.</p>' +
+        '</div>' +
+
+        '<div style="border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;">' +
+        '<p style="margin:0 0 4px;font-size:13px;font-weight:700;color:#111;">🔔 Push via ntfy</p>' +
+        '<p style="margin:0 0 6px;font-size:12px;color:#50575e;line-height:1.5;">Instant push notifications to your phone using the free <a href="https://ntfy.sh" target="_blank" rel="noopener">ntfy.sh</a> service. No account needed — install the ntfy app, subscribe to a topic, then enter that exact topic name here.</p>' +
+        '<p style="margin:0;font-size:12px;color:#50575e;line-height:1.5;">⚠ Topics are <strong>case-sensitive</strong> and public — use an obscure name (e.g. <code style="background:#f0f0f1;padding:1px 5px;border-radius:3px;font-size:11px;">mysite-backups-x7q</code>).</p>' +
+        '</div>' +
+
+        '<div style="border:1px solid #e0e0e0;border-radius:6px;padding:12px 14px;">' +
+        '<p style="margin:0 0 4px;font-size:13px;font-weight:700;color:#111;">🧪 Send Test</p>' +
+        '<p style="margin:0;font-size:12px;color:#50575e;line-height:1.5;">Fires a test message using the credentials currently in the form — you do not need to save first.</p>' +
+        '</div>' +
+
+        '</div>'
     );
 };
 
@@ -1618,9 +1650,32 @@ window.csScheduleExplain = function () {
         '<p>Controls both <strong>automatic scheduled backups</strong> and <strong>on-demand backups</strong> from this card.</p>' +
         '<p><strong>Days</strong> — tick one or more days of the week for the automatic schedule. Multiple days are supported, e.g. Mon / Wed / Fri.</p>' +
         '<p><strong>Components</strong> — the set of components selected here is used for <em>both</em> scheduled runs and the <strong>Run Backup Now</strong> button below.</p>' +
-        '<p><strong>Time</strong> — when the scheduled backup fires (server time). WP-Cron triggers on the next page load at or after the scheduled time. On low-traffic sites add a real system cron for reliable timing: <code>* * * * * curl -s yoursite.com/wp-cron.php?doing_wp_cron</code></p>' +
+        '<div style="display:flex;flex-direction:column;gap:5px;margin:0 0 10px;">' +
+        '<div style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;"><strong>Database</strong> — all WordPress tables (posts, users, settings, comments). Required to restore content. Always recommended.</div>' +
+        '<div style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;"><strong>Media uploads</strong> — everything in <code style="background:#e8e8e8;padding:1px 4px;border-radius:3px;">wp-content/uploads</code>: images, PDFs, videos. Usually the largest component.</div>' +
+        '<div style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;"><strong>Plugins</strong> — all installed plugins in <code style="background:#e8e8e8;padding:1px 4px;border-radius:3px;">wp-content/plugins</code>. Include this if you have custom or purchased plugins not available via wordpress.org.</div>' +
+        '<div style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;"><strong>Themes</strong> — all themes in <code style="background:#e8e8e8;padding:1px 4px;border-radius:3px;">wp-content/themes</code>, including child themes and any customisations.</div>' +
+        '<div style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;"><strong>Must-use plugins</strong> — plugins in <code style="background:#e8e8e8;padding:1px 4px;border-radius:3px;">wp-content/mu-plugins</code>. These load automatically and are not shown in the normal Plugins screen.</div>' +
+        '<div style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;"><strong>Languages</strong> — translation files in <code style="background:#e8e8e8;padding:1px 4px;border-radius:3px;">wp-content/languages</code>. Only needed if you use a non-English locale.</div>' +
+        '<div style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;"><strong>Dropins</strong> — advanced override files directly in <code style="background:#e8e8e8;padding:1px 4px;border-radius:3px;">wp-content/</code>, such as <code style="background:#e8e8e8;padding:1px 4px;border-radius:3px;">object-cache.php</code> or <code style="background:#e8e8e8;padding:1px 4px;border-radius:3px;">advanced-cache.php</code>. Most sites can skip this.</div>' +
+        '<div style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;"><strong>.htaccess</strong> — Apache rewrite rules used for pretty permalinks. Not needed on Nginx servers.</div>' +
+        '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:5px;padding:8px 12px;font-size:12px;color:#664d03;line-height:1.5;"><strong>wp-config.php</strong> ⚠ credentials — contains your database password and secret keys. Handle with care: do not store unencrypted backups of this file in public locations.</div>' +
+        '<div style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;"><strong>WP Core files</strong> — the WordPress core installation files. Required for a full site clone; not needed for a standard disaster-recovery backup (a fresh WP install + DB + uploads is usually sufficient).</div>' +
+        '</div>' +
+        '<p><strong>Time</strong> — when the scheduled backup fires (server time). WP-Cron triggers on the next page load at or after the scheduled time. On low-traffic sites add a real system cron for reliable timing:</p>' +
+        '<code style="display:block;background:#1e1e1e;color:#d4d4d4;padding:8px 12px;border-radius:4px;margin:4px 0 10px;font-size:0.82rem;white-space:pre;">* * * * * curl -s yoursite.com/wp-cron.php?doing_wp_cron</code>' +
         '<p><strong>Run Backup Now</strong> — triggers an immediate backup using the currently selected components. Settings are auto-saved before the backup starts, so you do not need to click Save Schedule first.</p>' +
-        '<p>Disable the toggle or leave all days unchecked to stop automatic backups while still being able to run on-demand backups via the button.</p>'
+        '<p>Disable the toggle or leave all days unchecked to stop automatic backups while still being able to run on-demand backups via the button.</p>' +
+        '<hr style="margin:14px 0;border:none;border-top:1px solid #e0e0e0;">' +
+        '<p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#111;">Run integrity check after each backup</p>' +
+        '<p style="margin:0 0 10px;font-size:12px;color:#50575e;line-height:1.5;">After every backup the zip is automatically inspected to confirm it is usable:</p>' +
+        '<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;">' +
+        '<div style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;"><strong>ZIP can be opened</strong> — confirms the archive is not corrupt or truncated.</div>' +
+        '<div style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;"><strong>Metadata is valid</strong> — verifies <code style="background:#e8e8e8;padding:1px 4px;border-radius:3px;">backup-meta.json</code> exists and contains valid JSON.</div>' +
+        '<div style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;"><strong>Database SQL is present</strong> — if a DB backup was included, confirms <code style="background:#e8e8e8;padding:1px 4px;border-radius:3px;">database.sql</code> is non-empty and contains recognisable SQL markers.</div>' +
+        '<div style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;"><strong>File components exist</strong> — for each included component (media, plugins, themes, etc.) confirms the folder is present and non-empty in the zip.</div>' +
+        '</div>' +
+        '<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:5px;padding:8px 12px;font-size:12px;color:#664d03;line-height:1.5;">If a backup <strong>fails</strong> the check: a red <strong>&#x2717; Failed</strong> badge appears in the history table, the error is logged, and notification emails include <strong>Integrity: FAILED</strong>. The backup file is never deleted automatically. Uncheck to skip the automatic check — the <strong>Verify</strong> button in the history table remains available for manual checks at any time.</div>'
     );
 };
 
@@ -1644,9 +1699,20 @@ window.csCloudScheduleExplain = function () {
 
 window.csRetentionExplain = function () {
     csShowExplain('Retention & Storage',
-        '<p>Controls how many local backup zips are kept on disk. After every backup (scheduled or manual) the oldest files beyond this limit are deleted automatically. This applies to local backups only — cloud retention is set in Cloud Backup Settings.</p>' +
-        '<p><strong>Filename prefix</strong> — prepended to every backup zip name (e.g. <code>mysite_f12.zip</code>). Changing it does not affect existing backups.</p>' +
-        '<p><strong>Storage estimate</strong> — based on the size of your most recent backup multiplied by your retention count. If the estimate exceeds free disk space the counter turns red — lower retention or free up space before the next backup.</p>'
+        '<p style="margin:0 0 12px;font-size:12px;color:#50575e;line-height:1.5;">Controls how many local backup zips are kept on disk. After every backup (scheduled or manual) the oldest files beyond this limit are deleted automatically. This applies to local backups only — cloud retention is set separately in Cloud Backup Settings.</p>' +
+        '<div style="display:flex;flex-direction:column;gap:8px;">' +
+
+        '<div style="background:#f6f7f7;border-radius:5px;padding:10px 14px;">' +
+        '<p style="margin:0 0 3px;font-size:12px;font-weight:700;color:#111;">Filename prefix</p>' +
+        '<p style="margin:0;font-size:12px;color:#50575e;line-height:1.5;">Prepended to every backup zip name (e.g. <code style="background:#e8e8e8;padding:1px 5px;border-radius:3px;font-size:11px;">mysite_f12.zip</code>). Changing it does not affect existing backups.</p>' +
+        '</div>' +
+
+        '<div style="background:#f6f7f7;border-radius:5px;padding:10px 14px;">' +
+        '<p style="margin:0 0 3px;font-size:12px;font-weight:700;color:#111;">Storage estimate</p>' +
+        '<p style="margin:0;font-size:12px;color:#50575e;line-height:1.5;">Based on the size of your most recent backup multiplied by your retention count. If the estimate exceeds free disk space the counter turns red — lower retention or free up disk space before the next backup runs.</p>' +
+        '</div>' +
+
+        '</div>'
     );
 };
 
@@ -3234,12 +3300,12 @@ window.csDropboxTest = function () {
 
 window.csDropboxDiagnose = function () {
     csShowExplain('Dropbox Diagnose',
-        '<p>Run <strong>Test Connection</strong> first. If it fails, check:</p>' +
-        '<ul style="margin:8px 0 0 18px;padding:0;">' +
-        '<li>rclone is installed: <code>which rclone</code></li>' +
-        '<li>A Dropbox remote exists: <code>sudo -u apache rclone listremotes</code></li>' +
-        '<li>The remote name matches what you entered above</li>' +
-        '<li>The apache user can write to the rclone config: <code>ls -la /usr/share/httpd/.config/rclone/</code></li>' +
+        '<p style="margin:0 0 10px;font-size:12px;color:#50575e;line-height:1.5;">Run <strong>Test Connection</strong> first. If it fails, work through these checks:</p>' +
+        '<ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;">' +
+        '<li style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;">rclone is installed: <code style="background:#e8e8e8;padding:1px 5px;border-radius:3px;font-size:11px;">which rclone</code></li>' +
+        '<li style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;">A Dropbox remote exists: <code style="background:#e8e8e8;padding:1px 5px;border-radius:3px;font-size:11px;">sudo -u apache rclone listremotes</code></li>' +
+        '<li style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;">The remote name matches what you entered above</li>' +
+        '<li style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;">The apache user can write to the rclone config: <code style="background:#e8e8e8;padding:1px 5px;border-radius:3px;font-size:11px;">ls -la /usr/share/httpd/.config/rclone/</code></li>' +
         '</ul>'
     );
 };
@@ -3345,13 +3411,13 @@ window.csOneDriveTest = function () {
 
 window.csOneDriveDiagnose = function () {
     csShowExplain('OneDrive Diagnose',
-        '<p>Run <strong>Test Connection</strong> first. If it fails, check:</p>' +
-        '<ul style="margin:8px 0 0 18px;padding:0;">' +
-        '<li>rclone is installed: <code>which rclone</code></li>' +
-        '<li>A OneDrive remote exists: <code>sudo -u apache rclone listremotes</code></li>' +
-        '<li>The remote name matches what you entered above</li>' +
-        '<li>The apache user can write to the rclone config: <code>ls -la /usr/share/httpd/.config/rclone/</code></li>' +
-        '<li>Token not expired — re-run <code>sudo -u apache rclone config reconnect onedrive:</code> to refresh</li>' +
+        '<p style="margin:0 0 10px;font-size:12px;color:#50575e;line-height:1.5;">Run <strong>Test Connection</strong> first. If it fails, work through these checks:</p>' +
+        '<ul style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:6px;">' +
+        '<li style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;">rclone is installed: <code style="background:#e8e8e8;padding:1px 5px;border-radius:3px;font-size:11px;">which rclone</code></li>' +
+        '<li style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;">A OneDrive remote exists: <code style="background:#e8e8e8;padding:1px 5px;border-radius:3px;font-size:11px;">sudo -u apache rclone listremotes</code></li>' +
+        '<li style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;">The remote name matches what you entered above</li>' +
+        '<li style="background:#f6f7f7;border-radius:5px;padding:8px 12px;font-size:12px;color:#1d2327;line-height:1.4;">The apache user can write to the rclone config: <code style="background:#e8e8e8;padding:1px 5px;border-radius:3px;font-size:11px;">ls -la /usr/share/httpd/.config/rclone/</code></li>' +
+        '<li style="background:#fff3cd;border:1px solid #ffc107;border-radius:5px;padding:8px 12px;font-size:12px;color:#664d03;line-height:1.4;">Token expired? Re-run: <code style="background:#ffe8a1;padding:1px 5px;border-radius:3px;font-size:11px;">sudo -u apache rclone config reconnect onedrive:</code></li>' +
         '</ul>'
     );
 };
