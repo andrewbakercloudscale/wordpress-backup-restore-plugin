@@ -31,8 +31,10 @@ class CSBR_Backup_Utils {
 	 * @return void
 	 */
 	public static function log( string $message ): void {
-		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-		error_log( $message );
+		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( $message );
+		}
 		// Also persist in DB for the in-plugin log viewer (capped at 200 entries).
 		// Use a unique microsecond key to avoid concurrent workers clobbering each other.
 		$key = 'cs_log_' . str_replace( '.', '_', (string) microtime( true ) ) . '_' . wp_generate_password( 4, false );
