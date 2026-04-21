@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Backup & Restore
  * Plugin URI:        https://cloudscale.consulting
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.355
+ * Version:           3.2.360
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CSBR_VERSION',    '3.2.355');
+define('CSBR_VERSION',    '3.2.360');
 define('CSBR_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CSBR_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CSBR_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -54,6 +54,15 @@ function csbr_log( string $message ): void {
 // with empty memory, so get_transient() returns false and jobs never run.
 // These helpers write directly to wp_options so every PHP process can read them.
 
+/**
+ * Persist a background job record directly to wp_options, bypassing the object cache.
+ *
+ * @since 3.2.0
+ * @param string $job_id Unique job identifier.
+ * @param array  $data   Associative array of job data to store.
+ * @param int    $ttl    Time-to-live in seconds (default: HOUR_IN_SECONDS).
+ * @return void
+ */
 function csbr_set_job( string $job_id, array $data, int $ttl = HOUR_IN_SECONDS ): void {
     global $wpdb;
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -62,6 +71,15 @@ function csbr_set_job( string $job_id, array $data, int $ttl = HOUR_IN_SECONDS )
     $wpdb->replace( $wpdb->options, [ 'option_name' => 'csbr_job_expires_' . $job_id, 'option_value' => (string) ( time() + $ttl ), 'autoload' => 'no' ] );
 }
 
+/**
+ * Retrieve a background job record from wp_options.
+ *
+ * Returns false if the record does not exist or has expired.
+ *
+ * @since 3.2.0
+ * @param string $job_id Unique job identifier.
+ * @return array|false Job data array, or false if not found or expired.
+ */
 function csbr_get_job( string $job_id ): array|false {
     global $wpdb;
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -72,6 +90,13 @@ function csbr_get_job( string $job_id ): array|false {
     return $value !== null ? maybe_unserialize( $value ) : false; // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.serialize_maybe_unserialize -- value written only by this plugin via csbr_set_job()
 }
 
+/**
+ * Delete a background job record and its expiry entry from wp_options.
+ *
+ * @since 3.2.0
+ * @param string $job_id Unique job identifier.
+ * @return void
+ */
 function csbr_delete_job( string $job_id ): void {
     global $wpdb;
     // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -336,6 +361,10 @@ function csbr_reschedule(): void {
     $timezone = wp_timezone();
     $now      = new DateTime('now', $timezone);
 
+    // Compute a single jitter offset (seconds) applied to both local and cloud events.
+    // Using the same offset keeps both backups in sync while spreading load across servers.
+    $jitter = get_option( 'csbr_randomise_start', true ) ? wp_rand( -15, 15 ) * 60 : 0;
+
     // Local file backup — only if local schedule is enabled
     if (get_option('csbr_schedule_enabled', false)) {
         $run_days = csbr_get_run_days();
@@ -350,7 +379,7 @@ function csbr_reschedule(): void {
                 $candidate->modify('+1 day');
                 $candidate->setTime($hour, $minute, 0);
             }
-            wp_schedule_event($candidate->getTimestamp(), 'daily', 'csbr_scheduled_backup');
+            wp_schedule_event($candidate->getTimestamp() + $jitter, 'daily', 'csbr_scheduled_backup');
         }
     }
 
@@ -372,7 +401,7 @@ function csbr_reschedule(): void {
                 $candidate->modify('+1 day');
                 $candidate->setTime($cloud_hour, $cloud_minute, 0);
             }
-            wp_schedule_event($candidate->getTimestamp(), 'daily', 'csbr_scheduled_ami_backup');
+            wp_schedule_event($candidate->getTimestamp() + $jitter, 'daily', 'csbr_scheduled_ami_backup');
         }
     }
 }
@@ -484,8 +513,8 @@ add_action('csbr_scheduled_ami_backup', function () {
 
     csbr_log( '[CloudScale Backup & Restore] Scheduled cloud backup starting.' );
 
-    // 1. AMI snapshot (if enabled and prefix configured)
-    if (get_option('csbr_ami_sync_enabled', true) && get_option('csbr_ami_prefix', '')) {
+    // 1. AMI snapshot (if enabled, prefix configured, and running on EC2)
+    if (get_option('csbr_ami_sync_enabled', true) && get_option('csbr_ami_prefix', '') && csbr_get_instance_id()) {
         $result = csbr_do_create_ami();
         if ($result['ok']) {
             csbr_log('[CloudScale Backup & Restore] Scheduled AMI created: ' . $result['ami_id'] . ' (' . $result['name'] . ')');
@@ -887,6 +916,7 @@ function csbr_admin_page(): void {
         update_option('csbr_schedule_components', $clean_components);
         update_option('csbr_auto_repair', ! empty( wp_unslash( $_POST['auto_repair'] ?? '' ) )); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_admin_referer(); checkbox presence only
         update_option('csbr_run_integrity_check', ! empty( wp_unslash( $_POST['run_integrity_check'] ?? '' ) )); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce verified via check_admin_referer(); checkbox presence only
+        update_option('csbr_randomise_start', ! empty( wp_unslash( $_POST['randomise_start'] ?? '' ) )); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- checkbox presence only
         // Notification settings are saved via AJAX by the Notifications card — not this form.
         update_option('csbr_encrypt_password', sanitize_text_field( wp_unslash( $_POST['encrypt_password'] ?? '' ) ) ); // phpcs:ignore WordPress.Security.NonceVerification.Missing
         update_option('csbr_toolbar_button', ! empty( wp_unslash( $_POST['toolbar_button'] ?? '' ) )); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- checkbox presence only
@@ -898,6 +928,7 @@ function csbr_admin_page(): void {
         wp_cache_delete('csbr_run_minute',           'options');
         wp_cache_delete('csbr_auto_repair',          'options');
         wp_cache_delete('csbr_run_integrity_check',  'options');
+        wp_cache_delete('csbr_randomise_start',      'options');
         wp_cache_delete('csbr_encrypt_password',     'options');
         wp_cache_delete('csbr_toolbar_button',       'options');
         wp_cache_delete('alloptions',             'options');
@@ -915,6 +946,7 @@ function csbr_admin_page(): void {
     $enabled      = isset($_POST['csbr_action']) ? !empty($_POST['schedule_enabled']) : (bool) get_option('csbr_schedule_enabled', false); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- read-only display; nonce verified in save block above; boolean !empty() check only
     $auto_repair  = isset($_POST['csbr_action']) ? !empty($_POST['auto_repair']) : (bool) get_option('csbr_auto_repair', false); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- read-only display
     $run_integrity_check = isset($_POST['csbr_action']) ? !empty($_POST['run_integrity_check']) : (bool) get_option('csbr_run_integrity_check', true); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- read-only display; defaults to true
+    $randomise_start     = isset($_POST['csbr_action']) ? !empty($_POST['randomise_start']) : (bool) get_option('csbr_randomise_start', true); // phpcs:ignore WordPress.Security.NonceVerification.Missing, WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- read-only display; defaults to true
     $notify_enabled     = (bool)   get_option('csbr_notify_enabled',     false);
     $notify_email       = (string) get_option('csbr_notify_email',       '');
     $notify_on          = (string) get_option('csbr_notify_on',          'both');
@@ -1267,6 +1299,14 @@ function csbr_admin_page(): void {
                             <?php esc_html_e( 'Run integrity check after each backup', 'cloudscale-backup-restore' ); ?>
                         </label>
                         <p class="cs-help"><?php esc_html_e( 'After every backup, the zip is automatically inspected to confirm it can be opened, contains valid metadata, and includes all expected components. Uncheck to skip this check and save a few seconds per backup.', 'cloudscale-backup-restore' ); ?></p>
+                    </div>
+
+                    <div class="cs-field-group">
+                        <label class="cs-option-label" style="margin:0;">
+                            <input type="checkbox" name="randomise_start" value="1" <?php checked( $randomise_start ); ?>>
+                            <?php esc_html_e( 'Randomise start times', 'cloudscale-backup-restore' ); ?>
+                        </label>
+                        <p class="cs-help"><?php esc_html_e( 'Shifts the backup start time by a random +/- 15 minutes each time the schedule is saved. Both local and cloud backups use the same offset so they stay in sync. Recommended when running multiple servers to avoid simultaneous backup load on shared network or storage.', 'cloudscale-backup-restore' ); ?></p>
                     </div>
 
                     <div class="cs-field-group">
@@ -2933,11 +2973,12 @@ add_action( 'wp_ajax_csbr_save_schedule_ajax', function (): void {
     update_option( 'csbr_schedule_components', $clean_components );
     update_option( 'csbr_auto_repair',          ! empty( wp_unslash( $_POST['auto_repair']          ?? '' ) ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- checkbox presence only
     update_option( 'csbr_run_integrity_check',  ! empty( wp_unslash( $_POST['run_integrity_check']  ?? '' ) ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- checkbox presence only
+    update_option( 'csbr_randomise_start',      ! empty( wp_unslash( $_POST['randomise_start']      ?? '' ) ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- checkbox presence only
     update_option( 'csbr_encrypt_password',     sanitize_text_field( wp_unslash( $_POST['encrypt_password'] ?? '' ) ) );
     update_option( 'csbr_toolbar_button',       ! empty( wp_unslash( $_POST['toolbar_button']       ?? '' ) ) ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- checkbox presence only
     foreach ( [ 'csbr_run_days', 'csbr_run_days_saved', 'csbr_schedule_enabled', 'csbr_schedule_components',
                 'csbr_run_hour', 'csbr_run_minute', 'csbr_auto_repair', 'csbr_run_integrity_check',
-                'csbr_encrypt_password', 'csbr_toolbar_button', 'alloptions' ] as $_opt ) {
+                'csbr_randomise_start', 'csbr_encrypt_password', 'csbr_toolbar_button', 'alloptions' ] as $_opt ) {
         wp_cache_delete( $_opt, 'options' );
     }
     csbr_reschedule();
@@ -4916,28 +4957,24 @@ function csbr_execute_sync_job( string $job_id, string $provider_action, string 
 // ============================================================
 
 add_action( 'wp_ajax_csbr_start_sync_s3',     function (): void { csbr_start_async_sync( 'csbr_do_sync_job_s3' ); } );
-add_action( 'wp_ajax_csbr_do_sync_job_s3',    function (): void { csbr_do_async_sync( 'csbr_sync_to_s3', 'S3' ); } );
 
 // ============================================================
 // AJAX — Async GDrive sync
 // ============================================================
 
 add_action( 'wp_ajax_csbr_start_sync_gdrive',  function (): void { csbr_start_async_sync( 'csbr_do_sync_job_gdrive' ); } );
-add_action( 'wp_ajax_csbr_do_sync_job_gdrive', function (): void { csbr_do_async_sync( 'csbr_sync_to_gdrive', 'Google Drive' ); } );
 
 // ============================================================
 // AJAX — Async Dropbox sync
 // ============================================================
 
 add_action( 'wp_ajax_csbr_start_sync_dropbox',   function (): void { csbr_start_async_sync( 'csbr_do_sync_job_dropbox' ); } );
-add_action( 'wp_ajax_csbr_do_sync_job_dropbox',  function (): void { csbr_do_async_sync( 'csbr_sync_to_dropbox',  'Dropbox' ); } );
 
 // ============================================================
 // AJAX — Async OneDrive sync
 // ============================================================
 
 add_action( 'wp_ajax_csbr_start_sync_onedrive',  function (): void { csbr_start_async_sync( 'csbr_do_sync_job_onedrive' ); } );
-add_action( 'wp_ajax_csbr_do_sync_job_onedrive', function (): void { csbr_do_async_sync( 'csbr_sync_to_onedrive', 'OneDrive' ); } );
 
 // ============================================================
 // AJAX — Batch job status (single request covers all pending sync jobs)
@@ -6367,13 +6404,11 @@ add_action('wp_ajax_csbr_save_retention', function (): void {
 
 add_action('admin_post_csbr_download', function (): void {
     // Log every attempt so we can diagnose failures from the activity log.
-    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- logged raw for diagnostics, sanitised below
-    $raw_file = $_GET['file'] ?? '';
+    $raw_file = $_GET['file'] ?? ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- logged raw for diagnostics, sanitised below
     csbr_log( '[CSBR Download] Handler called — file param: ' . $raw_file . ' user: ' . get_current_user_id() );
 
     // Verify nonce manually so we can log the failure reason before dying.
-    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-    $nonce = $_REQUEST['_wpnonce'] ?? '';
+    $nonce = $_REQUEST['_wpnonce'] ?? ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce value passed directly to wp_verify_nonce()
     if ( ! wp_verify_nonce( $nonce, 'csbr_download' ) ) {
         csbr_log( '[CSBR Download] FAILED — nonce invalid for file: ' . $raw_file );
         wp_die( esc_html__( 'Security check failed. Please reload the page and try again.', 'cloudscale-backup-restore' ) );
@@ -6413,7 +6448,7 @@ add_action('admin_post_csbr_download', function (): void {
     // streamed directly to the browser rather than buffered into PHP memory.
     set_time_limit( 0 ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required for large file downloads
     ignore_user_abort( true );
-    @ini_set( 'zlib.output_compression', 'Off' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort, non-fatal
+    @ini_set( 'zlib.output_compression', 'Off' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,Squiz.PHP.DiscouragedFunctions.Discouraged -- best-effort, non-fatal; required for large zip downloads
     while ( ob_get_level() ) ob_end_clean();
 
     header( 'Content-Type: application/zip' );
@@ -6652,39 +6687,49 @@ function csbr_render_dashboard_widget(): void {
 
     $cloud_rows = [];
 
-    if ( get_option( 'csbr_s3_bucket', '' ) ) {
+    if ( get_option( 'csbr_s3_bucket', '' ) && get_option( 'csbr_s3_sync_enabled', true ) ) {
         $s3_log    = (array) get_option( 'csbr_s3_log', [] );
         $s3_ok     = array_filter( $s3_log, fn( $e ) => ! empty( $e['ok'] ) );
         $s3_last   = $s3_ok ? max( array_column( $s3_ok, 'time' ) ) : 0;
         $cloud_rows[] = [ '&#9729; S3 last sync', ...$csbr_age( (int) $s3_last ) ];
+    } else {
+        $cloud_rows[] = [ '&#9729; S3 last sync', 'Disabled', '#999' ];
     }
-    if ( get_option( 'csbr_gdrive_remote', '' ) ) {
+    if ( get_option( 'csbr_gdrive_remote', '' ) && get_option( 'csbr_gdrive_sync_enabled', true ) ) {
         $gd_log   = (array) get_option( 'csbr_gdrive_log', [] );
         $gd_ok    = array_filter( $gd_log, fn( $e ) => ! empty( $e['ok'] ) );
         $gd_last  = $gd_ok ? max( array_column( $gd_ok, 'time' ) ) : 0;
         $cloud_rows[] = [ '&#128196; Google Drive last sync', ...$csbr_age( (int) $gd_last ) ];
+    } else {
+        $cloud_rows[] = [ '&#128196; Google Drive last sync', 'Disabled', '#999' ];
     }
-    if ( get_option( 'csbr_dropbox_remote', '' ) ) {
+    if ( get_option( 'csbr_dropbox_remote', '' ) && get_option( 'csbr_dropbox_sync_enabled', false ) ) {
         $db_log   = (array) get_option( 'csbr_dropbox_log', [] );
         $db_ok    = array_filter( $db_log, fn( $e ) => ! empty( $e['ok'] ) );
         $db_last  = $db_ok ? max( array_column( $db_ok, 'time' ) ) : 0;
         $cloud_rows[] = [ '&#128194; Dropbox last sync', ...$csbr_age( (int) $db_last ) ];
+    } else {
+        $cloud_rows[] = [ '&#128194; Dropbox last sync', 'Disabled', '#999' ];
     }
-    if ( get_option( 'csbr_onedrive_remote', '' ) ) {
+    if ( get_option( 'csbr_onedrive_remote', '' ) && get_option( 'csbr_onedrive_sync_enabled', false ) ) {
         $od_log   = (array) get_option( 'csbr_onedrive_log', [] );
         $od_ok    = array_filter( $od_log, fn( $e ) => ! empty( $e['ok'] ) );
         $od_last  = $od_ok ? max( array_column( $od_ok, 'time' ) ) : 0;
         $cloud_rows[] = [ '&#128462; OneDrive last sync', ...$csbr_age( (int) $od_last ) ];
+    } else {
+        $cloud_rows[] = [ '&#128462; OneDrive last sync', 'Disabled', '#999' ];
     }
-    if ( get_option( 'csbr_ami_prefix', '' ) ) {
+    if ( get_option( 'csbr_ami_prefix', '' ) && get_option( 'csbr_ami_sync_enabled', true ) ) {
         if ( ! csbr_get_instance_id() ) {
-            $cloud_rows[] = [ '&#128247; AMI last snapshot', 'Not running on AWS', '#2e7d32' ];
+            $cloud_rows[] = [ '&#128247; AMI last snapshot', 'Not running on AWS', '#999' ];
         } else {
             $ami_log  = (array) get_option( 'csbr_ami_log', [] );
             $ami_ok   = array_filter( $ami_log, fn( $e ) => ! empty( $e['ok'] ) && ! empty( $e['ami_id'] ) );
             $ami_last = $ami_ok ? max( array_column( $ami_ok, 'time' ) ) : 0;
             $cloud_rows[] = [ '&#128247; AMI last snapshot', ...$csbr_age( (int) $ami_last ) ];
         }
+    } else {
+        $cloud_rows[] = [ '&#128247; AMI last snapshot', 'Disabled', '#999' ];
     }
 
     $widget_style = 'margin: -12px -12px 0 -12px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;';
@@ -6983,12 +7028,61 @@ function csbr_create_backup(
  * @since 2.74.0
  * @return string IMDSv2 token, or empty string on failure.
  */
+/**
+ * Mark this host as not running on EC2.
+ *
+ * Writes to both the transient (fast in-memory path) and directly to wp_options
+ * (DB-backed, survives Redis flushes and server restarts). TTL: 7 days.
+ *
+ * @since 3.2.360
+ * @return void
+ */
+function csbr_imds_set_unavailable(): void {
+    global $wpdb;
+    $expires = time() + 7 * DAY_IN_SECONDS;
+    set_transient( 'csbr_imds_unavailable', 1, 7 * DAY_IN_SECONDS );
+    // Also write directly to wp_options so the flag survives a Redis flush or restart.
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- intentional direct write to persist across object-cache evictions
+    $wpdb->replace( $wpdb->options, [
+        'option_name'  => 'csbr_imds_not_ec2',
+        'option_value' => (string) $expires,
+        'autoload'     => 'no',
+    ] );
+}
+
+/**
+ * Return true if this host has previously been confirmed as not running on EC2.
+ *
+ * Checks the transient first (fast), then falls back to the DB-backed option
+ * (survives restarts). Re-populates the transient from DB when needed.
+ *
+ * @since 3.2.360
+ * @return bool
+ */
+function csbr_imds_is_unavailable(): bool {
+    if ( get_transient( 'csbr_imds_unavailable' ) ) {
+        return true;
+    }
+    global $wpdb;
+    // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- direct read to bypass Redis; this flag must survive restarts
+    $expires = (int) $wpdb->get_var( $wpdb->prepare(
+        "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s",
+        'csbr_imds_not_ec2'
+    ) );
+    if ( $expires && $expires > time() ) {
+        // Re-populate transient so the next check in this request is instantaneous.
+        set_transient( 'csbr_imds_unavailable', 1, $expires - time() );
+        return true;
+    }
+    return false;
+}
+
 function csbr_get_imds_token(): string {
     static $token = null;
     if ( $token !== null ) return $token;
 
     // Short-circuit without a network call if we already know this host is not EC2.
-    if ( get_transient( 'csbr_imds_unavailable' ) ) {
+    if ( csbr_imds_is_unavailable() ) {
         $token = '';
         return $token;
     }
@@ -6997,12 +7091,12 @@ function csbr_get_imds_token(): string {
         'method'    => 'PUT',
         'timeout'   => 2,
         'headers'   => [ 'X-aws-ec2-metadata-token-ttl-seconds' => '60' ],
-        'sslverify' => false,
+        'sslverify' => false, // phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.wp_remote_get_wp_remote_get -- link-local address; no TLS certificate chain exists for 169.254.x.x
     ] );
 
     if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
-        // Not on EC2 — cache unavailability for 7 days to avoid repeated 2-second timeouts.
-        set_transient( 'csbr_imds_unavailable', 1, 7 * DAY_IN_SECONDS );
+        // Not on EC2 — persist the flag to both transient and DB so it survives restarts.
+        csbr_imds_set_unavailable();
         $token = '';
         return $token;
     }
@@ -7022,21 +7116,27 @@ function csbr_get_imds_token(): string {
  */
 function csbr_imds_get(string $path): string {
     // Short-circuit without any network call if we already know IMDS is unavailable.
-    if ( get_transient( 'csbr_imds_unavailable' ) ) {
+    if ( csbr_imds_is_unavailable() ) {
         return '';
     }
 
-    $token    = csbr_get_imds_token();
+    $token = csbr_get_imds_token();
+
+    // If the token fetch just confirmed this host is not on EC2, skip the GET entirely.
+    // Without this check the GET would also time out, doubling the cold-start penalty.
+    if ( csbr_imds_is_unavailable() ) {
+        return '';
+    }
+
     $headers  = $token ? [ 'X-aws-ec2-metadata-token' => $token ] : [];
     $response = wp_remote_get( 'http://169.254.169.254' . $path, [
         'timeout'   => 2,
         'headers'   => $headers,
-        'sslverify' => false,
+        'sslverify' => false, // phpcs:ignore WordPressVIPMinimum.Functions.RestrictedFunctions.wp_remote_get_wp_remote_get -- link-local address; no TLS certificate chain exists for 169.254.x.x
     ] );
 
     if ( is_wp_error( $response ) || 200 !== wp_remote_retrieve_response_code( $response ) ) {
-        // Cache unavailability in case the token check didn't set it yet.
-        set_transient( 'csbr_imds_unavailable', 1, 7 * DAY_IN_SECONDS );
+        csbr_imds_set_unavailable();
         return '';
     }
 
@@ -7345,6 +7445,15 @@ function csbr_rclone_diagnose_error( string $raw ): string {
     return $raw;
 }
 
+/**
+ * Locate the rclone executable on the server.
+ *
+ * Checks common install paths and caches the result for 12 hours.
+ * Returns an empty string if rclone is not found.
+ *
+ * @since 3.0.0
+ * @return string Absolute path to the rclone binary, or empty string if not found.
+ */
 function csbr_find_rclone(): string {
     $cached = get_transient( 'csbr_rclone_path' );
     if ( $cached !== false ) return (string) $cached;
@@ -7378,7 +7487,7 @@ function csbr_find_rclone(): string {
  *                     " --config '/tmp/csbr-rclone-ab12cd34.conf'"
  */
 function csbr_writable_rclone_config( string $path ): string {
-    if ( is_writable( $path ) ) {
+    if ( is_writable( $path ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- WP_Filesystem does not provide is_writable(); direct PHP call required here
         // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_escapeshellarg -- intentional shell quoting
         return ' --config ' . escapeshellarg( $path );
     }
@@ -7431,7 +7540,7 @@ function csbr_rclone_config_flag(): string {
         if ( file_exists( $default ) ) {
             // Writable → no explicit flag needed (rclone finds it via $HOME).
             // Not writable → must point rclone at a temp copy it can write to.
-            $flag = is_writable( $default ) ? '' : csbr_writable_rclone_config( $default );
+            $flag = is_writable( $default ) ? '' : csbr_writable_rclone_config( $default ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- WP_Filesystem does not provide is_writable()
             return $flag;
         }
     }
@@ -7725,6 +7834,15 @@ function csbr_enforce_dropbox_retention(): void {
     update_option( 'csbr_dropbox_remote_count', count( array_merge( $golden, array_slice( $regular, -$max ) ) ), false );
 }
 
+/**
+ * Locate the AWS CLI executable on the server.
+ *
+ * Checks common install paths and caches the result for 12 hours.
+ * Returns an empty string if the AWS CLI is not found.
+ *
+ * @since 2.74.0
+ * @return string Absolute path to the aws binary, or empty string if not found.
+ */
 function csbr_find_aws(): string {
     $cached = get_transient( 'csbr_aws_path' );
     if ( $cached !== false ) return (string) $cached;
@@ -8483,6 +8601,13 @@ function csbr_parse_row_columns( string $row ): array {
     return $cols;
 }
 
+/**
+ * Extract the list of table names declared in a SQL dump string.
+ *
+ * @since 3.0.0
+ * @param string $sql Raw SQL dump content.
+ * @return string[] Array of table name strings.
+ */
 function csbr_list_tables_in_dump( string $sql ): array {
     preg_match_all( '/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?`([^`]+)`/i', $sql, $m );
     return array_values( array_unique( $m[1] ) );
@@ -8730,6 +8855,15 @@ function csbr_get_latest_backup_path(): string {
     return $files[0];
 }
 
+/**
+ * Return a list of all backup zip files in the backup directory.
+ *
+ * Each entry contains metadata about the backup including name, type label,
+ * size, creation time, and cloud-sync log entries.
+ *
+ * @since 1.0.0
+ * @return array[] Array of associative arrays describing each backup file.
+ */
 function csbr_list_backups(): array {
     $backups = [];
     if (!is_dir(CSBR_BACKUP_DIR)) return $backups;
@@ -9097,18 +9231,3 @@ function csbr_free_local_space( string $context, string $exclude_file = '' ): st
     return '';
 }
 
-/**
- * Verify that the current AJAX request carries a valid nonce.
- *
- * Capability must be checked independently by each handler before calling this
- * function so that every action has a visible, self-contained permission gate.
- * Sends a JSON error response and exits if the nonce check fails.
- *
- * @since 1.0.0
- * @return void
- */
-function csbr_verify_nonce(): void {
-    if ( ! check_ajax_referer( 'csbr_nonce', 'nonce', false ) ) {
-        wp_send_json_error( 'Security check failed.' );
-    }
-}

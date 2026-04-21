@@ -298,11 +298,14 @@
 }
 
 .cs-wrap .cs-day-check-label input[type="checkbox"] {
-    width: 15px;
-    height: 15px;
+    /* Use 1rem (WP admin default) so the Dashicon ::before checkmark
+       offsets stay correctly centred inside the box */
+    width: 1rem;
+    height: 1rem;
     margin: 0;
     flex-shrink: 0;
     cursor: pointer;
+    vertical-align: middle;
 }
 
 /* ================================================================
