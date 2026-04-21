@@ -33,3 +33,4 @@ repo/
 # Playwright generated output
 playwright-report/
 test-results/
+.env.test

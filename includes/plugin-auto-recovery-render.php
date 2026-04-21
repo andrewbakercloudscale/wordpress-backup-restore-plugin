@@ -146,7 +146,7 @@ sudo chmod +x /usr/local/bin/csbr-par-watchdog.sh</pre>
 	    <li><?php esc_html_e( 'Before any plugin update, the current plugin directory is copied to a secure backup location on the server.', 'cloudscale-backup-restore' ); ?></li>
 	    <li><?php esc_html_e( 'After the update, the system-cron watchdog probes the health check URL every minute for the monitoring window.', 'cloudscale-backup-restore' ); ?></li>
 	    <li><?php esc_html_e( 'If two consecutive probes fail (5xx error or connection timeout), the watchdog renames the broken plugin directory and copies the backup back — no WordPress or WP-CLI required for the core rollback.', 'cloudscale-backup-restore' ); ?></li>
-	    <li><?php esc_html_e( 'On the next WordPress page load, the rollback is recorded in history and an email (and optional SMS) is sent.', 'cloudscale-backup-restore' ); ?></li>
+	    <li><?php esc_html_e( 'On the next WordPress page load, the rollback is recorded in history and a notification is sent via all configured channels (email, SMS via Twilio, and/or push via ntfy).', 'cloudscale-backup-restore' ); ?></li>
 	    <li><?php esc_html_e( 'While a crash is in progress, visitors see a branded "Automatic Crash Recovery is recovering this site" page instead of a white screen of death.', 'cloudscale-backup-restore' ); ?></li>
 	  </ol>
 	  <p style="margin:14px 0 0;font-size:0.82rem;color:#64748b;padding:10px;background:#fff;border-radius:6px;border:1px solid #e2e8f0;">
