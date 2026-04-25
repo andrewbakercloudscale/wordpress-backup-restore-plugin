@@ -8,10 +8,10 @@ helpLib.run({
     restPass:   process.env.WP_REST_PASS,
     docsDir:    process.env.WP_DOCS_DIR,
 
-    pluginName: 'CloudScale Backup & Restore',
-    pluginDesc: 'The only WordPress backup plugin that is 100% free — including restore. UpdraftPlus, BackupBuddy, and Duplicator all charge $70–$200 per year the moment you need to actually recover your site. CloudScale Backup & Restore gives you scheduled backups, one-click restore, S3 cloud sync, Google Drive sync, Dropbox sync, Microsoft OneDrive sync, and AWS EC2 AMI snapshots at zero cost, forever. No upsell, no premium tier, no surprises.',
-    seoTitle:   'CloudScale Backup & Restore | Free WordPress Backup Plugin',
-    seoDesc:    'Free WordPress backup plugin with one-click restore, S3, Google Drive, Dropbox, OneDrive, and AMI snapshots. Beats UpdraftPlus and BackupBuddy — no paid tier.',
+    pluginName: 'CloudScale Backup & Restore — Free WordPress Backup Plugin with One-Click Restore &amp; Cloud Sync',
+    pluginDesc: 'The only WordPress backup plugin that is 100% free — including full site restore. UpdraftPlus, BackupBuddy, and Duplicator all charge $70–$200/year the moment you need to actually recover your site. CloudScale Backup & Restore gives you automatic scheduled backups (hourly, daily, weekly), one-click full site restore, database-only backups, and cloud sync to Amazon S3, Google Drive, Dropbox, and Microsoft OneDrive. Supports AWS EC2 AMI snapshots for server-level disaster recovery. Takes a pre-update snapshot before plugin or theme updates. Email alerts on success or failure. Restore to a different domain for migrations. Exclude files or directories. Completely free, open source, no subscription, no premium tier, no upsells.',
+    seoTitle:   'CloudScale Backup & Restore | Free WordPress Backup Plugin — S3, Google Drive, OneDrive',
+    seoDesc:    'Free WordPress backup with one-click restore, scheduled backups, Amazon S3, Google Drive, Dropbox & OneDrive sync, AMI snapshots, pre-update backups. Beats UpdraftPlus & BackupBuddy — no paid tier.',
     schema: {
         '@context': 'https://schema.org',
         '@type': 'SoftwareApplication',
@@ -19,17 +19,18 @@ helpLib.run({
         operatingSystem: 'WordPress',
         applicationCategory: 'WebApplication',
         offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
-        softwareVersion: '3.2.360',
+        softwareVersion: '3.2.361',
         downloadUrl: 'https://your-s3-bucket.s3.af-south-1.amazonaws.com/cloudscale-backup.zip',
         url: 'https://github.com/andrewbakercloudscale/wordpress-backup-restore-plugin',
     },
-    pageTitle:  'CloudScale Backup & Restore',
+    pageTitle:  'CloudScale Backup & Restore — Free WordPress Backup Plugin with One-Click Restore, S3 & Cloud Sync',
     pageSlug:   'backup-restore-help',
     downloadUrl: 'https://your-s3-bucket.s3.af-south-1.amazonaws.com/cloudscale-backup.zip',
     repoUrl:     'https://github.com/andrewbakercloudscale/wordpress-backup-restore-plugin',
     adminUrl:   `${process.env.WP_BASE_URL}/wp-admin/tools.php?page=cloudscale-backup`,
 
     pluginFile: `${__dirname}/../cloudscale-backup.php`,
+    logoFile:   `${__dirname}/../CloudScale.png`,
 
     sections: [
         {
