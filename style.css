@@ -38,7 +38,8 @@
     .cs-tab { padding: 8px 14px; font-size: 0.82rem; }
 }
 @media (max-width: 520px) {
-    .cs-tab { padding: 7px 10px; font-size: 0.76rem; flex: 1 1 auto; }
+    .cs-tab-bar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .cs-tab { padding: 7px 10px; font-size: 0.76rem; flex: 0 0 auto; white-space: nowrap; }
 }
 .cs-tab:hover { background: #0040ff; color: #fff; border-color: #0040ff; }
 .cs-tab--active {

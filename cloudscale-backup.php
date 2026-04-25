@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Backup & Restore
  * Plugin URI:        https://cloudscale.consulting
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.360
+ * Version:           3.2.366
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CSBR_VERSION',    '3.2.360');
+define('CSBR_VERSION',    '3.2.366');
 define('CSBR_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CSBR_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CSBR_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -6404,11 +6404,11 @@ add_action('wp_ajax_csbr_save_retention', function (): void {
 
 add_action('admin_post_csbr_download', function (): void {
     // Log every attempt so we can diagnose failures from the activity log.
-    $raw_file = $_GET['file'] ?? ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- logged raw for diagnostics, sanitised below
+    $raw_file = wp_unslash( $_GET['file'] ?? '' ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- logged raw for diagnostics, sanitised below via sanitize_file_name()
     csbr_log( '[CSBR Download] Handler called — file param: ' . $raw_file . ' user: ' . get_current_user_id() );
 
     // Verify nonce manually so we can log the failure reason before dying.
-    $nonce = $_REQUEST['_wpnonce'] ?? ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce value passed directly to wp_verify_nonce()
+    $nonce = wp_unslash( $_REQUEST['_wpnonce'] ?? '' ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce value passed directly to wp_verify_nonce()
     if ( ! wp_verify_nonce( $nonce, 'csbr_download' ) ) {
         csbr_log( '[CSBR Download] FAILED — nonce invalid for file: ' . $raw_file );
         wp_die( esc_html__( 'Security check failed. Please reload the page and try again.', 'cloudscale-backup-restore' ) );
@@ -7034,7 +7034,7 @@ function csbr_create_backup(
  * Writes to both the transient (fast in-memory path) and directly to wp_options
  * (DB-backed, survives Redis flushes and server restarts). TTL: 7 days.
  *
- * @since 3.2.360
+ * @since 3.2.366
  * @return void
  */
 function csbr_imds_set_unavailable(): void {
@@ -7056,7 +7056,7 @@ function csbr_imds_set_unavailable(): void {
  * Checks the transient first (fast), then falls back to the DB-backed option
  * (survives restarts). Re-populates the transient from DB when needed.
  *
- * @since 3.2.360
+ * @since 3.2.366
  * @return bool
  */
 function csbr_imds_is_unavailable(): bool {
