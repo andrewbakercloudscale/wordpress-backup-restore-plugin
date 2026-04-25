@@ -38,8 +38,11 @@
     .cs-tab { padding: 8px 14px; font-size: 0.82rem; }
 }
 @media (max-width: 520px) {
-    .cs-tab-bar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    .cs-tab { padding: 7px 10px; font-size: 0.76rem; flex: 0 0 auto; white-space: nowrap; }
+    /* Switch to inline-block scrolling row — iOS Safari has a known bug with overflow-x on flex containers */
+    .cs-tab-bar { display: block; white-space: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .cs-tab-bar::-webkit-scrollbar { display: none; }
+    .cs-tab { display: inline-block; vertical-align: bottom; padding: 7px 10px; font-size: 0.76rem; white-space: nowrap; margin-right: 4px; }
+    .cs-tab:last-child { margin-right: 0; }
 }
 .cs-tab:hover { background: #0040ff; color: #fff; border-color: #0040ff; }
 .cs-tab--active {
