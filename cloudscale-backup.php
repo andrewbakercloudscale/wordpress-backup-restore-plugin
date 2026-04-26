@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Backup & Restore
  * Plugin URI:        https://cloudscale.consulting
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.388
+ * Version:           3.2.414
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CSBR_VERSION',    '3.2.388');
+define('CSBR_VERSION',    '3.2.414');
 define('CSBR_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CSBR_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CSBR_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -3201,7 +3201,7 @@ function csbr_email_html( string $recipient_email, string $content_html, string 
             . '</a></div>';
     }
 
-    $site_name = esc_html( wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES ) ?: home_url() );
+    $site_name = esc_html( html_entity_decode( html_entity_decode( get_bloginfo( 'name' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ) ?: home_url() );
     $site_url  = esc_url( home_url() );
 
     return '<!DOCTYPE html>
@@ -3213,7 +3213,7 @@ function csbr_email_html( string $recipient_email, string $content_html, string 
       <table width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;">
         <tr><td style="background:#0d0d1f;border-radius:8px 8px 0 0;padding:28px 40px;text-align:center;">
           <div style="font-size:22px;font-weight:800;color:#ffffff;letter-spacing:-0.3px;">&#9889; CloudScale</div>
-          <div style="font-size:11px;font-weight:600;color:#9ca3af;letter-spacing:2px;text-transform:uppercase;margin-top:4px;">CODE &amp; SECURITY</div>
+          <div style="font-size:11px;font-weight:600;color:#9ca3af;letter-spacing:2px;text-transform:uppercase;margin-top:4px;">BACKUP &amp; RESTORE</div>
         </td></tr>
         <tr><td style="background:#ffffff;padding:36px 40px;border-radius:0 0 8px 8px;">
           ' . $greeting . $content_html . $btn_block . '
@@ -3238,17 +3238,17 @@ function csbr_email_html( string $recipient_email, string $content_html, string 
  * @param string $event         'backup' (default) or 'rollback'.
  */
 function csbr_send_backup_notification( bool $success, string $subject_extra, string $body, string $event = 'backup' ): void {
-    $site = wp_specialchars_decode( get_bloginfo( 'name' ), ENT_QUOTES ) ?: home_url();
+    // Decode twice — WP sometimes double-encodes blogname (&#039; stored as &amp;#039;).
+    $site       = html_entity_decode( html_entity_decode( get_bloginfo( 'name' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ) ?: home_url();
+    $is_rollback = $event === 'rollback';
 
     // ── Email ────────────────────────────────────────────────────────────────
-    if ( get_option( 'csbr_notify_enabled', false ) ) {
-        $send_email = false;
-        if ( $event === 'rollback' ) {
-            $send_email = (bool) get_option( 'csbr_notify_on_rollback', true );
-            if ( ! $send_email ) {
-                csbr_log( '[CloudScale Backup & Restore] Email notification skipped (notify_on_rollback=false).' );
-            }
-        } else {
+    // Rollbacks always send — they are critical security/stability events and
+    // must not be silenced by the general notifications toggle.
+    $email_enabled = $is_rollback || get_option( 'csbr_notify_enabled', false );
+    if ( $email_enabled ) {
+        $send_email = $is_rollback; // rollbacks are unconditional
+        if ( ! $is_rollback ) {
             $notify_on  = (string) get_option( 'csbr_notify_on', 'both' );
             $send_email = ( $notify_on === 'both' )
                 || ( $notify_on === 'success' && $success )
@@ -3261,7 +3261,7 @@ function csbr_send_backup_notification( bool $success, string $subject_extra, st
             $to = (string) get_option( 'csbr_notify_email', '' );
             if ( ! is_email( $to ) ) { $to = (string) get_option( 'admin_email' ); }
             if ( is_email( $to ) ) {
-                $status  = $event === 'rollback' ? 'Rollback' : ( $success ? 'Success' : 'Failed' );
+                $status  = $is_rollback ? 'Rollback' : ( $success ? 'Success' : 'Failed' );
                 $subject = '[' . $site . '] Backup ' . $status . ': ' . $subject_extra;
                 csbr_log( '[CloudScale Backup & Restore] Sending notification email to ' . $to );
                 $sent = wp_mail( $to, $subject, csbr_email_html( $to, csbr_email_body_html( $body ) ), csbr_email_headers() );
@@ -3277,39 +3277,38 @@ function csbr_send_backup_notification( bool $success, string $subject_extra, st
     }
 
     // ── SMS via Twilio ───────────────────────────────────────────────────────
+    // Rollbacks fire whenever SMS credentials are configured, regardless of the
+    // backup SMS toggle.
     if ( get_option( 'csbr_sms_enabled', false ) ) {
-        if ( $event === 'rollback' ) {
-            $send_sms = (bool) get_option( 'csbr_sms_on_rollback', true );
+        if ( $is_rollback ) {
+            $send_sms = true;
+        } elseif ( ! get_option( 'csbr_sms_on_backup', false ) ) {
+            $send_sms = false;
         } else {
-            if ( ! get_option( 'csbr_sms_on_backup', false ) ) {
-                $send_sms = false;
-            } else {
-                $sms_filter = (string) get_option( 'csbr_sms_on', 'both' );
-                $send_sms   = ( $sms_filter === 'both' )
-                    || ( $sms_filter === 'success' && $success )
-                    || ( $sms_filter === 'failure' && ! $success );
-            }
+            $sms_filter = (string) get_option( 'csbr_sms_on', 'both' );
+            $send_sms   = ( $sms_filter === 'both' )
+                || ( $sms_filter === 'success' && $success )
+                || ( $sms_filter === 'failure' && ! $success );
         }
-        if ( ! empty( $send_sms ) ) {
+        if ( $send_sms ) {
             csbr_send_sms_notification( '[' . $site . '] ' . $subject_extra );
         }
     }
 
     // ── Push via ntfy ────────────────────────────────────────────────────────
+    // Same rule: rollbacks always fire when ntfy is configured.
     if ( get_option( 'csbr_ntfy_enabled', false ) ) {
-        if ( $event === 'rollback' ) {
-            $send_ntfy = (bool) get_option( 'csbr_ntfy_on_rollback', true );
+        if ( $is_rollback ) {
+            $send_ntfy = true;
+        } elseif ( ! get_option( 'csbr_ntfy_on_backup', true ) ) {
+            $send_ntfy = false;
         } else {
-            if ( ! get_option( 'csbr_ntfy_on_backup', true ) ) {
-                $send_ntfy = false;
-            } else {
-                $ntfy_filter = (string) get_option( 'csbr_ntfy_on', 'both' );
-                $send_ntfy   = ( $ntfy_filter === 'both' )
-                    || ( $ntfy_filter === 'success' && $success )
-                    || ( $ntfy_filter === 'failure' && ! $success );
-            }
+            $ntfy_filter = (string) get_option( 'csbr_ntfy_on', 'both' );
+            $send_ntfy   = ( $ntfy_filter === 'both' )
+                || ( $ntfy_filter === 'success' && $success )
+                || ( $ntfy_filter === 'failure' && ! $success );
         }
-        if ( ! empty( $send_ntfy ) ) {
+        if ( $send_ntfy ) {
             csbr_send_ntfy_notification( $subject_extra, $body );
         }
     }
@@ -3374,7 +3373,7 @@ function csbr_send_ntfy_notification( string $title, string $body ): bool {
         return false;
     }
 
-    $site = get_bloginfo( 'name' ) ?: home_url();
+    $site = html_entity_decode( html_entity_decode( get_bloginfo( 'name' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ) ?: home_url();
 
     $response = wp_remote_post( $url, [
         'timeout' => 10,
@@ -4076,7 +4075,7 @@ add_action( 'wp_ajax_csbr_send_test_sms', function (): void {
     $url  = "https://api.twilio.com/2010-04-01/Accounts/{$sid}/Messages.json";
     // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_encode -- standard HTTP Basic Auth
     $auth = 'Basic ' . base64_encode( "{$sid}:{$token}" );
-    $site = get_bloginfo( 'name' ) ?: home_url();
+    $site = html_entity_decode( html_entity_decode( get_bloginfo( 'name' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ) ?: home_url();
 
     $response = wp_remote_post( $url, [
         'timeout' => 20,
@@ -4114,7 +4113,7 @@ add_action( 'wp_ajax_csbr_send_test_ntfy', function (): void {
         return;
     }
 
-    $site = get_bloginfo( 'name' ) ?: home_url();
+    $site = html_entity_decode( html_entity_decode( get_bloginfo( 'name' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ), ENT_QUOTES | ENT_HTML5, 'UTF-8' ) ?: home_url();
     $response = wp_remote_post( $url, [
         'timeout' => 10,
         'headers' => [
@@ -6696,50 +6695,65 @@ function csbr_render_dashboard_widget(): void {
 
     $cloud_rows = [];
 
+    // Helper: find most-recent error message from a log keyed by filename.
+    // Returns empty string when no failed entries exist.
+    $csbr_last_err = function( array $log ): string {
+        $failed = array_filter( $log, fn( $e ) => empty( $e['ok'] ) && ! empty( $e['error'] ) );
+        if ( ! $failed ) return '';
+        usort( $failed, fn( $a, $b ) => ( $b['time'] ?? 0 ) <=> ( $a['time'] ?? 0 ) );
+        return substr( reset( $failed )['error'] ?? '', 0, 90 );
+    };
+
     if ( get_option( 'csbr_s3_bucket', '' ) && get_option( 'csbr_s3_sync_enabled', true ) ) {
         $s3_log    = (array) get_option( 'csbr_s3_log', [] );
         $s3_ok     = array_filter( $s3_log, fn( $e ) => ! empty( $e['ok'] ) );
         $s3_last   = $s3_ok ? max( array_column( $s3_ok, 'time' ) ) : 0;
-        $cloud_rows[] = [ '&#9729; S3 last sync', ...$csbr_age( (int) $s3_last ) ];
+        $cloud_rows[] = [ '&#9729; S3 last sync', ...$csbr_age( (int) $s3_last ), $csbr_last_err( $s3_log ) ];
     } else {
-        $cloud_rows[] = [ '&#9729; S3 last sync', 'Disabled', '#999' ];
+        $cloud_rows[] = [ '&#9729; S3 last sync', 'Disabled', '#999', '' ];
     }
     if ( get_option( 'csbr_gdrive_remote', '' ) && get_option( 'csbr_gdrive_sync_enabled', true ) ) {
         $gd_log   = (array) get_option( 'csbr_gdrive_log', [] );
         $gd_ok    = array_filter( $gd_log, fn( $e ) => ! empty( $e['ok'] ) );
         $gd_last  = $gd_ok ? max( array_column( $gd_ok, 'time' ) ) : 0;
-        $cloud_rows[] = [ '&#128196; Google Drive last sync', ...$csbr_age( (int) $gd_last ) ];
+        $cloud_rows[] = [ '&#128196; Google Drive last sync', ...$csbr_age( (int) $gd_last ), $csbr_last_err( $gd_log ) ];
     } else {
-        $cloud_rows[] = [ '&#128196; Google Drive last sync', 'Disabled', '#999' ];
+        $cloud_rows[] = [ '&#128196; Google Drive last sync', 'Disabled', '#999', '' ];
     }
     if ( get_option( 'csbr_dropbox_remote', '' ) && get_option( 'csbr_dropbox_sync_enabled', false ) ) {
         $db_log   = (array) get_option( 'csbr_dropbox_log', [] );
         $db_ok    = array_filter( $db_log, fn( $e ) => ! empty( $e['ok'] ) );
         $db_last  = $db_ok ? max( array_column( $db_ok, 'time' ) ) : 0;
-        $cloud_rows[] = [ '&#128194; Dropbox last sync', ...$csbr_age( (int) $db_last ) ];
+        $cloud_rows[] = [ '&#128194; Dropbox last sync', ...$csbr_age( (int) $db_last ), $csbr_last_err( $db_log ) ];
     } else {
-        $cloud_rows[] = [ '&#128194; Dropbox last sync', 'Disabled', '#999' ];
+        $cloud_rows[] = [ '&#128194; Dropbox last sync', 'Disabled', '#999', '' ];
     }
     if ( get_option( 'csbr_onedrive_remote', '' ) && get_option( 'csbr_onedrive_sync_enabled', false ) ) {
         $od_log   = (array) get_option( 'csbr_onedrive_log', [] );
         $od_ok    = array_filter( $od_log, fn( $e ) => ! empty( $e['ok'] ) );
         $od_last  = $od_ok ? max( array_column( $od_ok, 'time' ) ) : 0;
-        $cloud_rows[] = [ '&#128462; OneDrive last sync', ...$csbr_age( (int) $od_last ) ];
+        $cloud_rows[] = [ '&#128462; OneDrive last sync', ...$csbr_age( (int) $od_last ), $csbr_last_err( $od_log ) ];
     } else {
-        $cloud_rows[] = [ '&#128462; OneDrive last sync', 'Disabled', '#999' ];
+        $cloud_rows[] = [ '&#128462; OneDrive last sync', 'Disabled', '#999', '' ];
     }
     if ( get_option( 'csbr_ami_prefix', '' ) && get_option( 'csbr_ami_sync_enabled', true ) ) {
         if ( ! csbr_get_instance_id() ) {
-            $cloud_rows[] = [ '&#128247; AMI last snapshot', 'Not running on AWS', '#999' ];
+            $cloud_rows[] = [ '&#128247; AMI last snapshot', 'Not running on AWS', '#999', '' ];
         } else {
             $ami_log  = (array) get_option( 'csbr_ami_log', [] );
             $ami_ok   = array_filter( $ami_log, fn( $e ) => ! empty( $e['ok'] ) && ! empty( $e['ami_id'] ) );
             $ami_last = $ami_ok ? max( array_column( $ami_ok, 'time' ) ) : 0;
-            $cloud_rows[] = [ '&#128247; AMI last snapshot', ...$csbr_age( (int) $ami_last ) ];
+            $cloud_rows[] = [ '&#128247; AMI last snapshot', ...$csbr_age( (int) $ami_last ), $csbr_last_err( $ami_log ) ];
         }
     } else {
-        $cloud_rows[] = [ '&#128247; AMI last snapshot', 'Disabled', '#999' ];
+        $cloud_rows[] = [ '&#128247; AMI last snapshot', 'Disabled', '#999', '' ];
     }
+
+    // Providers that are enabled, stale (orange or red), and have a recorded error.
+    $alert_providers = array_filter(
+        $cloud_rows,
+        fn( $cr ) => ! empty( $cr[3] ) && in_array( $cr[2], [ '#e65100', '#c62828' ], true )
+    );
 
     $widget_style = 'margin: -12px -12px 0 -12px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;';
     $stats_style  = 'padding: 14px 16px 6px 16px;';
@@ -6749,6 +6763,19 @@ function csbr_render_dashboard_widget(): void {
     $btn_base     = 'display:block; width:100%; padding:11px 0; text-align:center; font-size:13px; font-weight:700; color:#fff; text-decoration:none; border:none; cursor:pointer; letter-spacing:0.02em;';
     ?>
     <div style="<?php echo esc_attr( $widget_style ); ?>">
+        <?php if ( $alert_providers ):
+            $failing_count = count( $alert_providers );
+            $enabled_count = count( array_filter( $cloud_rows, fn( $cr ) => $cr[2] !== '#999' ) );
+        ?>
+        <div style="background:#b71c1c; color:#fff; padding:14px 16px 12px; border-bottom:4px solid #7f0000;">
+            <div style="font-size:15px; font-weight:800; letter-spacing:0.03em; margin-bottom:4px;">&#9888; URGENT BACKUP FAILURE</div>
+            <div style="font-size:13px; font-weight:600; margin-bottom:10px;"><?php echo esc_html( $failing_count ); ?> of <?php echo esc_html( $enabled_count ); ?> cloud syncs failed to complete</div>
+            <?php foreach ( $alert_providers as $ap ): ?>
+            <div style="font-size:11px; font-family:monospace; background:rgba(0,0,0,0.25); border-radius:3px; padding:5px 8px; margin-bottom:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<?php echo esc_attr( $ap[3] ); ?>"><?php echo wp_kses( $ap[0], [] ); ?>: <?php echo esc_html( $ap[3] ); ?></div>
+            <?php endforeach; ?>
+            <a href="<?php echo esc_url( $settings_url ); ?>" style="display:inline-block; margin-top:8px; color:#fff; font-size:12px; font-weight:700; text-decoration:underline;">View Backup Logs</a>
+        </div>
+        <?php endif; ?>
         <div style="<?php echo esc_attr( $stats_style ); ?>">
 
             <div style="<?php echo esc_attr( $row_style ); ?>">
@@ -6804,6 +6831,9 @@ function csbr_render_dashboard_widget(): void {
                 <div style="flex:1; min-width:0;">
                     <span style="<?php echo esc_attr( $label_style ); ?> display:block; margin-bottom:1px;"><?php echo wp_kses( $cr[0], [] ); ?></span>
                     <span style="<?php echo esc_attr( $value_style ); ?> font-size:13px; color:<?php echo esc_attr( $cr[2] ); ?>;"><?php echo esc_html( $cr[1] ); ?></span>
+                    <?php if ( ! empty( $cr[3] ) ): ?>
+                    <span style="display:block; font-size:10px; color:#c62828; font-family:monospace; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<?php echo esc_attr( $cr[3] ); ?>"><?php echo esc_html( $cr[3] ); ?></span>
+                    <?php endif; ?>
                 </div>
                 <?php endforeach; ?>
             </div>
@@ -7043,7 +7073,7 @@ function csbr_create_backup(
  * Writes to both the transient (fast in-memory path) and directly to wp_options
  * (DB-backed, survives Redis flushes and server restarts). TTL: 7 days.
  *
- * @since 3.2.388
+ * @since 3.2.414
  * @return void
  */
 function csbr_imds_set_unavailable(): void {
@@ -7065,7 +7095,7 @@ function csbr_imds_set_unavailable(): void {
  * Checks the transient first (fast), then falls back to the DB-backed option
  * (survives restarts). Re-populates the transient from DB when needed.
  *
- * @since 3.2.388
+ * @since 3.2.414
  * @return bool
  */
 function csbr_imds_is_unavailable(): bool {
