@@ -11,12 +11,20 @@
    TABS
    ================================================================ */
 
+/* Scroll wrapper — the canonical iOS Safari fix: overflow on a parent, not on the flex container itself */
+.cs-tab-bar-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+}
+.cs-tab-bar-scroll::-webkit-scrollbar { display: none; }
 .cs-tab-bar {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 4px;
     margin: 18px 0 0;
     border-bottom: 3px solid #37474f;
+    min-width: max-content;
 }
 .cs-tab {
     padding: 10px 28px;
@@ -27,22 +35,20 @@
     border: 1px solid #bdbdbd;
     border-bottom: none;
     border-radius: 6px 6px 0 0;
-    color: #555555;
+    color: #333333;
     position: relative;
     top: 2px;
     transition: background 0.12s, color 0.12s;
     line-height: 1.4;
     text-align: center;
+    white-space: nowrap;
+    flex: 0 0 auto;
 }
 @media (max-width: 780px) {
     .cs-tab { padding: 8px 14px; font-size: 0.82rem; }
 }
 @media (max-width: 520px) {
-    /* Switch to inline-block scrolling row — iOS Safari has a known bug with overflow-x on flex containers */
-    .cs-tab-bar { display: block; white-space: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
-    .cs-tab-bar::-webkit-scrollbar { display: none; }
-    .cs-tab { display: inline-block; vertical-align: bottom; padding: 7px 10px; font-size: 0.76rem; white-space: nowrap; margin-right: 4px; }
-    .cs-tab:last-child { margin-right: 0; }
+    .cs-tab { padding: 7px 10px; font-size: 0.76rem; }
 }
 .cs-tab:hover { background: #0040ff; color: #fff; border-color: #0040ff; }
 .cs-tab--active {
