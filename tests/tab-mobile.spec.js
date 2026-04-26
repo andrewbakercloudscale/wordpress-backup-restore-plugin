@@ -65,24 +65,43 @@ test('tab bar on mobile 390px', async ({ browser }) => {
     // Screenshot the full tab bar area
     await page.locator('.cs-tab-bar').screenshot({ path: '/tmp/tab-bar-mobile.png' });
 
-    // Check all tabs and their y-positions — all should be on the same row
-    const tabs = await page.locator('.cs-tab').all();
-    console.log('Tab count:', tabs.length);
-    let maxY = -Infinity, minY = Infinity;
-    for (const tab of tabs) {
-        const box  = await tab.boundingBox();
-        const text = await tab.textContent();
-        console.log(`Tab "${text.trim()}" box:`, JSON.stringify(box));
-        if (box) {
-            if (box.y < minY) minY = box.y;
-            if (box.y > maxY) maxY = box.y;
-        }
+    // Measure actual computed styles for each tab
+    const tabData = await page.evaluate(() => {
+        return Array.from(document.querySelectorAll('.cs-tab')).map(el => {
+            const s = window.getComputedStyle(el);
+            return {
+                text:       el.textContent.trim(),
+                color:      s.color,
+                background: s.backgroundColor,
+                fontSize:   s.fontSize,
+                isActive:   el.classList.contains('cs-tab--active'),
+            };
+        });
+    });
+
+    // Helper: parse rgb(r,g,b) → relative luminance
+    function luminance(rgbStr) {
+        const m = rgbStr.match(/(\d+),\s*(\d+),\s*(\d+)/);
+        if (!m) return 0;
+        return [1, 2, 3].reduce((lum, i) => {
+            const c = parseInt(m[i]) / 255;
+            return lum + (c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)) * [0.2126, 0.7152, 0.0722][i - 1];
+        }, 0);
+    }
+    function contrast(fg, bg) {
+        const l1 = luminance(fg), l2 = luminance(bg);
+        const [hi, lo] = l1 > l2 ? [l1, l2] : [l2, l1];
+        return (hi + 0.05) / (lo + 0.05);
     }
 
-    const ySpread = maxY - minY;
-    console.log(`Y spread across tabs: ${ySpread}px (pass = < 10px)`);
-    if (ySpread >= 10) {
-        throw new Error(`Tab bar is wrapping: y spread is ${ySpread}px. Third tab is on a different row.`);
+    console.log('\nTab computed styles:');
+    for (const t of tabData) {
+        const ratio = contrast(t.color, t.background);
+        const pass  = ratio >= 4.5 ? '✓ PASS' : '✗ FAIL';
+        console.log(`  "${t.text}" [${t.isActive ? 'active' : 'inactive'}] color:${t.color} bg:${t.background} contrast:${ratio.toFixed(1)}:1 ${pass}`);
+        if (ratio < 4.5) {
+            throw new Error(`Tab "${t.text}" contrast ratio ${ratio.toFixed(1)}:1 is below WCAG AA (4.5:1). color=${t.color} bg=${t.background}`);
+        }
     }
 
     await ctx.close();
