@@ -4,7 +4,7 @@ module.exports = defineConfig({
     testDir: './tests',
     timeout: 120000,
     retries: 0,
-    reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
+    reporter: [['list']],
     use: {
         baseURL: 'https://your-wordpress-site.example.com',
         ignoreHTTPSErrors: true,
