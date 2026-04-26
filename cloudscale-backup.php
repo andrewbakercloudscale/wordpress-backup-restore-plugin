@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Backup & Restore
  * Plugin URI:        https://cloudscale.consulting
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.419
+ * Version:           3.2.420
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CSBR_VERSION',    '3.2.419');
+define('CSBR_VERSION',    '3.2.420');
 define('CSBR_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CSBR_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CSBR_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -443,6 +443,7 @@ add_action('csbr_scheduled_backup', function () {
         $detail = sprintf( '%s: %s in %s:%d', get_class( $e ), $e->getMessage(), $e->getFile(), $e->getLine() );
         csbr_log( '[CloudScale Backup & Restore] Scheduled backup FAILED: ' . $detail );
         update_option( 'csbr_last_backup_failed', true, false );
+        update_option( 'csbr_last_backup_failure_detail', [ 'time' => time(), 'error' => $e->getMessage(), 'trigger' => 'scheduled' ], false );
         csbr_send_backup_notification( false, 'Scheduled backup failed', "Scheduled backup failed.\n\nError: " . $e->getMessage() . "\n\nSite: " . home_url() . "\n" );
         return;
     }
@@ -499,6 +500,7 @@ add_action('csbr_scheduled_backup', function () {
 
     update_option( 'csbr_last_backup_time', time(), false );
     update_option( 'csbr_last_backup_failed', false, false );
+    delete_option( 'csbr_last_backup_failure_detail' );
 
     /**
      * Fires after a scheduled local backup completes (cloud syncs and notifications already done).
@@ -1305,9 +1307,9 @@ function csbr_admin_page(): void {
                     <div class="cs-field-group">
                         <label class="cs-option-label" style="margin:0;">
                             <input type="checkbox" name="auto_repair" value="1" <?php checked( $auto_repair ); ?>>
-                            <?php esc_html_e( 'Run Table Repairs automatically after each scheduled backup', 'cloudscale-backup-restore' ); ?>
+                            <?php esc_html_e( 'Optimise tables after each scheduled backup', 'cloudscale-backup-restore' ); ?>
                         </label>
-                        <p class="cs-help"><?php esc_html_e( 'Runs OPTIMIZE TABLE on any InnoDB tables with overhead after the scheduled backup completes.', 'cloudscale-backup-restore' ); ?></p>
+                        <p class="cs-help"><?php esc_html_e( 'Runs OPTIMIZE TABLE on InnoDB tables with overhead after the scheduled backup completes. This reclaims fragmented space and can improve query performance. It does not modify your data.', 'cloudscale-backup-restore' ); ?></p>
                     </div>
 
                     <div class="cs-field-group">
@@ -1666,6 +1668,7 @@ function csbr_admin_page(): void {
                   <label class="cs-option-label" style="margin:0;"><input type="radio" name="notify_on" value="failure" <?php checked($notify_on, 'failure'); ?>> <?php esc_html_e( 'Failures only', 'cloudscale-backup-restore' ); ?></label>
                   <label class="cs-option-label" style="margin:0;"><input type="radio" name="notify_on" value="success" <?php checked($notify_on, 'success'); ?>> <?php esc_html_e( 'Success only', 'cloudscale-backup-restore' ); ?></label>
                   <label class="cs-option-label" style="margin:4px 0 0;"><input type="checkbox" id="cs-notify-on-rollback" <?php checked($notify_on_rollback); ?>> <?php esc_html_e( 'Plugin rollbacks', 'cloudscale-backup-restore' ); ?></label>
+                  <p class="cs-help" style="margin:2px 0 0 22px;"><?php esc_html_e( 'Sent when Automatic Crash Recovery rolls back a plugin after detecting a site failure.', 'cloudscale-backup-restore' ); ?> <a href="#" onclick="document.querySelector('.cs-tab[data-tab=autorecovery]').click();return false;"><?php esc_html_e( 'Configure in the Automatic Crash Recovery tab →', 'cloudscale-backup-restore' ); ?></a></p>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
                   <button type="button" id="cs-notify-test-btn" class="button"><?php esc_html_e( 'Send Test', 'cloudscale-backup-restore' ); ?></button>
@@ -1706,6 +1709,7 @@ function csbr_admin_page(): void {
                     <label class="cs-option-label" style="margin:0;font-size:0.85rem;"><input type="radio" name="sms_on" value="success" <?php checked($sms_on, 'success'); ?>> <?php esc_html_e( 'Successes only', 'cloudscale-backup-restore' ); ?></label>
                   </div>
                   <label class="cs-option-label" style="margin:4px 0 0;display:block;"><input type="checkbox" id="cs-sms-on-rollback" <?php checked($sms_on_rollback); ?>> <?php esc_html_e( 'Plugin rollbacks', 'cloudscale-backup-restore' ); ?></label>
+                  <p class="cs-help" style="margin:2px 0 0 22px;"><?php esc_html_e( 'Sent when Automatic Crash Recovery rolls back a plugin after detecting a site failure.', 'cloudscale-backup-restore' ); ?> <a href="#" onclick="document.querySelector('.cs-tab[data-tab=autorecovery]').click();return false;"><?php esc_html_e( 'Configure in the Automatic Crash Recovery tab →', 'cloudscale-backup-restore' ); ?></a></p>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
                   <button type="button" id="cs-sms-test-btn" class="button"><?php esc_html_e( 'Send Test', 'cloudscale-backup-restore' ); ?></button>
@@ -1740,6 +1744,7 @@ function csbr_admin_page(): void {
                     <label class="cs-option-label" style="margin:0;font-size:0.85rem;"><input type="radio" name="ntfy_on" value="success" <?php checked($ntfy_on, 'success'); ?>> <?php esc_html_e( 'Successes only', 'cloudscale-backup-restore' ); ?></label>
                   </div>
                   <label class="cs-option-label" style="margin:4px 0 0;display:block;"><input type="checkbox" id="cs-ntfy-on-rollback" <?php checked($ntfy_on_rollback); ?>> <?php esc_html_e( 'Plugin rollbacks', 'cloudscale-backup-restore' ); ?></label>
+                  <p class="cs-help" style="margin:2px 0 0 22px;"><?php esc_html_e( 'Sent when Automatic Crash Recovery rolls back a plugin after detecting a site failure.', 'cloudscale-backup-restore' ); ?> <a href="#" onclick="document.querySelector('.cs-tab[data-tab=autorecovery]').click();return false;"><?php esc_html_e( 'Configure in the Automatic Crash Recovery tab →', 'cloudscale-backup-restore' ); ?></a></p>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;">
                   <button type="button" id="cs-ntfy-test-btn" class="button"><?php esc_html_e( 'Send Test', 'cloudscale-backup-restore' ); ?></button>
@@ -1890,6 +1895,29 @@ function csbr_admin_page(): void {
                 <tr><td colspan="<?php echo (int) $hist_col_count; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded integer literal ?>" style="padding:6px 10px!important;background:#fff3e0;border-left:3px solid #e65100;font-size:0.82rem;color:#6d3b00;">
                     &#9888; <strong><?php echo (int) $n_to_delete; ?> backup<?php echo $n_to_delete !== 1 ? 's' : ''; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded static string ?> will be automatically deleted on the next backup run</strong> — highlighted in orange below. Increase your retention count or download them first to keep them.
                 </td></tr>
+                <?php endif; ?>
+                <?php
+                $csbr_last_failed = get_option( 'csbr_last_backup_failed', false );
+                $csbr_fail_detail = $csbr_last_failed ? (array) get_option( 'csbr_last_backup_failure_detail', [] ) : [];
+                if ( $csbr_last_failed ):
+                ?>
+                <tr id="csbr-failed-row" style="background:linear-gradient(90deg,#ffebee 0%,#fff5f5 100%);border-left:3px solid #c62828;">
+                    <td colspan="<?php echo (int) $hist_col_count; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped ?>" style="padding:8px 12px!important;vertical-align:middle!important;">
+                        <div style="display:flex;align-items:center;flex-wrap:wrap;gap:10px;">
+                            <span style="font-size:0.78rem;font-weight:700;background:#c62828;color:#fff;padding:2px 8px;border-radius:3px;white-space:nowrap;">&#10007; Backup Failed</span>
+                            <?php if ( ! empty( $csbr_fail_detail['time'] ) ): ?>
+                                <span style="font-size:0.82rem;color:#555;"><?php echo esc_html( wp_date( 'j M Y H:i', $csbr_fail_detail['time'] ) ); ?></span>
+                            <?php endif; ?>
+                            <?php if ( ! empty( $csbr_fail_detail['error'] ) ): ?>
+                                <span style="font-size:0.82rem;color:#c62828;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="<?php echo esc_attr( $csbr_fail_detail['error'] ); ?>"><?php echo esc_html( substr( $csbr_fail_detail['error'], 0, 120 ) ); ?></span>
+                            <?php endif; ?>
+                            <div style="display:flex;gap:6px;flex-shrink:0;">
+                                <button type="button" onclick="document.getElementById('cs-run-backup').click();" class="button button-small" style="font-size:0.78rem;padding:2px 10px;background:#e65100;color:#fff;border-color:#bf360c;">&#9654; Run Again</button>
+                                <button type="button" id="csbr-dismiss-fail-row" class="button button-small" style="font-size:0.78rem;padding:2px 10px;">&#10005; Dismiss</button>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
                 <?php endif; ?>
                 <tbody>
                 <?php
@@ -2114,6 +2142,7 @@ function csbr_admin_page(): void {
                         <div id="cs-modal-table-loading" style="padding:10px 0;color:#666;font-size:0.88rem;">&#8987; <?php esc_html_e( 'Loading table list…', 'cloudscale-backup-restore' ); ?></div>
                         <div id="cs-modal-table-wrap" style="display:none;">
                             <div style="margin-bottom:6px;">
+                                <input type="text" id="cs-modal-table-filter" placeholder="<?php esc_attr_e( 'Filter tables…', 'cloudscale-backup-restore' ); ?>" style="width:100%;padding:5px 8px;font-size:0.85rem;border:1px solid #ccc;border-radius:4px;margin-bottom:6px;box-sizing:border-box;">
                                 <a href="#" id="cs-modal-sel-all" style="font-size:0.82rem;"><?php esc_html_e( 'Select all', 'cloudscale-backup-restore' ); ?></a>
                                 &nbsp;&middot;&nbsp;
                                 <a href="#" id="cs-modal-sel-none" style="font-size:0.82rem;"><?php esc_html_e( 'Clear all', 'cloudscale-backup-restore' ); ?></a>
@@ -2205,7 +2234,7 @@ function csbr_admin_page(): void {
                     <legend class="screen-reader-text">Cloud schedule controls</legend>
 
                     <div class="cs-field-group">
-                        <span class="cs-field-label">Cloud backup days</span>
+                        <span class="cs-field-label"><?php esc_html_e( 'Cloud sync days', 'cloudscale-backup-restore' ); ?></span>
                         <div class="cs-day-checks">
                             <?php foreach ($days_map as $num => $day_label): ?>
                             <label class="cs-day-check-label">
@@ -2217,16 +2246,17 @@ function csbr_admin_page(): void {
                             </label>
                             <?php endforeach; ?>
                         </div>
+                        <p class="cs-help"><?php esc_html_e( 'Cloud sync only runs on days when a local backup is also scheduled. Selecting a day with no matching local backup day has no effect.', 'cloudscale-backup-restore' ); ?></p>
                     </div>
 
                     <div class="cs-field-group">
-                        <label class="cs-field-label" for="cs-cloud-backup-delay"><?php esc_html_e( 'Cloud Backup Delay', 'cloudscale-backup-restore' ); ?></label>
+                        <label class="cs-field-label" for="cs-cloud-backup-delay"><?php esc_html_e( 'Cloud sync starts', 'cloudscale-backup-restore' ); ?></label>
                         <div class="cs-inline">
                             <input type="number" id="cs-cloud-backup-delay" class="cs-input-sm"
                                    min="15" max="1440" step="1"
                                    value="<?php echo (int) $cloud_backup_delay; ?>"
                                    style="width:80px;">
-                            <span class="cs-muted-text">minutes after local backup (min 15)</span>
+                            <span class="cs-muted-text">minutes after the local backup finishes (min 15)</span>
                             <span id="cs-cloud-delay-preview" style="margin-left:10px;font-weight:600;color:#1565c0;"></span>
                         </div>
                         <?php if ($ami_next_run): ?>
@@ -2247,27 +2277,27 @@ function csbr_admin_page(): void {
                             <label class="cs-option-label" style="margin:0;<?php echo ! $ami_configured ? 'opacity:0.55;' : ''; ?>">
                                 <input type="checkbox" id="cs-cloud-ami-enabled" <?php checked($ami_sync_enabled); ?> <?php echo ! $ami_configured ? 'disabled' : ''; ?>>
                                 &#128247; AWS EC2 AMI Snapshot <span class="cs-sensitive-badge" style="margin-left:4px;">&#9888; reboot</span>
-                                <?php if ( ! $ami_configured ): ?><span style="font-size:0.72rem;color:#999;margin-left:6px;">— Not configured</span><?php endif; ?>
+                                <?php if ( ! $ami_configured ): ?><span style="font-size:0.72rem;color:#999;margin-left:6px;">— Not configured — <a href="#csbr-provider-ami" onclick="window.location.hash='csbr-provider-ami';return true;" style="color:#999;">configure below ↓</a></span><?php endif; ?>
                             </label>
                             <label class="cs-option-label" style="margin:0;<?php echo ! $s3_configured ? 'opacity:0.55;' : ''; ?>">
                                 <input type="checkbox" id="cs-cloud-s3-enabled" <?php checked($s3_sync_enabled); ?> <?php echo ! $s3_configured ? 'disabled' : ''; ?>>
                                 &#9729; AWS S3 Remote Backup
-                                <?php if ( ! $s3_configured ): ?><span style="font-size:0.72rem;color:#999;margin-left:6px;">— Not configured</span><?php endif; ?>
+                                <?php if ( ! $s3_configured ): ?><span style="font-size:0.72rem;color:#999;margin-left:6px;">— Not configured — <a href="#csbr-provider-s3" onclick="window.location.hash='csbr-provider-s3';return true;" style="color:#999;">configure below ↓</a></span><?php endif; ?>
                             </label>
                             <label class="cs-option-label" style="margin:0;<?php echo ! $gdrive_configured ? 'opacity:0.55;' : ''; ?>">
                                 <input type="checkbox" id="cs-cloud-gdrive-enabled" <?php checked($gdrive_sync_enabled); ?> <?php echo ! $gdrive_configured ? 'disabled' : ''; ?>>
                                 &#128196; Google Drive Backup
-                                <?php if ( ! $gdrive_configured ): ?><span style="font-size:0.72rem;color:#999;margin-left:6px;">— Not configured</span><?php endif; ?>
+                                <?php if ( ! $gdrive_configured ): ?><span style="font-size:0.72rem;color:#999;margin-left:6px;">— Not configured — <a href="#csbr-provider-gdrive" onclick="window.location.hash='csbr-provider-gdrive';return true;" style="color:#999;">configure below ↓</a></span><?php endif; ?>
                             </label>
                             <label class="cs-option-label" style="margin:0;<?php echo ! $dropbox_configured ? 'opacity:0.55;' : ''; ?>">
                                 <input type="checkbox" id="cs-cloud-dropbox-enabled" <?php checked($dropbox_sync_enabled); ?> <?php echo ! $dropbox_configured ? 'disabled' : ''; ?>>
                                 &#128194; Dropbox Backup
-                                <?php if ( ! $dropbox_configured ): ?><span style="font-size:0.72rem;color:#999;margin-left:6px;">— Not configured</span><?php endif; ?>
+                                <?php if ( ! $dropbox_configured ): ?><span style="font-size:0.72rem;color:#999;margin-left:6px;">— Not configured — <a href="#csbr-provider-dropbox" onclick="window.location.hash='csbr-provider-dropbox';return true;" style="color:#999;">configure below ↓</a></span><?php endif; ?>
                             </label>
                             <label class="cs-option-label" style="margin:0;<?php echo ! $onedrive_configured ? 'opacity:0.55;' : ''; ?>">
                                 <input type="checkbox" id="cs-cloud-onedrive-enabled" <?php checked($onedrive_sync_enabled); ?> <?php echo ! $onedrive_configured ? 'disabled' : ''; ?>>
                                 &#128462; OneDrive Backup
-                                <?php if ( ! $onedrive_configured ): ?><span style="font-size:0.72rem;color:#999;margin-left:6px;">— Not configured</span><?php endif; ?>
+                                <?php if ( ! $onedrive_configured ): ?><span style="font-size:0.72rem;color:#999;margin-left:6px;">— Not configured — <a href="#csbr-provider-onedrive" onclick="window.location.hash='csbr-provider-onedrive';return true;" style="color:#999;">configure below ↓</a></span><?php endif; ?>
                             </label>
                         </div>
                         <p class="cs-help">Providers must be configured in their cards below before they can be enabled here.</p>
@@ -2294,7 +2324,7 @@ function csbr_admin_page(): void {
             </div>
 
             <!-- GOOGLE DRIVE BACKUP CARD -->
-            <div class="cs-card cs-card--gdrive">
+            <div id="csbr-provider-gdrive" class="cs-card cs-card--gdrive">
                 <div class="cs-card-stripe" style="background:linear-gradient(135deg,#0f9d58 0%,#34a853 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
                     <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128196; <?php echo esc_html__( 'Google Drive Backup', 'cloudscale-backup-restore' ); ?></h2>
                     <button type="button" onclick="csGDriveExplain()" style="background:#1a1a1a;border:none;color:#f9a825;border-radius:999px;padding:5px 16px;font-size:0.78rem;font-weight:700;cursor:pointer;letter-spacing:0.01em;">&#128214; <?php esc_html_e( 'Explain…', 'cloudscale-backup-restore' ); ?></button>
@@ -2364,7 +2394,7 @@ function csbr_admin_page(): void {
             </div>
 
             <!-- DROPBOX BACKUP CARD -->
-            <div class="cs-card cs-card--dropbox">
+            <div id="csbr-provider-dropbox" class="cs-card cs-card--dropbox">
                 <div class="cs-card-stripe" style="background:linear-gradient(135deg,#0032a0 0%,#0061ff 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
                     <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128194; <?php echo esc_html__( 'Dropbox Backup', 'cloudscale-backup-restore' ); ?></h2>
                     <button type="button" onclick="csDropboxExplain()" style="background:#1a1a1a;border:none;color:#f9a825;border-radius:999px;padding:5px 16px;font-size:0.78rem;font-weight:700;cursor:pointer;letter-spacing:0.01em;">&#128214; <?php esc_html_e( 'Explain…', 'cloudscale-backup-restore' ); ?></button>
@@ -2426,7 +2456,7 @@ function csbr_admin_page(): void {
             </div>
 
             <!-- ONEDRIVE BACKUP CARD -->
-            <div class="cs-card cs-card--onedrive">
+            <div id="csbr-provider-onedrive" class="cs-card cs-card--onedrive">
                 <div class="cs-card-stripe" style="background:linear-gradient(135deg,#0078d4 0%,#00bcf2 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
                     <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128462; <?php echo esc_html__( 'OneDrive Backup', 'cloudscale-backup-restore' ); ?></h2>
                     <button type="button" onclick="csOneDriveExplain()" style="background:#1a1a1a;border:none;color:#f9a825;border-radius:999px;padding:5px 16px;font-size:0.78rem;font-weight:700;cursor:pointer;letter-spacing:0.01em;">&#128214; <?php esc_html_e( 'Explain…', 'cloudscale-backup-restore' ); ?></button>
@@ -2488,7 +2518,7 @@ function csbr_admin_page(): void {
             </div>
 
             <!-- S3 REMOTE BACKUP CARD -->
-            <div class="cs-card cs-card--pink">
+            <div id="csbr-provider-s3" class="cs-card cs-card--pink">
                 <div class="cs-card-stripe cs-stripe--pink" style="background:linear-gradient(135deg,#880e4f 0%,#e91e8c 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
                     <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#9729; <?php echo esc_html__( 'AWS S3 Remote Backup', 'cloudscale-backup-restore' ); ?></h2>
                     <button type="button" onclick="csS3Explain()" style="background:#1a1a1a;border:none;color:#f9a825;border-radius:999px;padding:5px 16px;font-size:0.78rem;font-weight:700;cursor:pointer;letter-spacing:0.01em;">&#128214; <?php esc_html_e( 'Explain…', 'cloudscale-backup-restore' ); ?></button>
@@ -2572,7 +2602,7 @@ function csbr_admin_page(): void {
             </div>
 
             <!-- AMI SNAPSHOT CARD -->
-            <div class="cs-card cs-card--indigo">
+            <div id="csbr-provider-ami" class="cs-card cs-card--indigo">
                 <div class="cs-card-stripe cs-stripe--indigo" style="background:linear-gradient(135deg,#1a237e 0%,#3949ab 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
                     <h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#128247; <?php echo esc_html__( 'AWS EC2 AMI Snapshot', 'cloudscale-backup-restore' ); ?></h2>
                     <button type="button" onclick="csAmiExplain()" style="background:#1a1a1a;border:none;color:#f9a825;border-radius:999px;padding:5px 16px;font-size:0.78rem;font-weight:700;cursor:pointer;letter-spacing:0.01em;">&#128214; <?php esc_html_e( 'Explain…', 'cloudscale-backup-restore' ); ?></button>
@@ -3488,6 +3518,7 @@ function csbr_execute_backup_job( string $job_id, array $opts ): void {
                 csbr_log( '[CloudScale Backup & Restore] Backup aborted — ' . $msg );
                 csbr_set_job( $job_id, [ 'status' => 'error', 'message' => $msg ] );
                 update_option( 'csbr_last_backup_failed', true, false );
+                update_option( 'csbr_last_backup_failure_detail', [ 'time' => time(), 'error' => $msg, 'trigger' => 'manual' ], false );
                 csbr_send_backup_notification( false, 'Insufficient cloud storage', "Backup failed — insufficient cloud storage.\n\nError: {$msg}\n\nSite: " . home_url() . "\n" );
                 wp_die();
             }
@@ -3519,6 +3550,7 @@ function csbr_execute_backup_job( string $job_id, array $opts ): void {
         // Save completion timestamp.
         update_option( 'csbr_last_backup_time', time(), false );
         update_option( 'csbr_last_backup_failed', false, false );
+        delete_option( 'csbr_last_backup_failure_detail' );
 
         $cloud_lines = [];
         $notify_body  = "Backup completed successfully.\n\nFile: " . basename( $filename ) . "\nSize: " . csbr_format_size( (int) filesize( CSBR_BACKUP_DIR . basename( $filename ) ) ) . "\n";
@@ -3532,6 +3564,7 @@ function csbr_execute_backup_job( string $job_id, array $opts ): void {
         $detail = sprintf( '%s: %s in %s:%d', get_class( $e ), $e->getMessage(), $e->getFile(), $e->getLine() );
         csbr_log( '[CloudScale Backup & Restore] ERROR in backup job ' . $job_id . ': ' . $detail );
         update_option( 'csbr_last_backup_failed', true, false );
+        update_option( 'csbr_last_backup_failure_detail', [ 'time' => time(), 'error' => $e->getMessage(), 'trigger' => 'manual' ], false );
         csbr_set_job( $job_id, [ 'status' => 'error', 'message' => $e->getMessage() ] );
         csbr_send_backup_notification( false, 'Error', "Backup failed.\n\nError: " . $e->getMessage() . "\n\nSite: " . home_url() . "\n" );
     }
@@ -7085,7 +7118,7 @@ function csbr_create_backup(
  * Writes to both the transient (fast in-memory path) and directly to wp_options
  * (DB-backed, survives Redis flushes and server restarts). TTL: 7 days.
  *
- * @since 3.2.419
+ * @since 3.2.420
  * @return void
  */
 function csbr_imds_set_unavailable(): void {
@@ -7107,7 +7140,7 @@ function csbr_imds_set_unavailable(): void {
  * Checks the transient first (fast), then falls back to the DB-backed option
  * (survives restarts). Re-populates the transient from DB when needed.
  *
- * @since 3.2.419
+ * @since 3.2.420
  * @return bool
  */
 function csbr_imds_is_unavailable(): bool {
@@ -9267,6 +9300,16 @@ function csbr_is_space_error( string $error ): bool {
 add_action( 'wp_ajax_csbr_dismiss_explain_banner', function (): void {
     check_ajax_referer( 'csbr_nonce', 'nonce' );
     update_user_meta( get_current_user_id(), 'csbr_explain_banner_dismissed', '1' );
+    wp_send_json_success();
+} );
+
+add_action( 'wp_ajax_csbr_dismiss_backup_failure', function (): void {
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    if ( ! current_user_can( 'manage_options' ) ) {
+        wp_send_json_error( 'Permission denied.' );
+    }
+    update_option( 'csbr_last_backup_failed', false, false );
+    delete_option( 'csbr_last_backup_failure_detail' );
     wp_send_json_success();
 } );
 

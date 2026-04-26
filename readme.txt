@@ -4,7 +4,7 @@ Tags: backup, restore, database, scheduled backup, maintenance mode
 Requires at least: 6.0
 Tested up to: 6.9
 Requires PHP: 8.1
-Stable tag: 3.2.419
+Stable tag: 3.2.420
 License: GPL-2.0-or-later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -165,7 +165,7 @@ Yes. Run a full backup on the old site, install WordPress on the new host, insta
 
 == Changelog ==
 
-= 3.2.419 =
+= 3.2.420 =
 * FIX: Remove four dead `wp_ajax_csbr_do_sync_job_*` handlers that called undefined function `csbr_do_async_sync()` — legacy loopback architecture replaced by `register_shutdown_function()` in v3.2.257
 * FIX: Automatic Crash Recovery Explain modal and How It Works list now correctly document all notification channels (email, Twilio SMS, ntfy push) instead of only Twilio
 * ADD: DocBlocks added to `csbr_set_job()`, `csbr_get_job()`, `csbr_delete_job()`, `csbr_find_rclone()`, `csbr_find_aws()`, `csbr_list_tables_in_dump()`, `csbr_list_backups()`

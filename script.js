@@ -3854,3 +3854,28 @@ window.csVerifyFile = function (btn, filename) {
         jQuery.post(CSBR.ajaxUrl, { action: 'csbr_dismiss_explain_banner', nonce: CSBR.nonce });
     });
 }());
+
+
+// ── H6: Selective restore — table filter ────────────────────────────────────
+(function() {
+    $(document).on('input', '#cs-modal-table-filter', function() {
+        var q = this.value.toLowerCase();
+        $('#cs-modal-table-list label').each(function() {
+            var tbl = $(this).find('input').val() || '';
+            $(this).toggle(tbl.toLowerCase().indexOf(q) !== -1);
+        });
+    });
+    // Clear filter when mode changes or modal closes
+    $(document).on('change', 'input[name="cs_restore_mode"]', function() {
+        $('#cs-modal-table-filter').val('');
+    });
+}());
+
+// ── H7: Dismiss backup failure row ──────────────────────────────────────────
+(function() {
+    $(document).on('click', '#csbr-dismiss-fail-row', function() {
+        var row = document.getElementById('csbr-failed-row');
+        if (row) row.style.display = 'none';
+        jQuery.post(CSBR.ajaxUrl, { action: 'csbr_dismiss_backup_failure', nonce: CSBR.nonce });
+    });
+}());
