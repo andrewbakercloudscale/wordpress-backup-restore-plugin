@@ -104,5 +104,14 @@ test('tab bar on mobile 390px', async ({ browser }) => {
         }
     }
 
+    // Check tabs are horizontal — all on the same row
+    const tabs = await page.locator('.cs-tab').all();
+    const boxes = [];
+    for (const tab of tabs) { const b = await tab.boundingBox(); if (b) boxes.push(b); }
+    const ySpread = Math.max(...boxes.map(b => b.y)) - Math.min(...boxes.map(b => b.y));
+    console.log(`\nY spread: ${ySpread}px (pass = < 10px)`);
+    if (ySpread >= 10) throw new Error(`Tabs are not horizontal — y spread is ${ySpread}px`);
+    console.log('All 3 tabs on same row ✓');
+
     await ctx.close();
 });
