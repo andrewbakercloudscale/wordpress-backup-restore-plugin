@@ -48,35 +48,10 @@
     .cs-tab-bar .cs-tab { padding: 8px 14px; font-size: 0.82rem; }
 }
 @media (max-width: 520px) {
-    .cs-tab-bar {
-        flex-direction: column;
-        border-bottom: none;
-        min-width: 0;
-        gap: 3px;
-        margin-bottom: 12px;
-    }
-    .cs-tab-bar .cs-tab {
-        flex: none;
-        width: 100%;
-        padding: 11px 16px;
-        font-size: 0.88rem;
-        border-radius: 8px;
-        border: 1px solid #c0c0c0;
-        border-bottom: 1px solid #c0c0c0;
-        top: 0;
-        text-align: left;
-        white-space: normal;
-        color: #1a1a1a !important;
-        background: #ffffff !important;
-    }
-    .cs-tab-bar .cs-tab--active {
-        background: #37474f !important;
-        color: #ffffff !important;
-        border-color: #37474f;
-        border-top: 1px solid #78909c;
-        font-size: 0.88rem;
-        box-shadow: none;
-    }
+    .cs-tab-bar-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+    .cs-tab-bar-scroll::-webkit-scrollbar { display: none; }
+    .cs-tab-bar { flex-wrap: nowrap; min-width: -webkit-max-content; min-width: max-content; }
+    .cs-tab-bar .cs-tab { padding: 8px 12px; font-size: 0.78rem; }
 }
 .cs-tab-bar .cs-tab:hover { background: #0040ff !important; color: #fff !important; border-color: #0040ff; }
 .cs-tab-bar .cs-tab--active {
