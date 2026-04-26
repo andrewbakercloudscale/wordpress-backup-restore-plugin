@@ -432,6 +432,7 @@ jQuery(function ($) {
         var provider  = $btn.data('provider');
         var estMb     = parseFloat($btn.data('est-mb') || '0');
         var $status   = $('.cs-del-status-' + provider);
+        if (!confirm('Delete the oldest backup on ' + $btn.text().replace('Free space on ', '') + ' to free ~' + estMb + ' MB? This cannot be undone.')) return;
         $btn.prop('disabled', true);
         $status.text('Freeing space\u2026');
         $.ajax({
