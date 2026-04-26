@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Backup & Restore
  * Plugin URI:        https://cloudscale.consulting
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.421
+ * Version:           3.2.422
  * Author:            Andrew Baker
  * Author URI:        https://andrewbaker.ninja
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CSBR_VERSION',    '3.2.421');
+define('CSBR_VERSION',    '3.2.422');
 define('CSBR_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CSBR_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CSBR_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -1307,6 +1307,8 @@ function csbr_admin_page(): void {
                                 <?php echo esc_html($label); ?>
                                 <?php if ($key === 'wpconfig'): ?><span class="cs-sensitive-badge" style="margin-left:4px;">&#9888; credentials</span><?php endif; ?>
                                 <?php if ($key === 'core'): ?><span class="cs-sensitive-badge" style="margin-left:4px;background:#e3f2fd;color:#1565c0;border-color:#90caf9;">required for clone</span><?php endif; ?>
+                                <?php if ($key === 'mu'): ?><span class="cs-muted-text" style="font-size:0.75rem;margin-left:4px;">wp-content/mu-plugins/ — plugins that run automatically, cannot be deactivated</span><?php endif; ?>
+                                <?php if ($key === 'dropins'): ?><span class="cs-muted-text" style="font-size:0.75rem;margin-left:4px;">wp-content/*.php — WordPress override files like advanced-cache.php</span><?php endif; ?>
                             </label>
                             <?php endforeach; ?>
                         </div>
@@ -1334,7 +1336,7 @@ function csbr_admin_page(): void {
                             <input type="checkbox" name="randomise_start" value="1" <?php checked( $randomise_start ); ?>>
                             <?php esc_html_e( 'Randomise start times', 'cloudscale-backup-restore' ); ?>
                         </label>
-                        <p class="cs-help"><?php esc_html_e( 'Shifts the backup start time by a random +/- 15 minutes each time the schedule is saved. Both local and cloud backups use the same offset so they stay in sync. Recommended when running multiple servers to avoid simultaneous backup load on shared network or storage.', 'cloudscale-backup-restore' ); ?></p>
+                        <p class="cs-help"><?php esc_html_e( 'Slightly randomises the start time each day to avoid predictable load spikes. Recommended for multi-server setups.', 'cloudscale-backup-restore' ); ?></p>
                     </div>
 
                     <div class="cs-field-group">
@@ -1394,7 +1396,7 @@ function csbr_admin_page(): void {
                         <input type="checkbox" name="toolbar_button" value="1" <?php checked( $toolbar_button ); ?>>
                         <?php esc_html_e( 'Show Backup Now button in admin toolbar', 'cloudscale-backup-restore' ); ?>
                     </label>
-                    <p class="cs-help"><?php esc_html_e( 'Adds a one-click backup button to the top admin bar on every admin page.', 'cloudscale-backup-restore' ); ?></p>
+                    <p class="cs-help"><?php esc_html_e( 'Adds a one-click backup button to the top admin bar on every admin page. After saving, a Backup Now button will appear in your WordPress admin toolbar at the top of the screen.', 'cloudscale-backup-restore' ); ?></p>
                 </div>
 
                 <div id="cs-off-notice" class="cs-off-notice" <?php echo $enabled ? 'style="display:none"' : ''; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- hardcoded static string, no user input ?>>
@@ -1434,17 +1436,6 @@ function csbr_admin_page(): void {
             ?>
             <div class="cs-card cs-card--green">
                 <div class="cs-card-stripe cs-stripe--green" style="background:linear-gradient(135deg,#2e7d32 0%,#43a047 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">🗂 <?php echo esc_html__( 'Retention & Storage', 'cloudscale-backup-restore' ); ?></h2><button type="button" onclick="csRetentionExplain()" style="background:#1a1a1a;border:none;color:#f9a825;border-radius:999px;padding:5px 16px;font-size:0.78rem;font-weight:700;cursor:pointer;letter-spacing:0.01em;">&#128214; <?php esc_html_e( 'Explain…', 'cloudscale-backup-restore' ); ?></button></div>
-
-                <div class="cs-field-group">
-                    <label class="cs-field-label" for="cs-backup-prefix"><?php esc_html_e( 'Backup filename prefix', 'cloudscale-backup-restore' ); ?></label>
-                    <div class="cs-inline">
-                        <input type="text" id="cs-backup-prefix"
-                               value="<?php echo esc_attr($backup_prefix); ?>"
-                               maxlength="32" style="width:160px;padding:4px 8px;height:32px;" placeholder="bkup">
-                        <span class="cs-muted-text">_f12.zip</span>
-                    </div>
-                    <p class="cs-help">Lowercase letters, numbers, and hyphens only. Example: <code>mysite</code> produces <code>mysite_f12.zip</code>. Existing backups are unaffected.</p>
-                </div>
 
                 <div class="cs-field-group">
                     <label class="cs-field-label"><?php esc_html_e( 'Keep last', 'cloudscale-backup-restore' ); ?></label>
@@ -1511,6 +1502,17 @@ function csbr_admin_page(): void {
                         <span class="cs-storage-label">Themes folder</span>
                         <span class="cs-storage-value"><?php echo esc_html(csbr_format_size($themes_size)); ?></span>
                     </div>
+                </div>
+
+                <div class="cs-field-group" style="margin-top:16px;">
+                    <label class="cs-field-label" for="cs-backup-prefix"><?php esc_html_e( 'Backup filename prefix', 'cloudscale-backup-restore' ); ?></label>
+                    <div class="cs-inline">
+                        <input type="text" id="cs-backup-prefix"
+                               value="<?php echo esc_attr($backup_prefix); ?>"
+                               maxlength="32" style="width:160px;padding:4px 8px;height:32px;" placeholder="bkup">
+                        <span class="cs-muted-text">_f12.zip</span>
+                    </div>
+                    <p class="cs-help">Lowercase letters, numbers, and hyphens only. Example: <code>mysite</code> produces <code>mysite_f12.zip</code>. Existing backups are unaffected.</p>
                 </div>
 
                 <button type="button" id="cs-save-retention" class="button button-primary cs-mt"><?php esc_html_e( 'Save', 'cloudscale-backup-restore' ); ?></button>
@@ -7134,7 +7136,7 @@ function csbr_create_backup(
  * Writes to both the transient (fast in-memory path) and directly to wp_options
  * (DB-backed, survives Redis flushes and server restarts). TTL: 7 days.
  *
- * @since 3.2.421
+ * @since 3.2.422
  * @return void
  */
 function csbr_imds_set_unavailable(): void {
@@ -7156,7 +7158,7 @@ function csbr_imds_set_unavailable(): void {
  * Checks the transient first (fast), then falls back to the DB-backed option
  * (survives restarts). Re-populates the transient from DB when needed.
  *
- * @since 3.2.421
+ * @since 3.2.422
  * @return bool
  */
 function csbr_imds_is_unavailable(): bool {
