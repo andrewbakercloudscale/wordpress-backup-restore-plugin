@@ -1185,6 +1185,14 @@ function csbr_admin_page(): void {
         </div>
         <?php endif; ?>
 
+        <!-- ===================== EXPLAIN ONBOARDING BANNER ===================== -->
+        <?php if ( ! get_user_meta( get_current_user_id(), 'csbr_explain_banner_dismissed', true ) ) : ?>
+        <div id="csbr-explain-banner" style="display:flex;align-items:center;justify-content:space-between;gap:16px;background:#fffde7;border:1px solid #f9a825;border-radius:8px;padding:12px 18px;margin-bottom:16px;flex-wrap:wrap;">
+            <p style="margin:0;font-size:0.88rem;line-height:1.5;color:#1a1a1a;">💡 <strong>New here?</strong> Every card has a <span style="background:#1a1a1a;color:#f9a825;border-radius:999px;padding:2px 10px;font-size:0.78rem;font-weight:700;">📖 Explain…</span> button in its header — click it for a full plain-English walkthrough of that section.</p>
+            <button type="button" id="csbr-dismiss-explain-banner" style="background:none;border:1px solid #c8a000;border-radius:6px;padding:5px 14px;font-size:0.82rem;color:#5a4400;cursor:pointer;white-space:nowrap;flex-shrink:0;"><?php esc_html_e( 'Got it, don\'t show again', 'cloudscale-backup-restore' ); ?></button>
+        </div>
+        <?php endif; ?>
+
         <!-- ===================== TABS ===================== -->
         <div class="cs-tab-bar-scroll">
         <div class="cs-tab-bar">
@@ -2004,6 +2012,10 @@ function csbr_admin_page(): void {
         <hr style="border:none;border-top:3px solid #37474f;margin:18px 0 16px;">
         <div class="cs-card cs-card--red cs-full">
             <div class="cs-card-stripe cs-stripe--red" style="background:linear-gradient(135deg,#b71c1c 0%,#e53935 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">↩ <?php echo esc_html__( 'Restore from Uploaded File', 'cloudscale-backup-restore' ); ?></h2><button type="button" onclick="csRestoreExplain()" style="background:#1a1a1a;border:none;color:#f9a825;border-radius:999px;padding:5px 16px;font-size:0.78rem;font-weight:700;cursor:pointer;letter-spacing:0.01em;">&#128214; <?php esc_html_e( 'Explain…', 'cloudscale-backup-restore' ); ?></button></div>
+            <div style="background:#fff8e1;border:2px solid #f0ad00;border-radius:6px;padding:12px 16px;margin-bottom:16px;display:flex;gap:12px;align-items:flex-start;">
+                <span style="font-size:1.3rem;flex-shrink:0;line-height:1.3;">⚠️</span>
+                <p style="margin:0;font-size:0.88rem;line-height:1.5;color:#1a1a1a;"><strong><?php esc_html_e( 'Restoring overwrites your live database or files.', 'cloudscale-backup-restore' ); ?></strong> <?php esc_html_e( 'Take a server snapshot or run a fresh backup before proceeding. This cannot be undone.', 'cloudscale-backup-restore' ); ?></p>
+            </div>
             <div class="cs-restore-upload-grid">
                 <div>
                     <p>Upload a <code>.zip</code> (from this plugin) or a raw <code>.sql</code> file, then choose what to restore.</p>
@@ -9252,6 +9264,12 @@ function csbr_is_space_error( string $error ): bool {
  * @param string $exclude_file Basename of the file currently being processed — skip it.
  * @return string Basename of deleted file, or empty string if nothing was deleted.
  */
+add_action( 'wp_ajax_csbr_dismiss_explain_banner', function (): void {
+    check_ajax_referer( 'csbr_nonce', 'nonce' );
+    update_user_meta( get_current_user_id(), 'csbr_explain_banner_dismissed', '1' );
+    wp_send_json_success();
+} );
+
 function csbr_free_local_space( string $context, string $exclude_file = '' ): string {
     $zips = glob( CSBR_BACKUP_DIR . '*.zip' ) ?: [];
     if ( count( $zips ) <= 1 ) {

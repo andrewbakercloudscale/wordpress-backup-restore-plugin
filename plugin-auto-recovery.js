@@ -441,7 +441,7 @@ jQuery(function ($) {
     };
 
     window.csParUninstallWatchdog = function () {
-        if (!confirm('Remove the watchdog script and cron entry from this server?\n\nAutomatic rollback will stop working until you reinstall.')) return;
+        if (!confirm('Remove the watchdog?\n\nThis will delete the cron entry and watchdog script from this server. Automatic Crash Recovery will stop protecting your site immediately — no rollbacks will happen until you reinstall.\n\nAre you sure?')) return;
         var $btn    = $('#par-uninstall-btn');
         var $result = $('#par-auto-install-result');
         $btn.prop('disabled', true).text('Removing…');
