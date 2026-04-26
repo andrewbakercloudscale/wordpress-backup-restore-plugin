@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Backup & Restore
  * Plugin URI:        https://cloudscale.consulting
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.378
+ * Version:           3.2.387
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CSBR_VERSION',    '3.2.378');
+define('CSBR_VERSION',    '3.2.387');
 define('CSBR_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CSBR_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CSBR_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -139,8 +139,7 @@ function csbr_deactivate(): void {
     wp_clear_scheduled_hook('csbr_ami_delete_check');
     csbr_maintenance_off();
 
-    // Delete only versioned asset copies — never the canonical script.js / style.css source files.
-    // Deleting the sources would break the admin UI on Deactivate → Reactivate without a fresh upload.
+    // Delete versioned asset copies on deactivation (all versions safe to remove).
     $dir = plugin_dir_path(__FILE__);
     foreach (glob($dir . 'script-*.js') ?: [] as $f) { wp_delete_file($f); }
     foreach (glob($dir . 'style-*.css') ?: [] as $f) { wp_delete_file($f); }
@@ -162,9 +161,8 @@ add_action('admin_init', function () {
     if ($cached !== CSBR_VERSION) {
         if (function_exists('opcache_reset')) { opcache_reset(); }
         $dir = plugin_dir_path(__FILE__);
-        // Clean up versioned JS/CSS files created by older plugin versions
-        foreach (glob($dir . 'script-*.js') ?: [] as $f) { wp_delete_file($f); }
-        foreach (glob($dir . 'style-*.css') ?: [] as $f) { wp_delete_file($f); }
+        // Versioned style-X.css / script-X.js cleanup omitted here: deploy wipes the entire
+        // plugin directory so stale files never accumulate between upgrades.
         // Clean old assets/ subfolder from early versions
         $assets = $dir . 'assets/';
         if (is_dir($assets)) {
@@ -197,6 +195,15 @@ add_action('admin_init', function () {
         wp_clear_scheduled_hook('cs_scheduled_ami_backup');
         csbr_reschedule();
         update_option('csbr_loaded_version', CSBR_VERSION);
+    }
+    // Ensure versioned CSS/JS exist for filename-based cache busting.
+    // Old PHP in opcache may delete them on the first post-deploy request; recreate if missing.
+    $dir = plugin_dir_path(__FILE__);
+    foreach ( [ 'style' => 'css', 'script' => 'js' ] as $base => $ext ) {
+        $versioned = $dir . $base . '-' . CSBR_VERSION . '.' . $ext;
+        if ( ! file_exists( $versioned ) ) {
+            @copy( $dir . $base . '.' . $ext, $versioned ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- non-critical asset copy; failure degrades gracefully
+        }
     }
 });
 
@@ -603,8 +610,8 @@ add_action('admin_enqueue_scripts', function (): void {
 
 add_action('admin_enqueue_scripts', function (string $hook): void {
     if ($hook !== 'tools_page_cloudscale-backup') return;
-    wp_enqueue_style('csbr-style',   plugin_dir_url(__FILE__) . 'style.css',  [], CSBR_VERSION);
-    wp_enqueue_script('csbr-script', plugin_dir_url(__FILE__) . 'script.js', ['jquery'], CSBR_VERSION, true);
+    wp_enqueue_style('csbr-style',   plugin_dir_url(__FILE__) . 'style-'  . CSBR_VERSION . '.css', [], null);
+    wp_enqueue_script('csbr-script', plugin_dir_url(__FILE__) . 'script-' . CSBR_VERSION . '.js',  ['jquery'], null, true);
     wp_enqueue_script('csbr-par-script', plugin_dir_url(__FILE__) . 'plugin-auto-recovery.js', ['jquery', 'csbr-script'], CSBR_VERSION, true);
     wp_localize_script('csbr-script', 'CSBR', [
         'ajax_url'       => admin_url('admin-ajax.php'),
@@ -7036,7 +7043,7 @@ function csbr_create_backup(
  * Writes to both the transient (fast in-memory path) and directly to wp_options
  * (DB-backed, survives Redis flushes and server restarts). TTL: 7 days.
  *
- * @since 3.2.378
+ * @since 3.2.387
  * @return void
  */
 function csbr_imds_set_unavailable(): void {
@@ -7058,7 +7065,7 @@ function csbr_imds_set_unavailable(): void {
  * Checks the transient first (fast), then falls back to the DB-backed option
  * (survives restarts). Re-populates the transient from DB when needed.
  *
- * @since 3.2.378
+ * @since 3.2.387
  * @return bool
  */
 function csbr_imds_is_unavailable(): bool {
