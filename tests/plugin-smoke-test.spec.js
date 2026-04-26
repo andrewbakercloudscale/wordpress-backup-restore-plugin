@@ -1,42 +1,64 @@
 /**
  * CloudScale Backup & Restore — smoke test suite
  *
- * Strategy: API-request login (bypasses bot detection) → inject cookies into browser context.
+ * Strategy: test-session API login → inject cookies into browser context.
  * Each panel test: change a value, save, reload, verify change persisted, restore, save.
  */
 
-const { test, expect, request } = require('@playwright/test');
+const { test, expect, request: playwrightRequest } = require('@playwright/test');
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env.test') });
 
-const BASE_URL   = 'https://your-wordpress-site.example.com';
+const BASE_URL   = process.env.WP_SITE             || 'https://your-wordpress-site.example.com';
+const SECRET     = process.env.CSDT_TEST_SECRET    || '';
+const ROLE       = process.env.CSDT_TEST_ROLE       || '';
+const SESSION_URL = process.env.CSDT_TEST_SESSION_URL || '';
+const LOGOUT_URL  = process.env.CSDT_TEST_LOGOUT_URL  || '';
+
 const PLUGIN_URL = `${BASE_URL}/wp-admin/admin.php?page=cloudscale-backup`;
-const LOGIN_URL  = `${BASE_URL}/your-login-slug/`;
-const USERNAME   = 'playwright';
-const PASSWORD   = 'TestPW2026!';
+
+if (!SECRET || !ROLE || !SESSION_URL) {
+    throw new Error('CSDT_TEST_SECRET, CSDT_TEST_ROLE, and CSDT_TEST_SESSION_URL must be set.\nRun: bash setup-playwright-test-account.sh');
+}
+
+async function getAdminSession(ttl = 900) {
+    const ctx  = await playwrightRequest.newContext({ ignoreHTTPSErrors: true });
+    const resp = await ctx.post(SESSION_URL, { data: { secret: SECRET, role: ROLE, ttl } });
+    const body = await resp.json().catch(() => resp.text());
+    await ctx.dispose();
+    if (!resp.ok()) throw new Error(`test-session API: ${resp.status()} ${JSON.stringify(body)}`);
+    return body;
+}
+
+async function injectCookies(ctx, sess) {
+    await ctx.addCookies([
+        { name: sess.secure_auth_cookie_name, value: sess.secure_auth_cookie,  domain: sess.cookie_domain, path: '/', secure: true,  httpOnly: true,  sameSite: 'Lax' },
+        { name: sess.logged_in_cookie_name,   value: sess.logged_in_cookie,    domain: sess.cookie_domain, path: '/', secure: true,  httpOnly: false, sameSite: 'Lax' },
+    ]);
+}
+
+async function logoutTestUser() {
+    if (!LOGOUT_URL) return;
+    try {
+        const ctx = await playwrightRequest.newContext({ ignoreHTTPSErrors: true });
+        await ctx.post(LOGOUT_URL, { data: { secret: SECRET, role: ROLE } });
+        await ctx.dispose();
+    } catch {}
+}
 
 // ── auth helper ──────────────────────────────────────────────────────────────
 
-let _sharedCookies = null;
+let _sess = null;
 
-async function getSessionCookies(apiContext) {
-    if (_sharedCookies) return _sharedCookies;
-    await apiContext.get(LOGIN_URL);
-    await apiContext.post(LOGIN_URL, {
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Origin': BASE_URL,
-            'Referer': LOGIN_URL,
-        },
-        data: `log=${encodeURIComponent(USERNAME)}&pwd=${encodeURIComponent(PASSWORD)}&wp-submit=Log+In&redirect_to=%2Fwp-admin%2F&testcookie=1`,
-    });
-    const state = await apiContext.storageState();
-    _sharedCookies = state.cookies.map(c => ({ ...c, domain: 'andrewbaker.ninja', secure: true }));
-    return _sharedCookies;
+async function getSharedSession() {
+    if (!_sess) _sess = await getAdminSession();
+    return _sess;
 }
 
-async function makeAuthContext(browser, apiContext) {
-    const cookies = await getSessionCookies(apiContext);
-    const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
-    await ctx.addCookies(cookies);
+async function makeAuthContext(browser) {
+    const sess = await getSharedSession();
+    const ctx  = await browser.newContext({ ignoreHTTPSErrors: true });
+    await injectCookies(ctx, sess);
     return ctx;
 }
 
@@ -76,10 +98,14 @@ async function openAndCloseModal(page, btnOnclick, label) {
     }
 }
 
+test.afterAll(async () => {
+    await logoutTestUser();
+});
+
 // ── LOCAL TAB ────────────────────────────────────────────────────────────────
 
-test('Local > Schedule: change hour, save, reload, verify, restore', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Local > Schedule: change hour, save, reload, verify, restore', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'local');
@@ -106,8 +132,8 @@ test('Local > Schedule: change hour, save, reload, verify, restore', async ({ br
     await ctx.close();
 });
 
-test('Local > Schedule: Explain button', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Local > Schedule: Explain button', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'local');
@@ -115,8 +141,8 @@ test('Local > Schedule: Explain button', async ({ browser, request: api }) => {
     await ctx.close();
 });
 
-test('Local > Retention: change value and prefix, save, reload, verify, restore', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Local > Retention: change value and prefix, save, reload, verify, restore', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'local');
@@ -146,8 +172,8 @@ test('Local > Retention: change value and prefix, save, reload, verify, restore'
     await ctx.close();
 });
 
-test('Local > Retention: Explain button', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Local > Retention: Explain button', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'local');
@@ -155,8 +181,8 @@ test('Local > Retention: Explain button', async ({ browser, request: api }) => {
     await ctx.close();
 });
 
-test('Local > System Info: Run Repair button', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Local > System Info: Run Repair button', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'local');
@@ -167,8 +193,8 @@ test('Local > System Info: Run Repair button', async ({ browser, request: api })
     await ctx.close();
 });
 
-test('Local > System Info: Explain button', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Local > System Info: Explain button', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'local');
@@ -176,8 +202,8 @@ test('Local > System Info: Explain button', async ({ browser, request: api }) =>
     await ctx.close();
 });
 
-test('Local > Run Backup Now: verify it starts and shows progress', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Local > Run Backup Now: verify it starts and shows progress', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'local');
@@ -201,8 +227,8 @@ test('Local > Run Backup Now: verify it starts and shows progress', async ({ bro
     await ctx.close();
 });
 
-test('Local > Backup: Explain button', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Local > Backup: Explain button', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'local');
@@ -210,8 +236,8 @@ test('Local > Backup: Explain button', async ({ browser, request: api }) => {
     await ctx.close();
 });
 
-test('Local > History: Explain button, delete oldest backup (if 2+ exist)', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Local > History: Explain button, delete oldest backup (if 2+ exist)', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'local');
@@ -242,8 +268,8 @@ test('Local > History: Explain button, delete oldest backup (if 2+ exist)', asyn
     await ctx.close();
 });
 
-test('Local > Restore: Explain button', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Local > Restore: Explain button', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'local');
@@ -251,8 +277,8 @@ test('Local > Restore: Explain button', async ({ browser, request: api }) => {
     await ctx.close();
 });
 
-test('Local > Activity Log: Refresh and Copy buttons', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Local > Activity Log: Refresh and Copy buttons', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'local');
@@ -269,8 +295,8 @@ test('Local > Activity Log: Refresh and Copy buttons', async ({ browser, request
 
 // ── CLOUD TAB ────────────────────────────────────────────────────────────────
 
-test('Cloud > Schedule: toggle day, save, reload, verify, restore', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Cloud > Schedule: toggle day, save, reload, verify, restore', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'cloud');
@@ -295,8 +321,8 @@ test('Cloud > Schedule: toggle day, save, reload, verify, restore', async ({ bro
     await ctx.close();
 });
 
-test('Cloud > Schedule: Explain button', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Cloud > Schedule: Explain button', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'cloud');
@@ -304,8 +330,8 @@ test('Cloud > Schedule: Explain button', async ({ browser, request: api }) => {
     await ctx.close();
 });
 
-test('Cloud > Google Drive: change path, save, reload, verify, restore', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Cloud > Google Drive: change path, save, reload, verify, restore', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'cloud');
@@ -329,8 +355,8 @@ test('Cloud > Google Drive: change path, save, reload, verify, restore', async (
     await ctx.close();
 });
 
-test('Cloud > Google Drive: Test, Diagnose, Explain buttons', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Cloud > Google Drive: Test, Diagnose, Explain buttons', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'cloud');
@@ -344,8 +370,8 @@ test('Cloud > Google Drive: Test, Diagnose, Explain buttons', async ({ browser, 
     await ctx.close();
 });
 
-test('Cloud > S3: change prefix, save, reload, verify, restore', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Cloud > S3: change prefix, save, reload, verify, restore', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'cloud');
@@ -369,8 +395,8 @@ test('Cloud > S3: change prefix, save, reload, verify, restore', async ({ browse
     await ctx.close();
 });
 
-test('Cloud > S3: Test, Diagnose, Explain buttons', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Cloud > S3: Test, Diagnose, Explain buttons', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'cloud');
@@ -385,8 +411,8 @@ test('Cloud > S3: Test, Diagnose, Explain buttons', async ({ browser, request: a
     await ctx.close();
 });
 
-test('Cloud > S3 History: Refresh button', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Cloud > S3 History: Refresh button', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'cloud');
@@ -396,8 +422,8 @@ test('Cloud > S3 History: Refresh button', async ({ browser, request: api }) => 
     await ctx.close();
 });
 
-test('Cloud > Dropbox: change path, save, reload, verify, restore', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Cloud > Dropbox: change path, save, reload, verify, restore', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'cloud');
@@ -421,8 +447,8 @@ test('Cloud > Dropbox: change path, save, reload, verify, restore', async ({ bro
     await ctx.close();
 });
 
-test('Cloud > Dropbox: Test, Diagnose, Explain buttons', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Cloud > Dropbox: Test, Diagnose, Explain buttons', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'cloud');
@@ -436,8 +462,8 @@ test('Cloud > Dropbox: Test, Diagnose, Explain buttons', async ({ browser, reque
     await ctx.close();
 });
 
-test('Cloud > OneDrive: change path, save, reload, verify, restore', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Cloud > OneDrive: change path, save, reload, verify, restore', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'cloud');
@@ -461,8 +487,8 @@ test('Cloud > OneDrive: change path, save, reload, verify, restore', async ({ br
     await ctx.close();
 });
 
-test('Cloud > OneDrive: Test, Diagnose, Explain buttons', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Cloud > OneDrive: Test, Diagnose, Explain buttons', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'cloud');
@@ -476,8 +502,8 @@ test('Cloud > OneDrive: Test, Diagnose, Explain buttons', async ({ browser, requ
     await ctx.close();
 });
 
-test('Cloud > AMI: change prefix, save, reload, verify, restore', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Cloud > AMI: change prefix, save, reload, verify, restore', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'cloud');
@@ -501,8 +527,8 @@ test('Cloud > AMI: change prefix, save, reload, verify, restore', async ({ brows
     await ctx.close();
 });
 
-test('Cloud > AMI: Explain button', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Cloud > AMI: Explain button', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'cloud');
@@ -510,8 +536,8 @@ test('Cloud > AMI: Explain button', async ({ browser, request: api }) => {
     await ctx.close();
 });
 
-test('Cloud > AMI: Refresh button', async ({ browser, request: api }) => {
-    const ctx  = await makeAuthContext(browser, api);
+test('Cloud > AMI: Refresh button', async ({ browser }) => {
+    const ctx  = await makeAuthContext(browser);
     const page = await ctx.newPage();
     await goPlugin(page);
     await switchTab(page, 'cloud');

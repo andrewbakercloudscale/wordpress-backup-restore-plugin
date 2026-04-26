@@ -1,44 +1,52 @@
-const { test, expect, request } = require('@playwright/test');
+const { test, expect, request: playwrightRequest } = require('@playwright/test');
+const path = require('path');
+require('dotenv').config({ path: path.resolve(__dirname, '../.env.test') });
 
-const BASE_URL   = 'https://your-wordpress-site.example.com';
+const BASE_URL    = process.env.WP_SITE             || 'https://your-wordpress-site.example.com';
+const SECRET      = process.env.CSDT_TEST_SECRET    || '';
+const ROLE        = process.env.CSDT_TEST_ROLE       || '';
+const SESSION_URL = process.env.CSDT_TEST_SESSION_URL || '';
+const LOGOUT_URL  = process.env.CSDT_TEST_LOGOUT_URL  || '';
+
 const PLUGIN_URL = `${BASE_URL}/wp-admin/admin.php?page=cloudscale-backup`;
-const LOGIN_URL  = `${BASE_URL}/your-login-slug/`;
-const USERNAME   = 'playwright';
-const PASSWORD   = 'TestPW2026!';
 
-/** Login via API request context (bypasses bot detection), return cookies for browser injection */
-async function wpLogin(apiContext) {
-    // First GET to pick up the testcookie
-    const getResp = await apiContext.get(LOGIN_URL);
-    const testCookieHeader = getResp.headers()['set-cookie'] || '';
-
-    // POST login
-    const resp = await apiContext.post(LOGIN_URL, {
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'Origin': BASE_URL,
-            'Referer': LOGIN_URL,
-        },
-        data: `log=${encodeURIComponent(USERNAME)}&pwd=${encodeURIComponent(PASSWORD)}&wp-submit=Log+In&redirect_to=%2Fwp-admin%2F&testcookie=1`,
-    });
-
-    console.log('Login POST status:', resp.status());
-    const cookies = await apiContext.storageState();
-    return cookies.cookies;
+if (!SECRET || !ROLE || !SESSION_URL) {
+    throw new Error('CSDT_TEST_SECRET, CSDT_TEST_ROLE, and CSDT_TEST_SESSION_URL must be set.\nRun: bash setup-playwright-test-account.sh');
 }
 
-test('debug: API login then plugin page', async ({ browser, request: apiContext }) => {
-    // Login via Playwright API request
-    const cookies = await wpLogin(apiContext);
-    console.log('Got cookies:', cookies.map(c => c.name + '=' + c.value.substring(0, 30) + '...'));
+async function getAdminSession(ttl = 900) {
+    const ctx  = await playwrightRequest.newContext({ ignoreHTTPSErrors: true });
+    const resp = await ctx.post(SESSION_URL, { data: { secret: SECRET, role: ROLE, ttl } });
+    const body = await resp.json().catch(() => resp.text());
+    await ctx.dispose();
+    if (!resp.ok()) throw new Error(`test-session API: ${resp.status()} ${JSON.stringify(body)}`);
+    return body;
+}
+
+async function injectCookies(ctx, sess) {
+    await ctx.addCookies([
+        { name: sess.secure_auth_cookie_name, value: sess.secure_auth_cookie,  domain: sess.cookie_domain, path: '/', secure: true,  httpOnly: true,  sameSite: 'Lax' },
+        { name: sess.logged_in_cookie_name,   value: sess.logged_in_cookie,    domain: sess.cookie_domain, path: '/', secure: true,  httpOnly: false, sameSite: 'Lax' },
+    ]);
+}
+
+async function logoutTestUser() {
+    if (!LOGOUT_URL) return;
+    try {
+        const ctx = await playwrightRequest.newContext({ ignoreHTTPSErrors: true });
+        await ctx.post(LOGOUT_URL, { data: { secret: SECRET, role: ROLE } });
+        await ctx.dispose();
+    } catch {}
+}
+
+test('debug: API login then plugin page', async ({ browser }) => {
+    // Get session via test-session API
+    const sess = await getAdminSession();
+    console.log('Got session cookies:', [sess.secure_auth_cookie_name, sess.logged_in_cookie_name]);
 
     // Create browser context with those cookies
     const context = await browser.newContext({ ignoreHTTPSErrors: true });
-    await context.addCookies(cookies.map(c => ({
-        ...c,
-        domain: 'andrewbaker.ninja',
-        secure: true,
-    })));
+    await injectCookies(context, sess);
 
     const page = await context.newPage();
     page.on('console', msg => {
@@ -97,4 +105,5 @@ test('debug: API login then plugin page', async ({ browser, request: apiContext 
     }
 
     await context.close();
+    await logoutTestUser();
 });
