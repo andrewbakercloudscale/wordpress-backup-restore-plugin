@@ -182,6 +182,17 @@ jQuery(function ($) {
         $(this).text(showing ? 'Show' : 'Hide');
     });
 
+    // Copy encryption password to clipboard
+    $('#cs-encrypt-copy').on('click', function () {
+        var val = $('#cs-encrypt-password').val();
+        if (!val) return;
+        navigator.clipboard.writeText(val).then(function () {
+            var $msg = $('#cs-encrypt-copy-msg');
+            $msg.show();
+            setTimeout(function () { $msg.hide(); }, 2000);
+        });
+    });
+
     // Cloud schedule enable/disable
     function applyCloudScheduleState(on) {
         $('#cs-cloud-schedule-controls').prop('disabled', !on);
@@ -478,6 +489,13 @@ jQuery(function ($) {
                         if (d.gdrive_msg)  { msg += '<br><span class="' + (d.gdrive_ok  ? 'cs-s3-ok' : 'cs-s3-error') + '">' + d.gdrive_msg  + '</span>'; }
                         if (d.dropbox_msg) { msg += '<br><span class="' + (d.dropbox_ok ? 'cs-s3-ok' : 'cs-s3-error') + '">' + d.dropbox_msg + '</span>'; }
                         progress('cs-backup-fill', 'cs-backup-msg', msg, 'done');
+                        // Show success banner (M9)
+                        var bannerParts = ["✓ <strong>Backup complete</strong>"];
+                        if (d.filename) bannerParts.push(d.filename);
+                        if (d.size)     bannerParts.push(d.size);
+                        if (d.duration) bannerParts.push(d.duration);
+                        if (d.verified) bannerParts.push("verified ✓");
+                        $('#cs-backup-success-banner').html(bannerParts.join(" &nbsp;&middot;&nbsp; ")).show();
                         var anyFail = (d.s3_msg && !d.s3_ok) || (d.gdrive_msg && !d.gdrive_ok) || (d.dropbox_msg && !d.dropbox_ok);
                         setTimeout(function () { location.reload(); }, anyFail ? 6000 : 8000);
                     } else if (d.status === 'error') {
@@ -2492,7 +2510,7 @@ function csAmiRefreshAll() {
             stateCell.innerHTML = '<span style="color:' + color + ';font-weight:600;">' + icon + ' ' + csEscHtml(state) + '</span>';
             var isGolden    = row && row.dataset && row.dataset.golden === '1';
             var goldenStyle = isGolden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '';
-            var goldenTitle = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+            var goldenTitle = isGolden ? 'Remove Verified Backup Snapshot' : 'Mark as Verified Backup Snapshot';
             var goldenBtn   = '<button type="button" onclick="csAmiSetGolden(\'' + amiId + '\')" class="button button-small" id="cs-ami-golden-btn-' + amiId + '" data-golden="' + (isGolden ? '1' : '0') + '" title="' + goldenTitle + '" style="min-width:0;padding:2px 6px;margin-bottom:3px;' + goldenStyle + '">&#11088;</button>';
             var restoreBtn  = state === 'available'
                 ? '<button type="button" onclick="csAmiRestore(\'' + amiId + '\',\'' + safeName + '\')" class="button button-small" title="Restore server to this AMI snapshot" style="min-width:0;padding:2px 8px;color:#1a237e;border-color:#1a237e;margin-bottom:3px;">&#8617; Restore</button> '
@@ -2734,7 +2752,7 @@ window.csAmiSetGolden = function (amiId) {
             var btn = document.getElementById('cs-ami-golden-btn-' + amiId);
             if (btn) {
                 btn.dataset.golden = isGolden ? '1' : '0';
-                btn.title = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+                btn.title = isGolden ? 'Remove Verified Backup Snapshot' : 'Mark as Verified Backup Snapshot';
                 btn.style.color       = isGolden ? '#f57f17' : '';
                 btn.style.borderColor = isGolden ? '#f57f17' : '';
                 btn.style.fontWeight  = isGolden ? '700'     : '';
@@ -2748,7 +2766,7 @@ window.csAmiSetGolden = function (amiId) {
                 if (star) star.style.display = isGolden ? '' : 'none';
             }
             csAmiUpdateGoldenCount();
-            csAmiMsg(isGolden ? '&#11088; Marked as golden image' : 'Golden image removed', true);
+            csAmiMsg(isGolden ? '&#11088; Marked as Verified Backup Snapshot' : 'Verified Backup Snapshot removed', true);
         } else {
             csAmiMsg('\u2717 ' + (res.data || 'Failed'), false);
         }
@@ -2846,7 +2864,7 @@ window.csS3HistoryRefresh = function () {
             var isGolden  = !!sf.golden;
             var goldenD   = isGolden ? '1' : '0';
             var goldenSt  = isGolden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '';
-            var goldenTit = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+            var goldenTit = isGolden ? 'Remove Verified Backup Snapshot' : 'Mark as Verified Backup Snapshot';
             var dlUrl     = CSBR.admin_post_url + '?action=csbr_s3_download&file=' + encodeURIComponent(name) + '&nonce=' + CSBR.nonce;
             var dlBtn     = '<a href="' + dlUrl + '" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; Download</a> ';
             var tr = document.createElement('tr');
@@ -2941,7 +2959,7 @@ window.csS3HistorySetGolden = function (filename) {
             var btn = document.getElementById('cs-s3h-golden-btn-' + keyE);
             if (btn) {
                 btn.dataset.golden    = isGolden ? '1' : '0';
-                btn.title             = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+                btn.title             = isGolden ? 'Remove Verified Backup Snapshot' : 'Mark as Verified Backup Snapshot';
                 btn.style.color       = isGolden ? '#f57f17' : '';
                 btn.style.borderColor = isGolden ? '#f57f17' : '';
                 btn.style.fontWeight  = isGolden ? '700' : '';
@@ -3065,7 +3083,7 @@ window.csGDriveHistoryRefresh = function () {
             var isGolden  = !!gf.golden;
             var goldenD   = isGolden ? '1' : '0';
             var goldenSt  = isGolden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '';
-            var goldenTit = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+            var goldenTit = isGolden ? 'Remove Verified Backup Snapshot' : 'Mark as Verified Backup Snapshot';
             var dlUrl     = CSBR.admin_post_url + '?action=csbr_gdrive_download&file=' + encodeURIComponent(name) + '&nonce=' + CSBR.nonce;
             var tr = document.createElement('tr');
             tr.id = 'cs-gd-row-' + keyE;
@@ -3163,7 +3181,7 @@ window.csGDriveHistorySetGolden = function (filename) {
             var btn = document.getElementById('cs-gd-golden-btn-' + keyE);
             if (btn) {
                 btn.dataset.golden    = isGolden ? '1' : '0';
-                btn.title             = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+                btn.title             = isGolden ? 'Remove Verified Backup Snapshot' : 'Mark as Verified Backup Snapshot';
                 btn.style.color       = isGolden ? '#f57f17' : '';
                 btn.style.borderColor = isGolden ? '#f57f17' : '';
                 btn.style.fontWeight  = isGolden ? '700' : '';
@@ -3482,7 +3500,7 @@ window.csDropboxHistoryRefresh = function () {
             var isGolden  = !!dbf.golden;
             var goldenD   = isGolden ? '1' : '0';
             var goldenSt  = isGolden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '';
-            var goldenTit = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+            var goldenTit = isGolden ? 'Remove Verified Backup Snapshot' : 'Mark as Verified Backup Snapshot';
             var dlUrl     = CSBR.admin_post_url + '?action=csbr_dropbox_download&file=' + encodeURIComponent(name) + '&nonce=' + CSBR.nonce;
             var tr = document.createElement('tr');
             tr.id = 'cs-db-row-' + keyE;
@@ -3574,7 +3592,7 @@ window.csDropboxHistorySetGolden = function (filename) {
             var btn = document.getElementById('cs-db-golden-btn-' + keyE);
             if (btn) {
                 btn.dataset.golden    = isGolden ? '1' : '0';
-                btn.title             = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+                btn.title             = isGolden ? 'Remove Verified Backup Snapshot' : 'Mark as Verified Backup Snapshot';
                 btn.style.color       = isGolden ? '#f57f17' : '';
                 btn.style.borderColor = isGolden ? '#f57f17' : '';
                 btn.style.fontWeight  = isGolden ? '700' : '';
@@ -3672,7 +3690,7 @@ window.csOneDriveHistoryRefresh = function () {
             var isGolden  = !!odf.golden;
             var goldenD   = isGolden ? '1' : '0';
             var goldenSt  = isGolden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '';
-            var goldenTit = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+            var goldenTit = isGolden ? 'Remove Verified Backup Snapshot' : 'Mark as Verified Backup Snapshot';
             var dlUrl     = CSBR.admin_post_url + '?action=csbr_onedrive_download&file=' + encodeURIComponent(name) + '&nonce=' + CSBR.nonce;
             var tr = document.createElement('tr');
             tr.id = 'cs-od-row-' + keyE;
@@ -3764,7 +3782,7 @@ window.csOneDriveHistorySetGolden = function (filename) {
             var btn = document.getElementById('cs-od-golden-btn-' + keyE);
             if (btn) {
                 btn.dataset.golden    = isGolden ? '1' : '0';
-                btn.title             = isGolden ? 'Remove Golden Image' : 'Mark as Golden Image';
+                btn.title             = isGolden ? 'Remove Verified Backup Snapshot' : 'Mark as Verified Backup Snapshot';
                 btn.style.color       = isGolden ? '#f57f17' : '';
                 btn.style.borderColor = isGolden ? '#f57f17' : '';
                 btn.style.fontWeight  = isGolden ? '700' : '';

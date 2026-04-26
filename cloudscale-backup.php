@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Backup & Restore
  * Plugin URI:        https://cloudscale.consulting
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.420
+ * Version:           3.2.421
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CSBR_VERSION',    '3.2.420');
+define('CSBR_VERSION',    '3.2.421');
 define('CSBR_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CSBR_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CSBR_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -1004,7 +1004,8 @@ function csbr_admin_page(): void {
     $ami_region_override = get_option('csbr_ami_region_override', '');
     $ami_max             = intval(get_option('csbr_ami_max', 10));
     $ami_schedule_days   = (array) get_option('csbr_ami_schedule_days', []);
-    $dump_method  = csbr_mysqldump_available() ? 'mysqldump (native — fast)' : 'PHP streamed (compatible)';
+    $dump_method_is_native = csbr_mysqldump_available();
+    $dump_method  = $dump_method_is_native ? 'mysqldump (native — fast)' : 'PHP streamed (compatible)';
     $restore_method = csbr_mysql_cli_available() ? 'mysql CLI (native — fast)' : 'PHP streamed (compatible)';
 
     // MySQL version
@@ -1187,6 +1188,14 @@ function csbr_admin_page(): void {
         </div>
         <?php endif; ?>
 
+        <!-- ===================== TABLE OVERHEAD ALERT ===================== -->
+        <?php if ( $csbr_overhead_mb >= 50 ): ?>
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 14px;background:#fff8e1;border-left:4px solid #f9a825;border-radius:4px;margin-bottom:10px;font-size:0.88rem;color:#3e2723;">
+            <span style="font-size:1.1rem;flex-shrink:0;">&#9888;</span>
+            <span><?php echo wp_kses( sprintf( __( 'Table overhead is <strong>%s MB</strong> — consider running an optimise to reclaim fragmented space. <a href="#cs-table-repair-card">Run optimise ↓</a>', 'cloudscale-backup-restore' ), number_format( $csbr_overhead_mb, 0 ) ), [ 'strong' => [], 'a' => [ 'href' => [] ] ] ); ?></span>
+        </div>
+        <?php endif; ?>
+
         <!-- ===================== EXPLAIN ONBOARDING BANNER ===================== -->
         <?php if ( ! get_user_meta( get_current_user_id(), 'csbr_explain_banner_dismissed', true ) ) : ?>
         <div id="csbr-explain-banner" style="display:flex;align-items:center;justify-content:space-between;gap:16px;background:#fffde7;border:1px solid #f9a825;border-radius:8px;padding:12px 18px;margin-bottom:16px;flex-wrap:wrap;">
@@ -1366,6 +1375,8 @@ function csbr_admin_page(): void {
                                    autocomplete="new-password"
                                    style="max-width:100%;padding:4px 8px;height:32px;">
                             <button type="button" id="cs-encrypt-toggle" class="button button-small" style="flex-shrink:0;"><?php esc_html_e( 'Show', 'cloudscale-backup-restore' ); ?></button>
+                            <button type="button" id="cs-encrypt-copy" class="button button-small" style="flex-shrink:0;" title="<?php esc_attr_e( 'Copy password to clipboard', 'cloudscale-backup-restore' ); ?>">&#128203; <?php esc_html_e( 'Copy', 'cloudscale-backup-restore' ); ?></button>
+                            <span id="cs-encrypt-copy-msg" style="font-size:0.82rem;color:#2e7d32;display:none;"><?php esc_html_e( 'Copied!', 'cloudscale-backup-restore' ); ?></span>
                         </div>
                         <div style="margin-top:8px;background:#fff8e1;border:1px solid #f9a825;border-radius:4px;padding:8px 12px;font-size:0.82rem;color:#5d4037;">
                             &#9888; <?php esc_html_e( 'If you change or clear this password, existing encrypted backups cannot be restored. The password is stored in the WordPress database.', 'cloudscale-backup-restore' ); ?>
@@ -1391,7 +1402,7 @@ function csbr_admin_page(): void {
                 </div>
 
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:16px;">
-                    <button type="submit" name="csbr_save_schedule" class="button button-primary"><?php esc_html_e( 'Save Schedule', 'cloudscale-backup-restore' ); ?></button>
+                    <button type="submit" name="csbr_save_schedule" class="button button-primary"><?php esc_html_e( 'Save', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" id="cs-run-backup" class="button button-primary" style="background:#e65100;border-color:#bf360c;">&#9654; <?php esc_html_e( 'Run Backup Now', 'cloudscale-backup-restore' ); ?></button>
                     <?php if ($csbr_schedule_saved_msg): ?>
                     <span class="cs-saved-msg">✓ <?php echo esc_html($csbr_schedule_saved_msg); ?></span>
@@ -1404,6 +1415,7 @@ function csbr_admin_page(): void {
                         <button type="button" id="cs-space-check-cancel" class="button"><?php esc_html_e( 'Cancel', 'cloudscale-backup-restore' ); ?></button>
                     </div>
                 </div>
+                <div id="cs-backup-success-banner" style="display:none;background:#e8f5e9;border-left:4px solid #2e7d32;border-radius:4px;padding:10px 16px;margin-bottom:8px;font-size:0.88rem;color:#1b5e20;"></div>
                 <div id="cs-backup-progress" style="display:none" class="cs-progress-panel">
                     <p id="cs-backup-msg" class="cs-progress-msg"><?php esc_html_e( 'Starting backup...', 'cloudscale-backup-restore' ); ?></p>
                     <div class="cs-progress-bar"><div id="cs-backup-fill" class="cs-progress-fill"></div></div>
@@ -1501,7 +1513,7 @@ function csbr_admin_page(): void {
                     </div>
                 </div>
 
-                <button type="button" id="cs-save-retention" class="button button-primary cs-mt"><?php esc_html_e( 'Save Retention Settings', 'cloudscale-backup-restore' ); ?></button>
+                <button type="button" id="cs-save-retention" class="button button-primary cs-mt"><?php esc_html_e( 'Save', 'cloudscale-backup-restore' ); ?></button>
                 <span id="cs-retention-saved" class="cs-saved-msg" style="display:none">✓ Saved</span>
             </div>
 
@@ -1557,7 +1569,7 @@ function csbr_admin_page(): void {
                 </div>
 
                 <div style="margin-top:12px;">
-                    <button type="button" onclick="csAmiSave()" class="button button-primary"><?php esc_html_e( 'Save AWS EC2 AMI Settings', 'cloudscale-backup-restore' ); ?></button>
+                    <button type="button" onclick="csAmiSave()" class="button button-primary"><?php esc_html_e( 'Save', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" onclick="csAmiCreate()" class="button" style="margin-left:8px;background:#1a237e!important;color:#fff!important;border-color:#1a237e!important;">&#128247; <?php esc_html_e( 'Create AMI Now', 'cloudscale-backup-restore' ); ?></button>
                     <span id="cs-ami-settings-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
                 </div>
@@ -1615,7 +1627,7 @@ function csbr_admin_page(): void {
                                     <?php if (!empty($entry['ami_id'])): ?>
                                     <?php if (!$is_deleted): ?>
                                     <button type="button" onclick="csAmiRefreshOne('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Refresh this AMI state from AWS', 'cloudscale-backup-restore' ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
-                                    <button type="button" onclick="csAmiSetGolden('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" id="cs-ami-golden-btn-<?php echo esc_attr( $row_ami_id ); ?>" data-golden="<?php echo esc_attr( $is_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $is_golden ? __( 'Remove Golden Image', 'cloudscale-backup-restore' ) : __( 'Mark as Golden Image', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $is_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
+                                    <button type="button" onclick="csAmiSetGolden('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" id="cs-ami-golden-btn-<?php echo esc_attr( $row_ami_id ); ?>" data-golden="<?php echo esc_attr( $is_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $is_golden ? __( 'Remove Verified Backup Snapshot', 'cloudscale-backup-restore' ) : __( 'Mark as Verified Backup Snapshot', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $is_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
                                     <?php if ( $entry_state === 'available' ): ?>
                                     <button type="button" onclick="csAmiRestore('<?php echo esc_js( $row_ami_id ); ?>', '<?php echo esc_js( $entry['name'] ?? '' ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Restore server to this AMI snapshot', 'cloudscale-backup-restore' ); ?>" style="min-width:0;padding:2px 8px;color:#1a237e;border-color:#1a237e;margin-bottom:3px;">&#8617; <?php esc_html_e( 'Restore', 'cloudscale-backup-restore' ); ?></button>
                                     <?php endif; // available ?>
@@ -1682,7 +1694,7 @@ function csbr_admin_page(): void {
             <div>
               <label class="cs-enable-label">
                 <input type="checkbox" id="cs-sms-enabled" <?php checked($sms_enabled); ?>>
-                <?php esc_html_e( 'SMS via Twilio', 'cloudscale-backup-restore' ); ?>
+                <?php esc_html_e( 'SMS (Twilio)', 'cloudscale-backup-restore' ); ?>
               </label>
               <p class="cs-help"><?php esc_html_e( 'Text message alerts. Free trial at twilio.com.', 'cloudscale-backup-restore' ); ?></p>
               <div id="cs-sms-controls">
@@ -1722,7 +1734,7 @@ function csbr_admin_page(): void {
             <div>
               <label class="cs-enable-label">
                 <input type="checkbox" id="cs-ntfy-enabled" <?php checked($ntfy_enabled); ?>>
-                <?php esc_html_e( 'Push via ntfy', 'cloudscale-backup-restore' ); ?>
+                <?php esc_html_e( 'Push (ntfy)', 'cloudscale-backup-restore' ); ?>
               </label>
               <p class="cs-help"><?php esc_html_e( 'Instant push to your phone. Free at ntfy.sh — no account needed. Install the ntfy app and subscribe to your topic.', 'cloudscale-backup-restore' ); ?></p>
               <div id="cs-ntfy-controls">
@@ -1756,7 +1768,7 @@ function csbr_admin_page(): void {
           </div><!-- /grid -->
 
           <div style="margin-top:20px;padding-top:16px;border-top:1px solid #e9e5f0;">
-            <button type="button" id="cs-notify-save-btn" class="button button-primary"><?php esc_html_e( 'Save Notification Settings', 'cloudscale-backup-restore' ); ?></button>
+            <button type="button" id="cs-notify-save-btn" class="button button-primary"><?php esc_html_e( 'Save', 'cloudscale-backup-restore' ); ?></button>
             <span id="cs-notify-save-msg" style="font-size:0.88rem;margin-left:10px;"></span>
           </div>
         </div><!-- /#cs-notifications-card -->
@@ -1768,7 +1780,11 @@ function csbr_admin_page(): void {
 
             <div class="cs-info-row">
                 <span><?php esc_html_e( 'Backup method', 'cloudscale-backup-restore' ); ?></span>
-                <strong><?php echo esc_html($dump_method); ?></strong>
+                <?php if ( $dump_method_is_native ): ?>
+                    <strong style="color:#2e7d32;">&#10003; mysqldump — fastest and most reliable</strong>
+                <?php else: ?>
+                    <strong style="color:#e65100;">&#9888; PHP streamed — mysqldump not available on this server. Backups will be slower on large databases.</strong>
+                <?php endif; ?>
             </div>
             <div class="cs-info-row">
                 <span><?php esc_html_e( 'Restore method', 'cloudscale-backup-restore' ); ?></span>
@@ -1830,7 +1846,7 @@ function csbr_admin_page(): void {
 
         <!-- ===================== TABLE OVERHEAD REPAIR ===================== -->
         <hr style="border:none;border-top:3px solid #37474f;margin:18px 0 16px;">
-        <div class="cs-card cs-full">
+        <div id="cs-table-repair-card" class="cs-card cs-full">
             <div class="cs-card-stripe" style="background:linear-gradient(135deg,#bf360c 0%,#e64a19 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;"><h2 class="cs-card-heading" style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#129529; <?php esc_html_e( 'Table Overhead Repair', 'cloudscale-backup-restore' ); ?></h2><button type="button" onclick="csRepairExplain()" style="background:#1a1a1a;border:none;color:#f9a825;border-radius:999px;padding:5px 16px;font-size:0.78rem;font-weight:700;cursor:pointer;letter-spacing:0.01em;">&#128214; <?php esc_html_e( 'Explain…', 'cloudscale-backup-restore' ); ?></button></div>
 
             <?php
@@ -2319,7 +2335,7 @@ function csbr_admin_page(): void {
                     Automatic cloud backups are <strong>off</strong>. Enable the checkbox above to configure a schedule.
                 </div>
 
-                <button type="button" onclick="csCloudScheduleSave()" class="button button-primary cs-mt"><?php esc_html_e( 'Save Schedule', 'cloudscale-backup-restore' ); ?></button>
+                <button type="button" onclick="csCloudScheduleSave()" class="button button-primary cs-mt"><?php esc_html_e( 'Save', 'cloudscale-backup-restore' ); ?></button>
                 <span id="cs-cloud-schedule-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
             </div>
 
@@ -2352,7 +2368,7 @@ function csbr_admin_page(): void {
                 </div>
 
                 <div style="margin-top:12px;">
-                    <button type="button" onclick="csGDriveSave()" class="button button-primary"><?php esc_html_e( 'Save Drive Settings', 'cloudscale-backup-restore' ); ?></button>
+                    <button type="button" onclick="csGDriveSave()" class="button button-primary"><?php esc_html_e( 'Save', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" onclick="csGDriveTest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Test Connection', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" onclick="csGDriveDiagnose()" class="button" style="margin-left:8px;background:#e65100!important;color:#fff!important;border-color:#bf360c!important;"><?php esc_html_e( 'Diagnose', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" onclick="csGDriveSyncLatest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Copy Last Backup to Cloud', 'cloudscale-backup-restore' ); ?></button>
@@ -2415,7 +2431,7 @@ function csbr_admin_page(): void {
                 </div>
 
                 <div style="margin-top:12px;">
-                    <button type="button" onclick="csDropboxSave()" class="button button-primary"><?php esc_html_e( 'Save Dropbox Settings', 'cloudscale-backup-restore' ); ?></button>
+                    <button type="button" onclick="csDropboxSave()" class="button button-primary"><?php esc_html_e( 'Save', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" onclick="csDropboxTest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Test Connection', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" onclick="csDropboxDiagnose()" class="button" style="margin-left:8px;background:#e65100!important;color:#fff!important;border-color:#bf360c!important;"><?php esc_html_e( 'Diagnose', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" onclick="csDropboxSyncLatest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Copy Last Backup to Cloud', 'cloudscale-backup-restore' ); ?></button>
@@ -2477,7 +2493,7 @@ function csbr_admin_page(): void {
                 </div>
 
                 <div style="margin-top:12px;">
-                    <button type="button" onclick="csOneDriveSave()" class="button button-primary"><?php esc_html_e( 'Save OneDrive Settings', 'cloudscale-backup-restore' ); ?></button>
+                    <button type="button" onclick="csOneDriveSave()" class="button button-primary"><?php esc_html_e( 'Save', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" onclick="csOneDriveTest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Test Connection', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" onclick="csOneDriveDiagnose()" class="button" style="margin-left:8px;background:#e65100!important;color:#fff!important;border-color:#bf360c!important;"><?php esc_html_e( 'Diagnose', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" onclick="csOneDriveSyncLatest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Copy Last Backup to Cloud', 'cloudscale-backup-restore' ); ?></button>
@@ -2560,7 +2576,7 @@ function csbr_admin_page(): void {
                 </div>
 
                 <div style="margin-top:12px;">
-                    <button type="button" onclick="csS3Save()" class="button button-primary"><?php esc_html_e( 'Save AWS S3 Settings', 'cloudscale-backup-restore' ); ?></button>
+                    <button type="button" onclick="csS3Save()" class="button button-primary"><?php esc_html_e( 'Save', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" onclick="csS3Test()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Test Connection', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" onclick="csS3Diagnose()" class="button" style="margin-left:8px;background:#e65100!important;color:#fff!important;border-color:#bf360c!important;"><?php esc_html_e( 'Diagnose', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" onclick="csS3SyncLatest()" class="button" style="margin-left:8px;background:#2e7d32!important;color:#fff!important;border-color:#1b5e20!important;"><?php esc_html_e( 'Copy Last Backup to Cloud', 'cloudscale-backup-restore' ); ?></button>
@@ -2651,7 +2667,7 @@ function csbr_admin_page(): void {
                 </div>
 
                 <div style="margin-top:12px;">
-                    <button type="button" onclick="csAmiSave()" class="button button-primary"><?php esc_html_e( 'Save AWS EC2 AMI Settings', 'cloudscale-backup-restore' ); ?></button>
+                    <button type="button" onclick="csAmiSave()" class="button button-primary"><?php esc_html_e( 'Save', 'cloudscale-backup-restore' ); ?></button>
                     <button type="button" onclick="csAmiCreate()" class="button" style="margin-left:8px;background:#1a237e!important;color:#fff!important;border-color:#1a237e!important;">&#128247; <?php esc_html_e( 'Create AMI Now', 'cloudscale-backup-restore' ); ?></button>
                     <span id="cs-ami-settings-msg" style="margin-left:10px;font-size:0.85rem;font-weight:600;"></span>
                 </div>
@@ -2735,7 +2751,7 @@ function csbr_admin_page(): void {
                             <td><?php echo esc_html( $sf['size_fmt'] ?? '—' ); ?></td>
                             <td><?php echo esc_html( $sf['time'] ? wp_date( 'j M Y H:i', $sf['time'] ) : '—' ); ?></td>
                             <td id="cs-s3h-actions-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
-                                <button type="button" onclick="csS3HistorySetGolden('<?php echo $sf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-s3h-golden-btn-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $sf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $sf_golden ? __( 'Remove Golden Image', 'cloudscale-backup-restore' ) : __( 'Mark as Golden Image', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $sf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
+                                <button type="button" onclick="csS3HistorySetGolden('<?php echo $sf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-s3h-golden-btn-<?php echo $sf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $sf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $sf_golden ? __( 'Remove Verified Backup Snapshot', 'cloudscale-backup-restore' ) : __( 'Mark as Verified Backup Snapshot', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $sf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
                                 <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'csbr_s3_download', 'file' => $sf_name, 'nonce' => wp_create_nonce( 'csbr_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-backup-restore' ); ?></a>
                                 <button type="button" onclick="csS3HistoryDelete('<?php echo $sf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-backup-restore' ); ?></button>
                             </td>
@@ -2782,7 +2798,7 @@ function csbr_admin_page(): void {
                             <td><?php echo esc_html( $gf['size_fmt'] ?? '—' ); ?></td>
                             <td><?php echo esc_html( $gf['time'] ? wp_date( 'j M Y H:i', $gf['time'] ) : '—' ); ?></td>
                             <td id="cs-gd-actions-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
-                                <button type="button" onclick="csGDriveHistorySetGolden('<?php echo $gf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-gd-golden-btn-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $gf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $gf_golden ? __( 'Remove Golden Image', 'cloudscale-backup-restore' ) : __( 'Mark as Golden Image', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $gf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
+                                <button type="button" onclick="csGDriveHistorySetGolden('<?php echo $gf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-gd-golden-btn-<?php echo $gf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $gf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $gf_golden ? __( 'Remove Verified Backup Snapshot', 'cloudscale-backup-restore' ) : __( 'Mark as Verified Backup Snapshot', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $gf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
                                 <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'csbr_gdrive_download', 'file' => $gf_name, 'nonce' => wp_create_nonce( 'csbr_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-backup-restore' ); ?></a>
                                 <button type="button" onclick="csGDriveHistoryDelete('<?php echo $gf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-backup-restore' ); ?></button>
                             </td>
@@ -2828,7 +2844,7 @@ function csbr_admin_page(): void {
                             <td><?php echo esc_html( $dbf['size_fmt'] ?? '—' ); ?></td>
                             <td><?php echo esc_html( $dbf['time'] ? wp_date( 'j M Y H:i', $dbf['time'] ) : '—' ); ?></td>
                             <td id="cs-db-actions-<?php echo $dbf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
-                                <button type="button" onclick="csDropboxHistorySetGolden('<?php echo $dbf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-db-golden-btn-<?php echo $dbf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $dbf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $dbf_golden ? __( 'Remove Golden Image', 'cloudscale-backup-restore' ) : __( 'Mark as Golden Image', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $dbf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
+                                <button type="button" onclick="csDropboxHistorySetGolden('<?php echo $dbf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-db-golden-btn-<?php echo $dbf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $dbf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $dbf_golden ? __( 'Remove Verified Backup Snapshot', 'cloudscale-backup-restore' ) : __( 'Mark as Verified Backup Snapshot', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $dbf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
                                 <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'csbr_dropbox_download', 'file' => $dbf_name, 'nonce' => wp_create_nonce( 'csbr_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-backup-restore' ); ?></a>
                                 <button type="button" onclick="csDropboxHistoryDelete('<?php echo $dbf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-backup-restore' ); ?></button>
                             </td>
@@ -2872,7 +2888,7 @@ function csbr_admin_page(): void {
                             <td><?php echo esc_html( $odf['size_fmt'] ?? '—' ); ?></td>
                             <td><?php echo esc_html( $odf['time'] ? wp_date( 'j M Y H:i', $odf['time'] ) : '—' ); ?></td>
                             <td id="cs-od-actions-<?php echo $odf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" style="white-space:nowrap;vertical-align:middle;">
-                                <button type="button" onclick="csOneDriveHistorySetGolden('<?php echo $odf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-od-golden-btn-<?php echo $odf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $odf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $odf_golden ? __( 'Remove Golden Image', 'cloudscale-backup-restore' ) : __( 'Mark as Golden Image', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $odf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
+                                <button type="button" onclick="csOneDriveHistorySetGolden('<?php echo $odf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" id="cs-od-golden-btn-<?php echo $odf_key_e; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- escaped above ?>" data-golden="<?php echo esc_attr( $odf_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $odf_golden ? __( 'Remove Verified Backup Snapshot', 'cloudscale-backup-restore' ) : __( 'Mark as Verified Backup Snapshot', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $odf_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
                                 <a href="<?php echo esc_url( add_query_arg( [ 'action' => 'csbr_onedrive_download', 'file' => $odf_name, 'nonce' => wp_create_nonce( 'csbr_nonce' ) ], admin_url( 'admin-post.php' ) ) ); ?>" class="button button-small" style="min-width:0;padding:2px 6px;margin-bottom:3px;text-decoration:none;display:inline-block;">&#8659; <?php esc_html_e( 'Download', 'cloudscale-backup-restore' ); ?></a>
                                 <button type="button" onclick="csOneDriveHistoryDelete('<?php echo $odf_js; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- esc_js above ?>')" class="button button-small" style="min-width:0;padding:2px 8px;color:#c62828;border-color:#c62828;">&#128465; <?php esc_html_e( 'Delete', 'cloudscale-backup-restore' ); ?></button>
                             </td>
@@ -2934,7 +2950,7 @@ function csbr_admin_page(): void {
                                 <?php if ( ! empty( $entry['ami_id'] ) ): ?>
                                 <?php if ( ! $is_deleted ): ?>
                                 <button type="button" onclick="csAmiRefreshOne('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" title="<?php esc_attr_e( 'Refresh this AMI state from AWS', 'cloudscale-backup-restore' ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;"><svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
-                                <button type="button" onclick="csAmiSetGolden('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" id="cs-ami-golden-btn-<?php echo esc_attr( $row_ami_id ); ?>" data-golden="<?php echo esc_attr( $is_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $is_golden ? __( 'Remove Golden Image', 'cloudscale-backup-restore' ) : __( 'Mark as Golden Image', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $is_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
+                                <button type="button" onclick="csAmiSetGolden('<?php echo esc_js( $row_ami_id ); ?>')" class="button button-small" id="cs-ami-golden-btn-<?php echo esc_attr( $row_ami_id ); ?>" data-golden="<?php echo esc_attr( $is_golden ? '1' : '0' ); ?>" title="<?php echo esc_attr( $is_golden ? __( 'Remove Verified Backup Snapshot', 'cloudscale-backup-restore' ) : __( 'Mark as Verified Backup Snapshot', 'cloudscale-backup-restore' ) ); ?>" style="min-width:0;padding:2px 6px;margin-bottom:3px;<?php echo esc_attr( $is_golden ? 'color:#f57f17;border-color:#f57f17;font-weight:700;' : '' ); ?>">&#11088;</button>
                                 <?php if ( $entry_state === 'available' ): ?>
                                 <button type="button" onclick="csAmiRestore('<?php echo esc_js( $row_ami_id ); ?>','<?php echo esc_js( $entry['name'] ?? '' ); ?>')" class="button button-small" style="min-width:0;padding:2px 8px;color:#1a237e;border-color:#1a237e;margin-bottom:3px;">&#8617; <?php esc_html_e( 'Restore', 'cloudscale-backup-restore' ); ?></button>
                                 <?php endif; ?>
@@ -7118,7 +7134,7 @@ function csbr_create_backup(
  * Writes to both the transient (fast in-memory path) and directly to wp_options
  * (DB-backed, survives Redis flushes and server restarts). TTL: 7 days.
  *
- * @since 3.2.420
+ * @since 3.2.421
  * @return void
  */
 function csbr_imds_set_unavailable(): void {
@@ -7140,7 +7156,7 @@ function csbr_imds_set_unavailable(): void {
  * Checks the transient first (fast), then falls back to the DB-backed option
  * (survives restarts). Re-populates the transient from DB when needed.
  *
- * @since 3.2.420
+ * @since 3.2.421
  * @return bool
  */
 function csbr_imds_is_unavailable(): bool {

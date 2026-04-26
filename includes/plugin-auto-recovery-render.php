@@ -23,6 +23,24 @@ function csbr_par_render_tab(): void {
 	<hr style="border:none;border-top:3px solid #37474f;margin:18px 0 16px;">
 	<div class="cs-grid cs-grid-1" style="display:flex!important;flex-direction:column!important;gap:16px!important;">
 
+	<!-- ════════════════════ ABOUT CARD ════════════════════ -->
+	<div class="cs-card" style="border:1px solid #e2e8f0;background:#f8fafc;">
+	  <div class="cs-card-stripe" style="background:linear-gradient(135deg,#4527a0 0%,#7b1fa2 100%);display:flex;align-items:center;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
+	    <h3 style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#9432; <?php esc_html_e( 'About Automatic Crash Recovery', 'cloudscale-backup-restore' ); ?></h3>
+	  </div>
+	  <ol style="margin:0 0 0 1.2em;padding:0;font-size:0.88rem;color:#334155;line-height:1.9;">
+	    <li><?php esc_html_e( 'Before any plugin update, the current plugin directory is copied to a secure backup location on the server.', 'cloudscale-backup-restore' ); ?></li>
+	    <li><?php esc_html_e( 'After the update, the system-cron watchdog probes the health check URL every minute for the monitoring window.', 'cloudscale-backup-restore' ); ?></li>
+	    <li><?php esc_html_e( 'If two consecutive probes fail (5xx error or connection timeout), the watchdog renames the broken plugin directory and copies the backup back — no WordPress or WP-CLI required for the core rollback.', 'cloudscale-backup-restore' ); ?></li>
+	    <li><?php esc_html_e( 'On the next WordPress page load, the rollback is recorded in history and a notification is sent via all configured channels (email, SMS, and/or push).', 'cloudscale-backup-restore' ); ?></li>
+	    <li><?php esc_html_e( 'While a crash is in progress, visitors see a branded "Automatic Crash Recovery is recovering this site" page instead of a white screen of death.', 'cloudscale-backup-restore' ); ?></li>
+	  </ol>
+	  <p style="margin:14px 0 0;font-size:0.82rem;color:#64748b;padding:10px;background:#fff;border-radius:6px;border:1px solid #e2e8f0;">
+	    <strong><?php esc_html_e( 'Why system cron and not WP-Cron?', 'cloudscale-backup-restore' ); ?></strong>
+	    <?php esc_html_e( ' If a plugin update causes a PHP fatal error, WordPress crashes and wp-cron.php never fires. A system-cron job running every minute via a bash script operates completely outside of WordPress and can detect and fix the problem even when the entire site is returning 500 errors.', 'cloudscale-backup-restore' ); ?>
+	  </p>
+	</div>
+
 	<!-- ════════════════════ SETTINGS CARD ════════════════════ -->
 	<div class="cs-card cs-card--blue">
 	  <div class="cs-card-stripe cs-stripe--blue" style="background:linear-gradient(135deg,#1565c0 0%,#1976d2 100%);display:flex;align-items:center;justify-content:space-between;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
@@ -57,7 +75,7 @@ function csbr_par_render_tab(): void {
 	      <div class="cs-inline">
 	        <input type="url" id="par-health-url" value="<?php echo esc_attr( $s['health_url'] ); ?>" placeholder="<?php echo esc_attr( home_url( '/' ) ); ?>" style="width:390px;padding:4px 8px;height:32px;">
 	      </div>
-	      <p class="cs-help"><?php esc_html_e( 'Leave blank to use the site home URL. A 5xx response or connection failure is treated as unhealthy. 4xx responses (including 404) are treated as healthy — the server is up.', 'cloudscale-backup-restore' ); ?></p>
+	      <p class="cs-help"><?php esc_html_e( 'Leave blank to use the site home URL. The watchdog checks that your server responds. A 5xx error or timeout = unhealthy (rollback triggered). A 2xx, 3xx, or 4xx response = healthy (server is up and responding, even if the page is not found).', 'cloudscale-backup-restore' ); ?></p>
 	      <div style="margin-top:8px;">
 	        <button type="button" id="par-test-health-btn" class="button"><?php esc_html_e( 'Test Health Check', 'cloudscale-backup-restore' ); ?></button>
 	        <span id="par-test-health-msg" style="font-size:0.88rem;margin-left:8px;"></span>
@@ -72,7 +90,7 @@ function csbr_par_render_tab(): void {
 	  </div><!-- /#par-main-controls -->
 
 	  <div style="margin-top:20px;">
-	    <button type="button" id="par-save-btn" class="button button-primary"><?php esc_html_e( 'Save Automatic Crash Recovery Settings', 'cloudscale-backup-restore' ); ?></button>
+	    <button type="button" id="par-save-btn" class="button button-primary"><?php esc_html_e( 'Save', 'cloudscale-backup-restore' ); ?></button>
 	    <span id="par-save-msg" style="font-size:0.88rem;margin-left:8px;"></span>
 	  </div>
 	</div><!-- /.cs-card--blue -->
@@ -155,24 +173,6 @@ sudo chmod +x /usr/local/bin/csbr-par-watchdog.sh</pre>
 	  <div id="par-history-body">
 	    <p style="color:#78909c;font-size:0.88rem;"><?php esc_html_e( 'Loading…', 'cloudscale-backup-restore' ); ?></p>
 	  </div>
-	</div>
-
-	<!-- ════════════════════ HOW IT WORKS ════════════════════ -->
-	<div class="cs-card" style="border:1px solid #e2e8f0;background:#f8fafc;">
-	  <div class="cs-card-stripe" style="background:linear-gradient(135deg,#4527a0 0%,#7b1fa2 100%);display:flex;align-items:center;padding:0 20px;height:52px;margin:0 -20px 20px -20px;border-radius:10px 10px 0 0;">
-	    <h3 style="color:#fff!important;font-size:0.95rem;font-weight:700;margin:0;padding:0;line-height:1.3;border:none;background:none;text-shadow:0 1px 3px rgba(0,0,0,0.3);">&#9432; <?php esc_html_e( 'How Automatic Crash Recovery works', 'cloudscale-backup-restore' ); ?></h3>
-	  </div>
-	  <ol style="margin:0 0 0 1.2em;padding:0;font-size:0.88rem;color:#334155;line-height:1.9;">
-	    <li><?php esc_html_e( 'Before any plugin update, the current plugin directory is copied to a secure backup location on the server.', 'cloudscale-backup-restore' ); ?></li>
-	    <li><?php esc_html_e( 'After the update, the system-cron watchdog probes the health check URL every minute for the monitoring window.', 'cloudscale-backup-restore' ); ?></li>
-	    <li><?php esc_html_e( 'If two consecutive probes fail (5xx error or connection timeout), the watchdog renames the broken plugin directory and copies the backup back — no WordPress or WP-CLI required for the core rollback.', 'cloudscale-backup-restore' ); ?></li>
-	    <li><?php esc_html_e( 'On the next WordPress page load, the rollback is recorded in history and a notification is sent via all configured channels (email, SMS via Twilio, and/or push via ntfy).', 'cloudscale-backup-restore' ); ?></li>
-	    <li><?php esc_html_e( 'While a crash is in progress, visitors see a branded "Automatic Crash Recovery is recovering this site" page instead of a white screen of death.', 'cloudscale-backup-restore' ); ?></li>
-	  </ol>
-	  <p style="margin:14px 0 0;font-size:0.82rem;color:#64748b;padding:10px;background:#fff;border-radius:6px;border:1px solid #e2e8f0;">
-	    <strong><?php esc_html_e( 'Why system cron and not WP-Cron?', 'cloudscale-backup-restore' ); ?></strong>
-	    <?php esc_html_e( ' If a plugin update causes a PHP fatal error, WordPress crashes and wp-cron.php never fires. A system-cron job running every minute via a bash script operates completely outside of WordPress and can detect and fix the problem even when the entire site is returning 500 errors.', 'cloudscale-backup-restore' ); ?>
-	  </p>
 	</div>
 
 	</div><!-- /.cs-grid -->
