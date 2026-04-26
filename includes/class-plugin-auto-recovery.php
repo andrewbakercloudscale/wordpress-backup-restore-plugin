@@ -69,6 +69,12 @@ class CSBR_Plugin_Auto_Recovery {
 		add_action( 'wp_ajax_csbr_par_dismiss_history',        [ self::class, 'ajax_dismiss_history' ] );
 		add_action( 'wp_ajax_csbr_par_manual_rollback',        [ self::class, 'ajax_manual_rollback' ] );
 		add_action( 'wp_ajax_csbr_par_record_watchdog_result', [ self::class, 'ajax_record_watchdog_result' ] );
+		add_action( 'wp_ajax_csbr_par_setup_test_monitor',        [ self::class, 'ajax_setup_test_monitor' ] );
+		add_action( 'wp_ajax_csbr_par_cleanup_test_monitor',      [ self::class, 'ajax_cleanup_test_monitor' ] );
+		add_action( 'wp_ajax_csbr_par_simulate_watchdog_rollback', [ self::class, 'ajax_simulate_watchdog_rollback' ] );
+		add_action( 'wp_ajax_csbr_par_install_watchdog',       [ self::class, 'ajax_install_watchdog' ] );
+		add_action( 'wp_ajax_csbr_par_uninstall_watchdog',     [ self::class, 'ajax_uninstall_watchdog' ] );
+		add_action( 'wp_ajax_csbr_par_probe_url',              [ self::class, 'ajax_probe_url' ] );
 	}
 
 	/**
@@ -103,8 +109,10 @@ class CSBR_Plugin_Auto_Recovery {
 		// Skip heavy/file-system operations during AJAX — they are UI-only
 		// and writing the dropin during an AJAX response can corrupt the JSON output.
 		if ( wp_doing_ajax() ) {
-			self::expire_stale_monitors();
+			// Notifications first: expire_stale_monitors would remove the monitor
+			// from wp_options before process_pending can read it.
 			self::process_pending_watchdog_notifications();
+			self::expire_stale_monitors();
 			return;
 		}
 
@@ -115,11 +123,12 @@ class CSBR_Plugin_Auto_Recovery {
 			self::remove_fatal_handler_dropin();
 		}
 
+		// Process rollback results first — expire_stale_monitors runs next and
+		// would remove the wp_options monitor before notifications can fire.
+		self::process_pending_watchdog_notifications();
+
 		// Expire monitors whose window has passed.
 		self::expire_stale_monitors();
-
-		// Process any rollback results the watchdog wrote to the state file.
-		self::process_pending_watchdog_notifications();
 
 		// Periodically tidy old backup directories.
 		self::maybe_clean_stale_backups();
@@ -293,6 +302,12 @@ class CSBR_Plugin_Auto_Recovery {
 		self::recursive_copy( $backup_path, $plugin_dir );
 		self::log( sprintf( '%s   [3/5] Restored from backup.', self::LOG_PREFIX ) );
 
+		// Flush opcache so restored files are compiled fresh on the next request.
+		// Without this, FPM serves stale bytecode even after v1 files are on disk.
+		if ( function_exists( 'opcache_reset' ) ) {
+			opcache_reset();
+		}
+
 		// [4] Verify restore.
 		if ( ! file_exists( WP_PLUGIN_DIR . '/' . $plugin_file ) ) {
 			throw new RuntimeException( 'Restore verification failed — main plugin file missing after copy.' );
@@ -374,6 +389,11 @@ class CSBR_Plugin_Auto_Recovery {
 	 * @throws RuntimeException On any filesystem failure.
 	 */
 	private static function recursive_copy( string $source, string $dest ): void {
+		// Strip trailing slash so that relative paths from the iterator always
+		// start with '/', keeping $dest . $relative well-formed regardless of
+		// whether the caller passed a trailing slash on $source.
+		$source = rtrim( $source, '/' );
+
 		if ( ! is_dir( $source ) ) {
 			throw new RuntimeException( "Source is not a directory: {$source}" ); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- internal exception, not user-facing output
 		}
@@ -465,17 +485,26 @@ class CSBR_Plugin_Auto_Recovery {
 	 * @since 3.3.0
 	 */
 	private static function send_notifications( string $plugin_name, array $monitor, string $trigger, int $http_code ): void {
-		$trigger_label = $trigger === 'manual'
+		$is_manual     = $trigger === 'manual';
+		$trigger_label = $is_manual
 			? 'Manual rollback by administrator'
 			: sprintf( 'Site failure detected (HTTP %s)', $http_code ?: 'timeout' );
 
+		$intro = $is_manual
+			? "%s was manually rolled back by an administrator.\n\n"
+			: "Automatic Crash Recovery rolled back %s after detecting a site failure.\n\n";
+
+		$subject = $is_manual
+			? "Plugin rolled back manually: {$plugin_name}"
+			: "Automatic Crash Recovery rolled back {$plugin_name}";
+
 		$body = sprintf(
-			"Automatic Crash Recovery rolled back %s after detecting a site failure.\n\n" .
+			$intro .
 			"Plugin:         %s\n" .
 			"Updated to:     v%s  (removed)\n" .
 			"Restored to:    v%s\n" .
 			"Trigger:        %s\n" .
-			"Time (UTC):     %s\n\n" .
+			"Time:           %s\n\n" .
 			"The previous version is now active on your site.\n" .
 			"View details: %s\n\n" .
 			"Site: %s",
@@ -484,12 +513,12 @@ class CSBR_Plugin_Auto_Recovery {
 			$monitor['version_after']  ?? 'unknown',
 			$monitor['version_before'] ?? 'unknown',
 			$trigger_label,
-			gmdate( 'Y-m-d H:i:s' ),
+			wp_date( 'j M Y H:i:s T' ),
 			admin_url( 'tools.php?page=cloudscale-backup&tab=autorecovery' ),
 			home_url()
 		);
 
-		csbr_send_backup_notification( false, "Automatic Crash Recovery rolled back {$plugin_name}", $body, 'rollback' );
+		csbr_send_backup_notification( false, $subject, $body, 'rollback' );
 	}
 
 	// ── State file (bash watchdog reads this) ──────────────────────────────────
@@ -556,7 +585,7 @@ class CSBR_Plugin_Auto_Recovery {
 	 *
 	 * @since 3.3.0
 	 */
-	private static function process_pending_watchdog_notifications(): void {
+	public static function process_pending_watchdog_notifications(): void {
 		if ( get_transient( 'csbr_par_notif_check' ) ) return;
 		set_transient( 'csbr_par_notif_check', 1, 30 );
 
@@ -569,19 +598,24 @@ class CSBR_Plugin_Auto_Recovery {
 		$state = json_decode( $json, true );
 		if ( ! is_array( $state ) ) return;
 
-		$monitors = self::get_monitors();
-		$changed  = false;
+		// Load wp_options monitors, but don't require them to still be present —
+		// expire_stale_monitors may have already removed them from wp_options by the
+		// time admin loads the page (monitoring window default is only 10 minutes).
+		$wp_monitors = self::get_monitors();
+		$changed     = false;
 
 		foreach ( $state['monitors'] ?? [] as $id => $sm ) {
 			if ( ( $sm['status'] ?? '' ) !== 'rolled_back' ) continue;
-			if ( ! isset( $monitors[ $id ] ) ) continue;
+
+			// Use state.json as the authoritative source; merge wp_options data on
+			// top if the monitor is still present there (it has the same fields).
+			$monitor = array_merge( $sm, $wp_monitors[ $id ] ?? [] );
 
 			// Watchdog rolled this back — record in history + notify.
-			self::log( sprintf( '%s Watchdog rollback detected for %s — recording.', self::LOG_PREFIX, $sm['plugin_name'] ?? $id ) );
+			self::log( sprintf( '%s Watchdog rollback detected for %s — recording.', self::LOG_PREFIX, $monitor['plugin_name'] ?? $id ) );
 
-			$monitor = $monitors[ $id ];
 			self::record_rollback( $id, $monitor, 'watchdog_failure', 0 );
-			self::close_monitor( $id );
+			self::close_monitor( $id ); // no-op if already expired/removed
 			self::send_notifications( $monitor['plugin_name'] ?? $id, $monitor, 'watchdog_failure', 0 );
 
 			// Remove processed entry from state file's monitors so we don't
@@ -634,11 +668,11 @@ STATE_FILE="' . $state_file . '"
 WP_PATH="' . $wp_path . '"
 LOG_FILE="' . $log_file . '"
 HEARTBEAT="' . $heartbeat . '"
-FAIL_COUNT_FILE="/tmp/csbr-par-fails"
+FAIL_COUNT_FILE="' . self::backup_base() . 'fail-count"
 FAIL_THRESHOLD=' . $fail_threshold . '
 PROBE_TIMEOUT=10
 
-log() { echo "$(date \'%Y-%m-%d %H:%M:%S\') [PAR] $*" >> "$LOG_FILE"; }
+log() { echo "$(date \'+%Y-%m-%d %H:%M:%S\') [PAR] $*" >> "$LOG_FILE"; }
 
 # Update heartbeat so the admin UI can show "last run X ago"
 date +%s > "$HEARTBEAT" 2>/dev/null || true
@@ -670,12 +704,17 @@ for v in d.get(\'monitors\', {}).values():
 
 HEALTH_URL="${HEALTH_URL:-' . $health_url . '}"
 
-# Probe the site
+# Probe using a unique URL path so nginx FastCGI cache (keyed on $uri, ignoring
+# query strings) has no cached entry — forces a live PHP response every time.
+# WordPress returns 404 for unknown paths when healthy; 5xx when a plugin is broken.
+_TS=$(date +%s)
+_BASE=$(echo "$HEALTH_URL" | sed "s|/\$||")
+PROBE_URL="${_BASE}/csbr-par-probe-${_TS}/"
 PROBE_CODE=$(curl -s -o /dev/null -w "%{http_code}" \\
     --max-time "$PROBE_TIMEOUT" --retry 0 \\
     -A "CloudScale-PAR-Watchdog/1.0" \\
     -H "Cache-Control: no-cache" \\
-    "$HEALTH_URL" 2>/dev/null || echo "000")
+    "$PROBE_URL" 2>/dev/null || echo "000")
 
 log "Probe $HEALTH_URL → HTTP $PROBE_CODE"
 
@@ -693,7 +732,7 @@ if [[ "$PROBE_CODE" =~ ^5 ]] || [[ "$PROBE_CODE" == "000" ]]; then
         rm -f "$FAIL_COUNT_FILE"
 
         python3 << \'PYEOF\'
-import json, shutil, os, sys
+import json, shutil, os, sys, subprocess
 from datetime import datetime, timezone
 
 state_file = \'' . $state_file . '\'
@@ -728,6 +767,11 @@ def rollback_monitor(monitor_id, m):
     # Restore previous version
     shutil.copytree(backup_path, plugin_dir)
     log(f"  Restored previous version to {plugin_dir}")
+
+    # Fix ownership — watchdog runs as root, so the restored dir ends up root-owned.
+    # PHP (www-data) must be able to manage the plugin dir for subsequent test runs.
+    subprocess.run([\'chown\', \'-R\', \'www-data:www-data\', plugin_dir], capture_output=True)
+    log(f"  Ownership set to www-data:www-data")
 
     # Verify
     main_file = os.path.join(plugin_dir, os.path.basename(plugin_file))
@@ -772,6 +816,13 @@ PYEOF
 
         log "=== Rollback script complete ==="
 
+        # Reload PHP-FPM workers so the restored v1 files bypass the opcode cache.
+        # opcache.validate_timestamps may be 0 (production), meaning file-level
+        # invalidation never runs automatically.  USR2 causes PHP-FPM master to
+        # gracefully restart all workers, clearing their shared opcode cache pool.
+        kill -USR2 1 2>/dev/null && log "PHP-FPM reloaded (opcache cleared)." || log "PHP-FPM reload skipped (not PID 1?)."
+        sleep 2 # brief pause while workers come back up
+
         # Send crash notification email
         ADMIN_EMAIL=$(python3 -c "
 import json, sys
@@ -815,7 +866,7 @@ A plugin crash was detected on $SITE_NAME and has been automatically resolved.
 Site:           $SITE_URL
 Plugin(s):      $ROLLED_BACK_PLUGINS
 Action taken:   The plugin was automatically rolled back to its previous version.
-Time:           $(date \'%Y-%m-%d %H:%M:%S %Z\')
+Time:           $(date \'+%Y-%m-%d %H:%M:%S %Z\')
 
 The previous version of the plugin has been restored. The site should now be available.
 
@@ -839,7 +890,7 @@ A plugin crash was detected on $SITE_NAME and has been automatically resolved.
 Site:           $SITE_URL
 Plugin(s):      $ROLLED_BACK_PLUGINS
 Action taken:   The plugin was automatically rolled back to its previous version.
-Time:           $(date \'%Y-%m-%d %H:%M:%S %Z\')
+Time:           $(date \'+%Y-%m-%d %H:%M:%S %Z\')
 
 The previous version of the plugin has been restored. The site should now be available.
 
@@ -854,19 +905,18 @@ MAILEOF
             log "Email notification skipped — no mail binary found or no admin email configured."
         fi
 
-        # Optional: use WP-CLI to flush caches and write activity log entry
-        if command -v wp &>/dev/null; then
-            wp --path="$WP_PATH" --allow-root cache flush 2>/dev/null && log "WP cache flushed." || true
-            # Write rollback event to the CloudScale Backup activity log (visible in the admin UI).
-            PLUGINS_LABEL=$(python3 -c "
-import json, sys
-try:
-    d = json.load(open(sys.argv[1]))
-    names = [v.get(\'plugin_name\', v.get(\'plugin_file\',\'unknown\')) for v in d.get(\'monitors\', {}).values() if v.get(\'status\') == \'rolled_back\']
-    print(\', \'.join(names) if names else \'unknown plugin\')
-except Exception as e: print(\'unknown plugin\')
-" "$STATE_FILE" 2>/dev/null || echo "unknown plugin")
-            wp --path="$WP_PATH" --allow-root eval "csbr_log(\'[Automatic Crash Recovery] Rolled back: $PLUGINS_LABEL — trigger: watchdog (consecutive HTTP failures).\');" 2>/dev/null && log "Activity log entry written." || true
+        # Use WP-CLI to flush caches, process notifications, and write activity log.
+        WP_CLI=""
+        if   command -v wp         &>/dev/null; then WP_CLI="wp"
+        elif [[ -f "$WP_PATH/wp-cli.phar" ]];  then WP_CLI="php $WP_PATH/wp-cli.phar"
+        fi
+        if [[ -n "$WP_CLI" ]]; then
+            $WP_CLI --path="$WP_PATH" --allow-root cache flush 2>/dev/null && log "WP cache flushed." || true
+            # Trigger PHP notification processing immediately — don\'t wait for an admin
+            # page load (process_pending_watchdog_notifications normally runs on admin_init).
+            $WP_CLI --path="$WP_PATH" --allow-root eval \
+                "delete_transient(\'csbr_par_notif_check\'); CSBR_Plugin_Auto_Recovery::process_pending_watchdog_notifications();" \
+                2>/dev/null && log "PHP notifications triggered via WP-CLI." || log "WP-CLI notification trigger failed (will retry on next admin load)."
         fi
     fi
 else
@@ -953,21 +1003,24 @@ class CSBR_Fatal_Error_Handler extends WP_Fatal_Error_Handler {
 
         \$state_file = '{$state_file}';
         \$recovering = false;
+        \$site_name  = 'This site';
         if ( file_exists( \$state_file ) ) {
             \$raw   = @file_get_contents( \$state_file );
             \$state = \$raw ? @json_decode( \$raw, true ) : null;
             \$recovering = ! empty( \$state['monitors'] );
+            if ( ! empty( \$state['site_name'] ) ) {
+                \$site_name = \$state['site_name'];
+            }
         }
 
-        \$title   = \$recovering
-            ? 'Automatic Crash Recovery — Recovery in Progress'
-            : 'This site is temporarily unavailable';
-        \$heading = \$recovering
-            ? 'CloudScale Automatic Crash Recovery is recovering this site'
-            : 'This site is experiencing technical difficulties';
-        \$body    = \$recovering
-            ? 'A recent plugin update caused an unexpected error. Automatic Crash Recovery has detected the problem and is automatically restoring the previous version. <strong>Please wait a few minutes and refresh this page.</strong>'
-            : 'The site is experiencing technical difficulties. Please try again in a few minutes.';
+        \$title  = \$recovering ? 'Recovery in Progress' : 'Site Temporarily Unavailable';
+        \$status = \$recovering ? 'RECOVERY IN PROGRESS' : 'TEMPORARILY UNAVAILABLE';
+        \$msg    = \$recovering
+            ? 'A plugin update caused an unexpected error. CloudScale Backup &amp; Restore has detected the problem and is automatically restoring the previous version.'
+            : 'This site is experiencing technical difficulties. Our systems are working to resolve the issue.';
+        \$hint   = \$recovering
+            ? 'This page will refresh automatically. If the site is still unavailable after 5 minutes, contact the site administrator.'
+            : 'Please try again in a few minutes.';
 
         ?><!DOCTYPE html>
 <html lang=\"en\">
@@ -978,29 +1031,42 @@ class CSBR_Fatal_Error_Handler extends WP_Fatal_Error_Handler {
 <title><?php echo htmlspecialchars( \$title ); ?></title>
 {$_style_o}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif;background:#f0f4f8;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
-.card{background:#fff;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.12);max-width:520px;width:100%;padding:40px 44px;text-align:center}
-.icon{font-size:3rem;margin-bottom:20px}
-h1{font-size:1.25rem;font-weight:700;color:#0f172a;margin-bottom:16px;line-height:1.4}
-p{color:#475569;font-size:.95rem;line-height:1.7;margin-bottom:20px}
-.badge{display:inline-block;background:#1565c0;color:#fff;font-size:.75rem;font-weight:700;padding:3px 12px;border-radius:999px;letter-spacing:.04em;margin-bottom:24px}
-.spinner{display:inline-block;width:18px;height:18px;border:2px solid #cbd5e1;border-top-color:#1565c0;border-radius:50%;animation:spin 1s linear infinite;vertical-align:middle;margin-right:6px}
+body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif;background:#0b1221;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
+.wrap{max-width:480px;width:100%;text-align:center}
+.shield{width:96px;height:96px;margin:0 auto 24px;position:relative}
+.shield svg{width:100%;height:100%}
+.badge{display:inline-block;background:transparent;color:#e05252;border:1.5px solid #e05252;font-size:.7rem;font-weight:700;padding:3px 14px;border-radius:999px;letter-spacing:.1em;margin-bottom:20px}
+h1{font-size:1.5rem;font-weight:700;color:#fff;margin-bottom:8px;line-height:1.3}
+.sub{color:#8899b4;font-size:.9rem;margin-bottom:24px}
+hr{border:none;border-top:1px solid #1e2d47;margin:24px 0}
+.secured-by{font-size:.68rem;font-weight:600;letter-spacing:.12em;color:#4a5f7a;text-transform:uppercase;margin-bottom:6px}
+.brand{font-size:1.05rem;font-weight:700;color:#fff;margin-bottom:28px}
+.brand span{color:#e05252}
+.alert{background:rgba(224,82,82,.08);border:1px solid rgba(224,82,82,.35);border-radius:8px;padding:14px 18px;font-size:.82rem;color:#b0b8c8;line-height:1.6;text-align:left}
+.alert strong{color:#e05252}
+.spinner{display:inline-block;width:12px;height:12px;border:2px solid #4a5f7a;border-top-color:#e05252;border-radius:50%;animation:spin .8s linear infinite;vertical-align:middle;margin-right:5px}
 @keyframes spin{to{transform:rotate(360deg)}}
-.hint{font-size:.8rem;color:#94a3b8;margin-top:4px}
 {$_style_c}
 </head>
 <body>
-<div class=\"card\">
-  <div class=\"icon\"><?php echo \$recovering ? '&#128737;' : '&#128679;'; ?></div>
-  <div class=\"badge\">CloudScale Backup &amp; Restore</div>
-  <h1><?php echo htmlspecialchars( \$heading ); ?></h1>
-  <p><?php echo \$body; ?></p>
-  <?php if ( \$recovering ): ?>
-  <p><span class=\"spinner\"></span> Auto-recovering&hellip; this page will refresh automatically.</p>
-  <p class=\"hint\">If the site is still down after 5 minutes, check the Automatic Crash Recovery panel in WordPress admin.</p>
-  <?php else: ?>
-  <p class=\"hint\">This page will refresh automatically. If the problem persists, contact the site administrator.</p>
-  <?php endif; ?>
+<div class=\"wrap\">
+  <div class=\"shield\">
+    <svg viewBox=\"0 0 96 96\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">
+      <path d=\"M48 8L16 20v24c0 18 13.6 34.8 32 40 18.4-5.2 32-22 32-40V20L48 8z\" fill=\"#1a0d0d\" stroke=\"#e05252\" stroke-width=\"2.5\"/>
+      <path d=\"M35 48l9 9 17-17\" stroke=\"#e05252\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>
+    </svg>
+  </div>
+  <div class=\"badge\"><?php echo htmlspecialchars( \$status ); ?></div>
+  <h1><?php echo \$recovering ? 'Automatic Recovery Underway' : 'Site Temporarily Unavailable'; ?></h1>
+  <div class=\"sub\"><?php echo htmlspecialchars( \$site_name ); ?></div>
+  <hr>
+  <div class=\"secured-by\">This site is protected by</div>
+  <div class=\"brand\">CloudScale <span>Backup</span> &amp; Restore</div>
+  <div class=\"alert\">
+    <?php if ( \$recovering ): ?><span class=\"spinner\"></span><?php endif; ?>
+    <strong><?php echo \$recovering ? 'Recovery in progress.' : 'Site error detected.'; ?></strong>
+    <?php echo \$msg; ?><br><br><?php echo \$hint; ?>
+  </div>
 </div>
 </body>
 </html><?php
@@ -1115,7 +1181,7 @@ return new CSBR_Fatal_Error_Handler();
 				'plugin_name'  => esc_html( $h['plugin_name'] ?? $h['plugin_file'] ?? '' ),
 				'version_from' => esc_html( $h['version_after']  ?? '' ),
 				'version_to'   => esc_html( $h['version_before'] ?? '' ),
-				'rolled_back'  => esc_html( gmdate( 'j M Y H:i', (int) ( $h['rolled_back_at'] ?? 0 ) ) . ' UTC' ),
+				'rolled_back'  => esc_html( wp_date( 'j M Y H:i T', (int) ( $h['rolled_back_at'] ?? 0 ) ) ),
 				'trigger'      => esc_html( $h['trigger'] === 'manual'
 					? 'Manual rollback'
 					: 'Watchdog / site failure' ),
@@ -1351,5 +1417,473 @@ return new CSBR_Fatal_Error_Handler();
 	/** @since 3.3.0 */
 	private static function log( string $message ): void {
 		csbr_log( $message );
+	}
+
+	// ── Test helpers (automated testing only) ─────────────────────────────────
+
+	/**
+	 * Create a disposable test monitor without going through the plugin uploader.
+	 *
+	 * Writes a v2-broken plugin and a v1 backup to the filesystem, then
+	 * registers a monitor entry.  The Playwright crash-recovery test uses this
+	 * to bypass DISALLOW_FILE_MODS restrictions on the test server.
+	 *
+	 * Accepts an optional POST field `crash_type` to test different failure modes:
+	 *   503           (default) explicit status_header(503)
+	 *   500           explicit status_header(500)
+	 *   php_fatal     calls undefined function → fatal-error-handler dropin fires
+	 *   oom           allocates memory until limit → OOM fatal → dropin fires
+	 *   recursion     infinite recursion → stack overflow → dropin fires
+	 *   missing_class instantiates non-existent class → fatal → dropin fires
+	 *   exception     throws uncaught RuntimeException → dropin fires
+	 *   wp_die        calls wp_die() with 500 status on front-end
+	 *   db_kill       closes wpdb connection then triggers a query → DB error
+	 *   bad_header    sends conflicting Content-Type headers → header corruption
+	 *   null_deref    dereferences null as array → TypeError → dropin fires
+	 *   corrupt_json  REST API response is garbled JSON → 500
+	 *
+	 * Requires: manage_options + valid nonce.
+	 *
+	 * @since 3.3.0
+	 */
+	public static function ajax_setup_test_monitor(): void {
+		if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Insufficient permissions.' ); }
+		check_ajax_referer( 'csbr_nonce', 'nonce' );
+
+		$crash_type = sanitize_key( $_POST['crash_type'] ?? '503' );
+		$allowed    = [ '503', '500', 'php_fatal', 'oom', 'recursion', 'missing_class',
+		                'exception', 'wp_die', 'db_kill', 'bad_header', 'null_deref', 'corrupt_json' ];
+		if ( ! in_array( $crash_type, $allowed, true ) ) {
+			$crash_type = '503';
+		}
+
+		$slug       = 'csbr-crash-test';
+		$plugin_rel = $slug . '/' . $slug . '.php';
+		$plugin_dir = WP_PLUGIN_DIR . '/' . $slug . '/';
+		$backup_dir = self::backup_base() . $slug . '_test_' . time() . '/';
+
+		if ( ! wp_mkdir_p( $plugin_dir ) || ! wp_mkdir_p( $backup_dir ) ) {
+			wp_send_json_error( 'Cannot create test directories.' );
+		}
+
+		// Build v2-broken PHP body based on crash type.
+		// All variants guard is_admin() so the WP admin remains accessible for test verification.
+		$v2_guard  = "defined('ABSPATH')||exit;\n";
+		$v2_guard .= "add_action('parse_request',function(){\n    if(is_admin()||wp_doing_cron())return;\n";
+
+		switch ( $crash_type ) {
+			case '500':
+				$v2_body = $v2_guard . "    status_header(500);header('Retry-After:30');die('<h1>500 PAR Test Crash</h1>');\n});\n";
+				break;
+			case 'php_fatal':
+				// Calls a function that will never exist — PHP fatal on front-end only.
+				$v2_body = $v2_guard . "    csbr_crash_test_undef_fn_7f3a9b();\n});\n";
+				break;
+			case 'oom':
+				// Allocate memory until exhausted — OOM fatal on front-end only.
+				$v2_body = $v2_guard . "    \$d=[];\n    while(true){\$d[]=str_repeat('x',1024*1024);}\n});\n";
+				break;
+			case 'recursion':
+				// Infinite recursion — stack overflow fatal on front-end only.
+				$v2_body  = "defined('ABSPATH')||exit;\n";
+				$v2_body .= "function csbr_crash_test_recurse_7f3a(\$n){\n    return csbr_crash_test_recurse_7f3a(\$n+1);\n}\n";
+				$v2_body .= "add_action('parse_request',function(){\n    if(is_admin()||wp_doing_cron())return;\n    csbr_crash_test_recurse_7f3a(0);\n});\n";
+				break;
+			case 'missing_class':
+				// Instantiate a class that will never exist — PHP fatal on front-end only.
+				$v2_body = $v2_guard . "    \$o=new CsbrNonExistentClass7f3a();\n});\n";
+				break;
+			case 'exception':
+				// Uncaught exception propagates as a fatal error — dropin fires.
+				$v2_body = $v2_guard . "    throw new \\RuntimeException('PAR Test: deliberate uncaught exception');\n});\n";
+				break;
+			case 'wp_die':
+				// wp_die() with explicit 500 status code on front-end only.
+				$v2_body = $v2_guard . "    wp_die('PAR Test: wp_die() crash',500,['response'=>500]);\n});\n";
+				break;
+			case 'db_kill':
+				// Simulate a DB failure: close the wpdb connection, attempt a query
+				// (which may or may not reconnect), then unconditionally return 500.
+				// Using parse_request (not 'wp') avoids wpdb reconnection timing issues.
+				$v2_body  = "defined('ABSPATH')||exit;\n";
+				$v2_body .= "add_action('parse_request',function(){\n";
+				$v2_body .= "    if(is_admin()||wp_doing_cron())return;\n";
+				$v2_body .= "    global \$wpdb;\n    \$wpdb->close();\n";
+				$v2_body .= "    \$wpdb->get_var('SELECT 1'); // intentional — may error\n";
+				$v2_body .= "    status_header(500);header('Retry-After:30');die('<h1>500 Database Error</h1><p>PAR Test: DB connection killed</p>');\n";
+				$v2_body .= "});\n";
+				break;
+			case 'bad_header':
+				// Emit conflicting Content-Type headers — forces a broken response.
+				// The second status_header(500) after headers are "already sent"
+				// still returns 500 at the TCP level; watchdog detects it.
+				$v2_body = $v2_guard . "    header('Content-Type: application/json');\n    header('Content-Type: text/html');\n    status_header(500);\n    die('{\"error\":\"header corruption test\"}');\n});\n";
+				break;
+			case 'null_deref':
+				// Call a method on null → "Error: Call to a member function on null".
+				// This is a hard PHP fatal Error (not just a Warning) on all PHP 7+ versions.
+				// The fatal-error-handler dropin catches it and returns 503.
+				// (Accessing $null['key'] is only a Warning in PHP 8, not a fatal.)
+				$v2_body = $v2_guard . "    \$x=null;\n    \$x->csbr_crash_test_null_method();\n});\n";
+				break;
+			case 'corrupt_json':
+				// REST API returns garbled JSON — hook into rest_pre_serve_request to
+				// corrupt the output.  Also send 500 so the watchdog probe detects it.
+				$v2_body  = "defined('ABSPATH')||exit;\n";
+				$v2_body .= "add_action('rest_api_init',function(){\n";
+				$v2_body .= "    add_filter('rest_pre_serve_request',function(\$served,\$result,\$request){\n";
+				$v2_body .= "        if(is_admin()||wp_doing_cron())return \$served;\n";
+				$v2_body .= "        status_header(500);\n        echo '{CORRUPTED_JSON:::}';\n        return true;\n";
+				$v2_body .= "    },10,3);\n});\n";
+				// Also break the front-end to give the watchdog something to detect.
+				$v2_body .= "add_action('parse_request',function(){\n";
+				$v2_body .= "    if(is_admin()||wp_doing_cron())return;\n";
+				$v2_body .= "    status_header(500);die('<h1>500 PAR Corrupt JSON Test</h1>');\n});\n";
+				break;
+			default: // 503
+				$v2_body = $v2_guard . "    status_header(503);header('Retry-After:30');die('<h1>503 PAR Test Crash</h1>');\n});\n";
+				break;
+		}
+
+		$v2_header = "<?php\n/**\n * Plugin Name: CloudScale Crash Recovery Test Target\n * Version:     2.0.0\n * Description: Safe to delete — automated crash recovery test plugin ({$crash_type}).\n */\n";
+		$v2_content = $v2_header . $v2_body;
+
+		// Ensure the plugin directory is writable by this process (www-data).
+		// If the directory was created by a root-owned docker exec (e.g. a prior deploy),
+		// the write will fail silently.  Detect this early and return a clear error.
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+		$wrote = file_put_contents( $plugin_dir . $slug . '.php', $v2_content );
+		if ( false === $wrote ) {
+			wp_send_json_error(
+				sprintf(
+					'Cannot write plugin file %s — check directory ownership (expected www-data). ' .
+					'Run: docker exec pi_wordpress chown -R www-data:www-data %s',
+					$plugin_dir . $slug . '.php',
+					$plugin_dir
+				)
+			);
+		}
+
+		// Verify the written content matches what we intended (guards against partial writes).
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents
+		$on_disk = file_get_contents( $plugin_dir . $slug . '.php' );
+		if ( $on_disk !== $v2_content ) {
+			wp_send_json_error( 'Plugin file write verification failed — disk content differs from expected.' );
+		}
+
+		// Invalidate the PHP opcode cache for this file.  Without this, PHP may serve
+		// the previously compiled (v1 healthy) bytecode for up to opcache.revalidate_freq
+		// seconds, causing the probe to see a healthy site instead of the broken v2.
+		if ( function_exists( 'opcache_invalidate' ) ) {
+			opcache_invalidate( $plugin_dir . $slug . '.php', true );
+		}
+
+		// v1 backup: healthy no-op
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+		file_put_contents( $backup_dir . $slug . '.php', "<?php\n/**\n * Plugin Name: CloudScale Crash Recovery Test Target\n * Version:     1.0.0\n * Description: Safe to delete — automated crash recovery test plugin.\n */\ndefined('ABSPATH')||exit;\nadd_action('init',function(){ /* v1 healthy */ });\n" );
+
+		// Activate the broken v2 so front-end returns error
+		$active = (array) get_option( 'active_plugins', [] );
+		if ( ! in_array( $plugin_rel, $active, true ) ) {
+			$active[] = $plugin_rel;
+			update_option( 'active_plugins', $active );
+		}
+		// Always flush object cache — the rollback simulation may have just written v1
+		// to disk; we need the new request to pick up the updated active_plugins value
+		// and the newly written v2 file.  Also clear the alloptions super-cache entry
+		// that Redis Object Cache plugins use, which bypasses individual key deletes.
+		wp_cache_delete( 'active_plugins', 'options' );
+		wp_cache_delete( 'alloptions', 'options' );
+		wp_cache_flush();
+
+		// Reset the watchdog fail counter so a leftover count from a previous test
+		// run cannot immediately trigger a rollback on the next watchdog fire.
+		@unlink( self::backup_base() . 'fail-count' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink
+
+		// Register monitor (10-minute window)
+		$monitor_id              = 'par_test_' . uniqid( '', true );
+		$monitors                = self::get_monitors();
+		$monitors[ $monitor_id ] = [
+			'plugin_file'        => $plugin_rel,
+			'plugin_name'        => 'CloudScale Crash Recovery Test Target',
+			'plugin_dir'         => $plugin_dir,
+			'backup_path'        => $backup_dir,
+			'version_before'     => '1.0.0',
+			'version_after'      => '2.0.0',
+			'status'             => 'monitoring',
+			'created_at'         => time(),
+			'monitoring_started' => time(),
+			'monitoring_until'   => time() + 600,
+			'fail_count'         => 0,
+			'last_probe_at'      => 0,
+			'watchdog_rollback'  => null,
+		];
+		self::save_monitors( $monitors );
+		self::write_state_file( $monitors );
+
+		self::log( sprintf( '%s Test monitor created (ID: %s, crash_type: %s).', self::LOG_PREFIX, $monitor_id, $crash_type ) );
+
+		wp_send_json_success( [ 'monitor_id' => $monitor_id, 'plugin_dir' => $plugin_dir, 'crash_type' => $crash_type ] );
+	}
+
+	/**
+	 * Remove the disposable test plugin and any leftover backup created by
+	 * ajax_setup_test_monitor.  Called by the Playwright afterAll cleanup.
+	 *
+	 * @since 3.3.0
+	 */
+	public static function ajax_cleanup_test_monitor(): void {
+		if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Insufficient permissions.' ); }
+		check_ajax_referer( 'csbr_nonce', 'nonce' );
+
+		$slug       = 'csbr-crash-test';
+		$plugin_rel = $slug . '/' . $slug . '.php';
+		$plugin_dir = WP_PLUGIN_DIR . '/' . $slug . '/';
+
+		// Deactivate
+		if ( ! function_exists( 'deactivate_plugins' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		}
+		deactivate_plugins( $plugin_rel, true );
+
+		// Delete plugin directory
+		if ( is_dir( $plugin_dir ) ) {
+			try {
+				self::recursive_delete( $plugin_dir );
+			} catch ( Throwable $e ) {
+				// Non-fatal — log and continue
+				self::log( sprintf( '%s Cleanup warning: %s', self::LOG_PREFIX, $e->getMessage() ) );
+			}
+		}
+
+		// Remove any test monitors
+		$monitors = self::get_monitors();
+		foreach ( array_keys( $monitors ) as $id ) {
+			if ( str_starts_with( (string) $id, 'par_test_' ) ) {
+				self::close_monitor( (string) $id );
+			}
+		}
+
+		// Remove stale .broken.* test directories from backup base
+		$base = self::backup_base();
+		if ( is_dir( $base ) ) {
+			foreach ( new DirectoryIterator( $base ) as $item ) {
+				if ( $item->isDot() || ! $item->isDir() ) continue;
+				if ( str_starts_with( $item->getFilename(), $slug ) ) {
+					try { self::recursive_delete( $item->getPathname() ); } catch ( Throwable $e ) { /* ignore */ }
+				}
+			}
+		}
+
+		// Reset watchdog fail counter so next test run starts clean.
+		@unlink( '/tmp/csbr-par-fails' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink
+
+		self::log( sprintf( '%s Test monitor cleaned up.', self::LOG_PREFIX ) );
+		wp_send_json_success( [] );
+	}
+
+	/**
+	 * Test-only: simulate the watchdog writing a rollback result to state.json,
+	 * then trigger PHP notification processing immediately.
+	 *
+	 * This lets tests verify the watchdog notification path without waiting 2
+	 * minutes for the real cron to fire.
+	 *
+	 * @since 3.3.0
+	 */
+	public static function ajax_simulate_watchdog_rollback(): void {
+		if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Insufficient permissions.' ); }
+		check_ajax_referer( 'csbr_nonce', 'nonce' );
+
+		$monitor_id = sanitize_text_field( wp_unslash( $_POST['monitor_id'] ?? '' ) );
+		if ( ! $monitor_id ) { wp_send_json_error( 'monitor_id required.' ); }
+
+		$state_path = self::backup_base() . 'state.json';
+		if ( ! file_exists( $state_path ) ) { wp_send_json_error( 'state.json not found — was the monitor set up?' ); }
+
+		$json  = file_get_contents( $state_path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents
+		$state = json_decode( $json, true );
+		if ( ! is_array( $state ) || ! isset( $state['monitors'][ $monitor_id ] ) ) {
+			wp_send_json_error( "Monitor {$monitor_id} not found in state.json." );
+		}
+
+		// ── Step 1: restore the v1 backup to the plugin directory ───────────────
+		// The real watchdog bash script copies the backup files back before setting
+		// status=rolled_back.  Without this step the broken plugin file stays on
+		// disk and the front-end keeps returning 5xx after the simulation.
+		$monitor_state = $state['monitors'][ $monitor_id ];
+		$backup_path   = $monitor_state['backup_path'] ?? '';
+		$plugin_dir    = $monitor_state['plugin_dir']  ?? '';
+		$slug          = 'csbr-crash-test';
+
+		if ( $backup_path && $plugin_dir && is_dir( $backup_path ) ) {
+			$v1_src  = $backup_path . $slug . '.php';
+			$v1_dest = $plugin_dir . $slug . '.php';
+			if ( file_exists( $v1_src ) ) {
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents
+				$v1_content = file_get_contents( $v1_src );
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+				file_put_contents( $v1_dest, $v1_content );
+				// Flush opcode cache so PHP serves the restored v1 immediately.
+				if ( function_exists( 'opcache_invalidate' ) ) {
+					opcache_invalidate( $v1_dest, true );
+				}
+			}
+		}
+
+		// ── Step 2: simulate exactly what the watchdog bash script writes ────────
+		$state['monitors'][ $monitor_id ]['status']        = 'rolled_back';
+		$state['monitors'][ $monitor_id ]['rolled_back_at'] = time();
+		$state['monitors'][ $monitor_id ]['trigger']        = 'watchdog_failure';
+
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+		file_put_contents( $state_path, wp_json_encode( $state, JSON_PRETTY_PRINT ) );
+
+		// Clear the guard transient so the next call to process_pending fires.
+		delete_transient( 'csbr_par_notif_check' );
+
+		// ── Step 3: process notifications (same call watchdog makes via WP-CLI) ──
+		self::process_pending_watchdog_notifications();
+
+		wp_send_json_success( [ 'monitor_id' => $monitor_id, 'state' => 'rolled_back' ] );
+	}
+
+	/**
+	 * Attempt to auto-install the watchdog script and cron entry on this server.
+	 * Returns a detailed result so the UI can show what succeeded and what needs
+	 * manual intervention.
+	 */
+	public static function ajax_install_watchdog(): void {
+		if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Insufficient permissions.' ); }
+		check_ajax_referer( 'csbr_nonce', 'nonce' );
+
+		$script_path = '/usr/local/bin/csbr-par-watchdog.sh';
+		$cron_file   = '/etc/cron.d/csbr-par';
+		$log_file    = '/var/log/cloudscale-par.log';
+		$script_body = self::generate_watchdog_script();
+
+		$steps  = [];
+		$errors = [];
+
+		// ── 1. Write the watchdog script ────────────────────────────────────────
+		$wrote_script = false;
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+		if ( @file_put_contents( $script_path, $script_body ) !== false ) {
+			@chmod( $script_path, 0755 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod
+			$wrote_script = true;
+			$steps[]      = "Script written to {$script_path}";
+		} else {
+			$errors[] = "Could not write to {$script_path} (permission denied — server may require manual install)";
+		}
+
+		// ── 2. Install the cron entry via /etc/cron.d ───────────────────────────
+		$cron_line    = "* * * * * root {$script_path} >> {$log_file} 2>&1\n";
+		$wrote_cron   = false;
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+		if ( @file_put_contents( $cron_file, "# CloudScale Automatic Crash Recovery — do not edit manually\n{$cron_line}" ) !== false ) {
+			@chmod( $cron_file, 0644 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod
+			$wrote_cron = true;
+			$steps[]    = "Cron entry written to {$cron_file}";
+		} else {
+			$errors[] = "Could not write to {$cron_file} (permission denied — add the cron line manually)";
+		}
+
+		// ── 3. Ensure the log file exists and is writable by the watchdog ───────
+		if ( ! file_exists( $log_file ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents
+			@file_put_contents( $log_file, '' );
+			@chmod( $log_file, 0666 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod
+		}
+
+		$all_ok = $wrote_script && $wrote_cron;
+
+		// If running inside a Docker container (no crond), the cron entry written to
+		// /etc/cron.d/ will never fire. The deploy script installs a HOST-level cron
+		// that calls `docker exec <container> /usr/local/bin/csbr-par-watchdog.sh`.
+		// Surface this as a notice rather than an error so the user knows.
+		$in_docker = file_exists( '/.dockerenv' );
+		if ( $in_docker && $wrote_cron ) {
+			$steps[] = 'Note: running inside Docker — the /etc/cron.d entry will not fire without a host-level cron. Re-deploy via deploy-wordpress.sh to install the host cron automatically.';
+		}
+
+		wp_send_json_success( [
+			'script_installed' => $wrote_script,
+			'cron_installed'   => $wrote_cron,
+			'all_ok'           => $all_ok,
+			'steps'            => $steps,
+			'errors'           => $errors,
+			'manual_script'    => ! $wrote_script ? $script_path : null,
+			'manual_cron'      => ! $wrote_cron   ? $cron_line   : null,
+		] );
+	}
+
+	/**
+	 * Server-side URL probe for tests — probes localhost directly so Cloudflare,
+	 * nginx fastcgi caches, and any CDN layer are completely bypassed.  The request
+	 * goes directly to PHP-FPM via 127.0.0.1 with the correct Host header.
+	 */
+	public static function ajax_probe_url(): void {
+		if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Insufficient permissions.' ); }
+		check_ajax_referer( 'csbr_nonce', 'nonce' );
+
+		$slug        = 'csbr-crash-test';
+		$plugin_rel  = $slug . '/' . $slug . '.php';
+		$plugin_file = WP_PLUGIN_DIR . '/' . $plugin_rel;
+		$active      = (array) get_option( 'active_plugins', [] );
+		$file_exists = file_exists( $plugin_file );
+		$is_active   = in_array( $plugin_rel, $active, true );
+
+		// Unique URL path so nginx FastCGI cache (keyed on $uri, ignoring query string)
+		// has no cached entry — forces the request all the way through to PHP.
+		$probe_url = home_url( '/csbr-par-probe-' . wp_rand() . '/' );
+		[ $ok, $code, $err ] = self::probe_url( $probe_url );
+
+		wp_send_json_success( [
+			'status'      => $code,
+			'ok'          => $ok,
+			'error'       => $err,
+			'file_exists' => $file_exists,
+			'is_active'   => $is_active,
+		] );
+	}
+
+	/**
+	 * Remove the watchdog script and cron entry from this server.
+	 */
+	public static function ajax_uninstall_watchdog(): void {
+		if ( ! current_user_can( 'manage_options' ) ) { wp_send_json_error( 'Insufficient permissions.' ); }
+		check_ajax_referer( 'csbr_nonce', 'nonce' );
+
+		$script_path = '/usr/local/bin/csbr-par-watchdog.sh';
+		$cron_file   = '/etc/cron.d/csbr-par';
+
+		$steps  = [];
+		$errors = [];
+
+		if ( file_exists( $script_path ) ) {
+			if ( @unlink( $script_path ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink
+				$steps[] = "Removed {$script_path}";
+			} else {
+				$errors[] = "Could not remove {$script_path} (permission denied)";
+			}
+		} else {
+			$steps[] = "{$script_path} was not present";
+		}
+
+		if ( file_exists( $cron_file ) ) {
+			if ( @unlink( $cron_file ) ) { // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink
+				$steps[] = "Removed {$cron_file}";
+			} else {
+				$errors[] = "Could not remove {$cron_file} (permission denied)";
+			}
+		} else {
+			$steps[] = "{$cron_file} was not present";
+		}
+
+		wp_send_json_success( [
+			'all_ok' => empty( $errors ),
+			'steps'  => $steps,
+			'errors' => $errors,
+		] );
 	}
 }

@@ -19,7 +19,7 @@ helpLib.run({
         operatingSystem: 'WordPress',
         applicationCategory: 'WebApplication',
         offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
-        softwareVersion: '3.2.361',
+        softwareVersion: '3.2.418',
         downloadUrl: 'https://andrewninjawordpress.s3.af-south-1.amazonaws.com/cloudscale-backup.zip',
         url: 'https://github.com/andrewbakercloudscale/wordpress-backup-restore-plugin',
     },

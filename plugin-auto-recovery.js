@@ -440,5 +440,68 @@ jQuery(function ($) {
         ].join(''));
     };
 
+    window.csParUninstallWatchdog = function () {
+        if (!confirm('Remove the watchdog script and cron entry from this server?\n\nAutomatic rollback will stop working until you reinstall.')) return;
+        var $btn    = $('#par-uninstall-btn');
+        var $result = $('#par-auto-install-result');
+        $btn.prop('disabled', true).text('Removing…');
+        $result.hide();
+
+        parPost('csbr_par_uninstall_watchdog', {}, function (d) {
+            $btn.prop('disabled', false).text('Remove');
+            var html = '';
+            if (d.all_ok) {
+                html += '<div style="color:#166534;font-weight:700;margin-bottom:6px;">Watchdog removed. Automatic rollback is now disabled.</div>';
+            } else {
+                html += '<div style="color:#b45309;font-weight:700;margin-bottom:6px;">Some steps failed — manual cleanup may be needed.</div>';
+            }
+            if (d.steps && d.steps.length) {
+                d.steps.forEach(function (s) { html += '<div style="color:#166534;">&#10003; ' + s + '</div>'; });
+            }
+            if (d.errors && d.errors.length) {
+                d.errors.forEach(function (e) { html += '<div style="color:#b91c1c;">&#10007; ' + e + '</div>'; });
+            }
+            $result.html(html).show();
+            setTimeout(parLoadStatus, 2000);
+        }, function (err) {
+            $btn.prop('disabled', false).text('Remove');
+            $result.html('<div style="color:#b91c1c;">Request failed: ' + err + '</div>').show();
+        });
+    };
+
+    window.csParAutoInstallWatchdog = function () {
+        var $btn    = $('#par-auto-install-btn');
+        var $result = $('#par-auto-install-result');
+        $btn.prop('disabled', true).text('Installing…');
+        $result.hide();
+
+        parPost('csbr_par_install_watchdog', {}, function (d) {
+            $btn.prop('disabled', false).text('Install Now');
+            var html = '';
+            if (d.all_ok) {
+                $btn.text('Installed').css('background', '#15803d');
+                html += '<div style="color:#166534;font-weight:700;margin-bottom:6px;">Watchdog installed successfully. It will start running within 1 minute.</div>';
+            } else {
+                html += '<div style="color:#b45309;font-weight:700;margin-bottom:6px;">Auto-install partially succeeded. Use the manual instructions below for remaining steps.</div>';
+            }
+            if (d.steps && d.steps.length) {
+                d.steps.forEach(function (s) {
+                    html += '<div style="color:#166534;">&#10003; ' + s + '</div>';
+                });
+            }
+            if (d.errors && d.errors.length) {
+                d.errors.forEach(function (e) {
+                    html += '<div style="color:#b91c1c;">&#10007; ' + e + '</div>';
+                });
+            }
+            $result.html(html).show();
+            // Refresh the watchdog status badge after a short delay
+            setTimeout(parLoadStatus, 3000);
+        }, function (err) {
+            $btn.prop('disabled', false).text('Install Now');
+            $result.html('<div style="color:#b91c1c;">Request failed: ' + err + '</div>').show();
+        });
+    };
+
 });
 

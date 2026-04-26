@@ -87,28 +87,48 @@ function csbr_par_render_tab(): void {
 	    </div>
 	  </div>
 
-	  <p style="font-size:0.9rem;color:#334155;margin-bottom:12px;"><?php esc_html_e( 'Automatic Crash Recovery uses a system cron watchdog (not WP-Cron) so it can detect and recover from PHP fatal errors that crash WordPress entirely. Copy this script to your server and add the cron line below.', 'cloudscale-backup-restore' ); ?></p>
+	  <p style="font-size:0.9rem;color:#334155;margin-bottom:16px;"><?php esc_html_e( 'Automatic Crash Recovery uses a system cron watchdog (not WP-Cron) so it can detect and recover from PHP fatal errors that crash WordPress entirely.', 'cloudscale-backup-restore' ); ?></p>
 
-	  <p style="font-size:0.85rem;color:#64748b;margin-bottom:8px;"><strong><?php esc_html_e( 'Step 1 — Copy this script to the server:', 'cloudscale-backup-restore' ); ?></strong></p>
-	  <div style="position:relative;margin-bottom:16px;">
-	    <pre id="par-watchdog-script" style="background:#1e1e1e;color:#d4d4d4;padding:12px 16px;border-radius:6px;font-size:0.78rem;overflow-x:auto;white-space:pre;max-height:220px;overflow-y:auto;margin:0;"><?php
-	      echo esc_html( CSBR_Plugin_Auto_Recovery::generate_watchdog_script() );
-	    ?></pre>
-	    <button type="button" id="par-copy-script-btn" class="button" style="position:absolute;top:8px;right:8px;font-size:0.75rem;"><?php esc_html_e( 'Copy', 'cloudscale-backup-restore' ); ?></button>
+	  <!-- Auto-install button -->
+	  <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:16px 20px;margin-bottom:20px;">
+	    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
+	      <div>
+	        <div style="font-size:0.9rem;font-weight:700;color:#166534;margin-bottom:3px;">Auto-Install Watchdog</div>
+	        <div style="font-size:0.82rem;color:#15803d;">Writes the script to <code>/usr/local/bin/csbr-par-watchdog.sh</code> and installs the cron entry in <code>/etc/cron.d/csbr-par</code> automatically.</div>
+	      </div>
+	      <div style="display:flex;gap:8px;flex-shrink:0;">
+	        <button type="button" id="par-auto-install-btn" onclick="csParAutoInstallWatchdog()" style="background:#16a34a;color:#fff;border:none;border-radius:6px;padding:10px 22px;font-size:0.88rem;font-weight:700;cursor:pointer;white-space:nowrap;">Install Now</button>
+	        <button type="button" id="par-uninstall-btn" onclick="csParUninstallWatchdog()" style="background:#dc2626;color:#fff;border:none;border-radius:6px;padding:10px 16px;font-size:0.88rem;font-weight:700;cursor:pointer;white-space:nowrap;" title="Remove watchdog script and cron entry from this server">Remove</button>
+	      </div>
+	    </div>
+	    <div id="par-auto-install-result" style="display:none;margin-top:12px;font-size:0.82rem;"></div>
 	  </div>
 
-	  <p style="font-size:0.85rem;color:#64748b;margin-bottom:8px;"><strong><?php esc_html_e( 'Step 2 — Save it on the server and make it executable:', 'cloudscale-backup-restore' ); ?></strong></p>
-	  <pre style="background:#1e1e1e;color:#d4d4d4;padding:10px 16px;border-radius:6px;font-size:0.82rem;margin-bottom:16px;">sudo tee /usr/local/bin/csbr-par-watchdog.sh &lt;&lt;'EOF'
+	  <details style="margin-bottom:0;">
+	    <summary style="font-size:0.85rem;color:#64748b;cursor:pointer;font-weight:600;margin-bottom:10px;">Manual install instructions (if auto-install fails)</summary>
+	    <div style="margin-top:12px;">
+	      <p style="font-size:0.85rem;color:#64748b;margin-bottom:8px;"><strong><?php esc_html_e( 'Step 1 — Copy this script to the server:', 'cloudscale-backup-restore' ); ?></strong></p>
+	      <div style="position:relative;margin-bottom:16px;">
+	        <pre id="par-watchdog-script" style="background:#1e1e1e;color:#d4d4d4;padding:12px 16px;border-radius:6px;font-size:0.78rem;overflow-x:auto;white-space:pre;max-height:220px;overflow-y:auto;margin:0;"><?php
+	          echo esc_html( CSBR_Plugin_Auto_Recovery::generate_watchdog_script() );
+	        ?></pre>
+	        <button type="button" id="par-copy-script-btn" class="button" style="position:absolute;top:8px;right:8px;font-size:0.75rem;"><?php esc_html_e( 'Copy', 'cloudscale-backup-restore' ); ?></button>
+	      </div>
+
+	      <p style="font-size:0.85rem;color:#64748b;margin-bottom:8px;"><strong><?php esc_html_e( 'Step 2 — Save it on the server and make it executable:', 'cloudscale-backup-restore' ); ?></strong></p>
+	      <pre style="background:#1e1e1e;color:#d4d4d4;padding:10px 16px;border-radius:6px;font-size:0.82rem;margin-bottom:16px;">sudo tee /usr/local/bin/csbr-par-watchdog.sh &lt;&lt;'EOF'
 (paste script)
 EOF
 sudo chmod +x /usr/local/bin/csbr-par-watchdog.sh</pre>
 
-	  <p style="font-size:0.85rem;color:#64748b;margin-bottom:8px;"><strong><?php esc_html_e( 'Step 3 — Add to root\'s crontab (runs every minute):', 'cloudscale-backup-restore' ); ?></strong></p>
-	  <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
-	    <code id="par-cron-line" style="background:#f1f5f9;padding:6px 12px;border-radius:4px;font-size:0.85rem;border:1px solid #e2e8f0;">* * * * * root /usr/local/bin/csbr-par-watchdog.sh &gt;&gt; /var/log/cloudscale-par.log 2&gt;&amp;1</code>
-	    <button type="button" id="par-copy-cron-btn" class="button" style="font-size:0.78rem;"><?php esc_html_e( 'Copy', 'cloudscale-backup-restore' ); ?></button>
-	  </div>
-	  <p style="font-size:0.82rem;color:#64748b;">sudo crontab -e</p>
+	      <p style="font-size:0.85rem;color:#64748b;margin-bottom:8px;"><strong><?php esc_html_e( 'Step 3 — Add to root\'s crontab (runs every minute):', 'cloudscale-backup-restore' ); ?></strong></p>
+	      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap;">
+	        <code id="par-cron-line" style="background:#f1f5f9;padding:6px 12px;border-radius:4px;font-size:0.85rem;border:1px solid #e2e8f0;">* * * * * root /usr/local/bin/csbr-par-watchdog.sh &gt;&gt; /var/log/cloudscale-par.log 2&gt;&amp;1</code>
+	        <button type="button" id="par-copy-cron-btn" class="button" style="font-size:0.78rem;"><?php esc_html_e( 'Copy', 'cloudscale-backup-restore' ); ?></button>
+	      </div>
+	      <p style="font-size:0.82rem;color:#64748b;">sudo crontab -e</p>
+	    </div>
+	  </details>
 	</div>
 
 	<!-- ════════════════════ ACTIVE MONITORS CARD ════════════════════ -->
