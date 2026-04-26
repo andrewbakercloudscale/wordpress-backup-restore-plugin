@@ -3843,3 +3843,14 @@ window.csVerifyFile = function (btn, filename) {
     });
 };
 
+
+// ── C1: Explain banner dismiss ──────────────────────────────────────────────
+(function() {
+    var btn = document.getElementById('csbr-dismiss-explain-banner');
+    if (!btn) return;
+    btn.addEventListener('click', function() {
+        var banner = document.getElementById('csbr-explain-banner');
+        if (banner) banner.style.display = 'none';
+        jQuery.post(CSBR.ajaxUrl, { action: 'csbr_dismiss_explain_banner', nonce: CSBR.nonce });
+    });
+}());
