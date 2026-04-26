@@ -31,11 +31,11 @@
     font-size: 0.92rem;
     font-weight: 600;
     cursor: pointer;
-    background: #ffffff;
+    background: #ffffff !important;
     border: 1px solid #bdbdbd;
     border-bottom: none;
     border-radius: 6px 6px 0 0;
-    color: #1a1a1a;
+    color: #1a1a1a !important;
     position: relative;
     top: 2px;
     transition: background 0.12s, color 0.12s;
@@ -66,22 +66,22 @@
         top: 0;
         text-align: left;
         white-space: normal;
-        color: #1a1a1a;
-        background: #ffffff;
+        color: #1a1a1a !important;
+        background: #ffffff !important;
     }
     .cs-tab-bar .cs-tab--active {
-        background: #37474f;
-        color: #ffffff;
+        background: #37474f !important;
+        color: #ffffff !important;
         border-color: #37474f;
         border-top: 1px solid #78909c;
         font-size: 0.88rem;
         box-shadow: none;
     }
 }
-.cs-tab-bar .cs-tab:hover { background: #0040ff; color: #fff; border-color: #0040ff; }
+.cs-tab-bar .cs-tab:hover { background: #0040ff !important; color: #fff !important; border-color: #0040ff; }
 .cs-tab-bar .cs-tab--active {
-    background: #37474f;
-    color: #ffffff;
+    background: #37474f !important;
+    color: #ffffff !important;
     border-color: #37474f;
     border-bottom: 3px solid #37474f;
     border-top: 3px solid #78909c;
