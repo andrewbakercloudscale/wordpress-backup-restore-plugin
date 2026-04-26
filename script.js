@@ -1453,6 +1453,7 @@ jQuery(function ($) {
     $('#cs-log-refresh').on('click', function () { csLoadLog(0); });
 
     $('#cs-log-clear').on('click', function () {
+        if (!confirm('Clear the activity log? This cannot be undone.')) return;
         $.ajax({
             url: CSBR.ajax_url, method: 'POST', timeout: 10000,
             data: { action: 'csbr_clear_activity_log', nonce: CSBR.nonce },
