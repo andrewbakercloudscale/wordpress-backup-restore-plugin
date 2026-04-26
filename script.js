@@ -3832,7 +3832,7 @@ window.csOneDriveHistoryDelete = function (filename) {
 window.csVerifyFile = function (btn, filename) {
     var td = btn.closest ? btn.closest('td') : btn.parentNode;
     btn.disabled = true;
-    btn.textContent = '\u2026';
+    btn.textContent = '\u29d7 Checking\u2026';
     csS3Post('csbr_verify_backup', 'file=' + encodeURIComponent(filename), function (res) {
         if (!td) {
             btn.disabled = false;
