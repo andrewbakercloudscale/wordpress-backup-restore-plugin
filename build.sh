@@ -75,11 +75,8 @@ rsync -a \
   --exclude='node_modules/' --exclude='svn-assets/' \
   --exclude='playwright-report/' --exclude='playwright.config.js' \
   --exclude='includes/class-csbr-clone.php' \
+  --exclude='test-results/' \
   "$REPO_DIR/" "$TEMP_DIR/$PLUGIN_NAME/"
-
-# Versioned asset copies for filename-based cache busting (beats iOS Safari immutable cache)
-cp "$TEMP_DIR/$PLUGIN_NAME/style.css"  "$TEMP_DIR/$PLUGIN_NAME/style-${NEW_VER}.css"
-cp "$TEMP_DIR/$PLUGIN_NAME/script.js"  "$TEMP_DIR/$PLUGIN_NAME/script-${NEW_VER}.js"
 
 # Build zip with correct structure
 rm -f "$ZIP_FILE"
@@ -102,6 +99,7 @@ rsync -a --delete \
   --exclude='node_modules/' --exclude='svn-assets/' \
   --exclude='playwright-report/' --exclude='playwright.config.js' \
   --exclude='includes/class-csbr-clone.php' \
+  --exclude='test-results/' \
   "$REPO_DIR/" "$REPO_DIR/repo/"
 # Sync readme.txt into repo/ so SVN trunk always has the correct Stable tag
 cp "$REPO_DIR/readme.txt" "$REPO_DIR/repo/readme.txt"

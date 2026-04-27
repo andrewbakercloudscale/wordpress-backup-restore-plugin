@@ -3,7 +3,7 @@
  * Plugin Name:       CloudScale Backup & Restore
  * Plugin URI:        https://cloudscale.consulting
  * Description:       No-nonsense WordPress backup and restore. Backs up database, media, plugins and themes into a single zip. Scheduled or manual, with safe restore and maintenance mode.
- * Version:           3.2.422
+ * Version:           3.2.430
  * Author:            Andrew Baker
  * Author URI:        https://your-wordpress-site.example.com
  * License:           GPL-2.0-or-later
@@ -16,7 +16,7 @@
 
 defined( 'ABSPATH' ) || exit;
 
-define('CSBR_VERSION',    '3.2.422');
+define('CSBR_VERSION',    '3.2.430');
 define('CSBR_AMI_POLL_MAX_AGE', 5 * 600);              // Stop polling after 5 attempts (50 minutes)
 define('CSBR_AMI_POLL_INTERVAL', 600);                 // Re-poll every 10 minutes
 define('CSBR_PLUGIN_DIR', plugin_dir_path(__FILE__));
@@ -258,7 +258,13 @@ add_filter('cron_schedules', function (array $schedules): array {
  * @since 2.74.0
  * @return void
  */
-add_action('csbr_ami_poll', 'csbr_ami_poll_handler');
+add_action( 'csbr_ami_poll', static function (): void {
+    try {
+        csbr_ami_poll_handler();
+    } catch ( \Throwable $e ) {
+        error_log( sprintf( '[CloudScale Backup & Restore] cron "csbr_ami_poll" exception (%s): %s in %s line %d', get_class( $e ), $e->getMessage(), $e->getFile(), $e->getLine() ) ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- cron Throwable safety net; no user-facing log available here
+    }
+} );
 function csbr_ami_poll_handler(): void {
     $aws = csbr_find_aws();
     if (!$aws) {
@@ -513,68 +519,73 @@ add_action('csbr_scheduled_backup', function () {
 });
 
 add_action('csbr_scheduled_ami_backup', function () {
-    if (!get_option('csbr_cloud_schedule_enabled', false)) return;
+    try {
+        if (!get_option('csbr_cloud_schedule_enabled', false)) return;
 
-    // Day-of-week guard
-    $cloud_days = array_map('intval', (array) get_option('csbr_ami_schedule_days', []));
-    $today      = intval((new DateTime('now', wp_timezone()))->format('N'));
-    if (empty($cloud_days) || !in_array($today, $cloud_days, true)) return;
+        // Day-of-week guard
+        $cloud_days = array_map('intval', (array) get_option('csbr_ami_schedule_days', []));
+        $today      = intval((new DateTime('now', wp_timezone()))->format('N'));
+        if (empty($cloud_days) || !in_array($today, $cloud_days, true)) return;
 
-    csbr_log( '[CloudScale Backup & Restore] Scheduled cloud backup starting.' );
+        csbr_log( '[CloudScale Backup & Restore] Scheduled cloud backup starting.' );
 
-    // 1. AMI snapshot (if enabled, prefix configured, and running on EC2)
-    if (get_option('csbr_ami_sync_enabled', true) && get_option('csbr_ami_prefix', '') && csbr_get_instance_id()) {
-        $result = csbr_do_create_ami();
-        if ($result['ok']) {
-            csbr_log('[CloudScale Backup & Restore] Scheduled AMI created: ' . $result['ami_id'] . ' (' . $result['name'] . ')');
-        } else {
-            csbr_log('[CloudScale Backup & Restore] Scheduled AMI failed: ' . ($result['error'] ?? 'unknown error'));
+        // 1. AMI snapshot (if enabled, prefix configured, and running on EC2)
+        if (get_option('csbr_ami_sync_enabled', true) && get_option('csbr_ami_prefix', '') && csbr_get_instance_id()) {
+            $result = csbr_do_create_ami();
+            if ($result['ok']) {
+                csbr_log('[CloudScale Backup & Restore] Scheduled AMI created: ' . $result['ami_id'] . ' (' . $result['name'] . ')');
+            } else {
+                csbr_log('[CloudScale Backup & Restore] Scheduled AMI failed: ' . ($result['error'] ?? 'unknown error'));
+            }
         }
-    }
 
-    // 2. S3 sync of latest local backup zip
-    if (get_option('csbr_s3_sync_enabled', true)) {
-        $latest = csbr_get_latest_backup_path();
-        if ($latest) {
-            $r = csbr_sync_to_s3($latest);
-            if ( ! isset( $r['skipped'] ) ) {
-                if ( ! empty( $r['ok'] ) ) {
-                    csbr_log('[CloudScale Backup & Restore] Scheduled S3 sync OK: ' . basename($latest));
-                } else {
-                    csbr_log('[CloudScale Backup & Restore] Scheduled S3 sync FAILED: ' . basename($latest) . ' — ' . ( $r['error'] ?? 'unknown error' ));
+        // 2. S3 sync of latest local backup zip
+        if (get_option('csbr_s3_sync_enabled', true)) {
+            $latest = csbr_get_latest_backup_path();
+            if ($latest) {
+                $r = csbr_sync_to_s3($latest);
+                if ( ! isset( $r['skipped'] ) ) {
+                    if ( ! empty( $r['ok'] ) ) {
+                        csbr_log('[CloudScale Backup & Restore] Scheduled S3 sync OK: ' . basename($latest));
+                    } else {
+                        csbr_log('[CloudScale Backup & Restore] Scheduled S3 sync FAILED: ' . basename($latest) . ' — ' . ( $r['error'] ?? 'unknown error' ));
+                    }
                 }
             }
         }
-    }
 
-    // 3. Google Drive sync of latest local backup zip
-    if (get_option('csbr_gdrive_sync_enabled', true)) {
-        $latest = $latest ?? csbr_get_latest_backup_path();
-        if ($latest) {
-            $r = csbr_sync_to_gdrive($latest);
-            if ( ! isset( $r['skipped'] ) ) {
-                if ( ! empty( $r['ok'] ) ) {
-                    csbr_log('[CloudScale Backup & Restore] Scheduled GDrive sync OK: ' . basename($latest));
-                } else {
-                    csbr_log('[CloudScale Backup & Restore] Scheduled GDrive sync FAILED: ' . basename($latest) . ' — ' . ( $r['error'] ?? 'unknown error' ));
+        // 3. Google Drive sync of latest local backup zip
+        if (get_option('csbr_gdrive_sync_enabled', true)) {
+            $latest = $latest ?? csbr_get_latest_backup_path();
+            if ($latest) {
+                $r = csbr_sync_to_gdrive($latest);
+                if ( ! isset( $r['skipped'] ) ) {
+                    if ( ! empty( $r['ok'] ) ) {
+                        csbr_log('[CloudScale Backup & Restore] Scheduled GDrive sync OK: ' . basename($latest));
+                    } else {
+                        csbr_log('[CloudScale Backup & Restore] Scheduled GDrive sync FAILED: ' . basename($latest) . ' — ' . ( $r['error'] ?? 'unknown error' ));
+                    }
                 }
             }
         }
-    }
 
-    // 4. Dropbox sync of latest local backup zip
-    if (get_option('csbr_dropbox_sync_enabled', false)) {
-        $latest = $latest ?? csbr_get_latest_backup_path();
-        if ($latest) {
-            $r = csbr_sync_to_dropbox($latest);
-            if ( ! isset( $r['skipped'] ) ) {
-                if ( ! empty( $r['ok'] ) ) {
-                    csbr_log('[CloudScale Backup & Restore] Scheduled Dropbox sync OK: ' . basename($latest));
-                } else {
-                    csbr_log('[CloudScale Backup & Restore] Scheduled Dropbox sync FAILED: ' . basename($latest) . ' — ' . ( $r['error'] ?? 'unknown error' ));
+        // 4. Dropbox sync of latest local backup zip
+        if (get_option('csbr_dropbox_sync_enabled', false)) {
+            $latest = $latest ?? csbr_get_latest_backup_path();
+            if ($latest) {
+                $r = csbr_sync_to_dropbox($latest);
+                if ( ! isset( $r['skipped'] ) ) {
+                    if ( ! empty( $r['ok'] ) ) {
+                        csbr_log('[CloudScale Backup & Restore] Scheduled Dropbox sync OK: ' . basename($latest));
+                    } else {
+                        csbr_log('[CloudScale Backup & Restore] Scheduled Dropbox sync FAILED: ' . basename($latest) . ' — ' . ( $r['error'] ?? 'unknown error' ));
+                    }
                 }
             }
         }
+    } catch ( \Throwable $e ) {
+        error_log( sprintf( '[CloudScale Backup & Restore] cron "csbr_scheduled_ami_backup" exception (%s): %s in %s line %d', get_class( $e ), $e->getMessage(), $e->getFile(), $e->getLine() ) ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- cron Throwable safety net; no user-facing log available here
+        csbr_log( '[CloudScale Backup & Restore] Scheduled cloud backup FAILED (exception): ' . $e->getMessage() );
     }
 });
 
@@ -612,8 +623,8 @@ add_action('admin_enqueue_scripts', function (): void {
 
 add_action('admin_enqueue_scripts', function (string $hook): void {
     if ($hook !== 'tools_page_cloudscale-backup') return;
-    wp_enqueue_style('csbr-style',   plugin_dir_url(__FILE__) . 'style-'  . CSBR_VERSION . '.css', [], null);
-    wp_enqueue_script('csbr-script', plugin_dir_url(__FILE__) . 'script-' . CSBR_VERSION . '.js',  ['jquery'], null, true);
+    wp_enqueue_style('csbr-style',   plugin_dir_url(__FILE__) . 'style.css',  [], CSBR_VERSION);
+    wp_enqueue_script('csbr-script', plugin_dir_url(__FILE__) . 'script.js', ['jquery'], CSBR_VERSION, true);
     wp_enqueue_script('csbr-par-script', plugin_dir_url(__FILE__) . 'plugin-auto-recovery.js', ['jquery', 'csbr-script'], CSBR_VERSION, true);
     wp_localize_script('csbr-script', 'CSBR', [
         'ajax_url'       => admin_url('admin-ajax.php'),
@@ -5867,41 +5878,45 @@ add_action('wp_ajax_csbr_deregister_ami', function (): void {
  * @return void
  */
 add_action('csbr_ami_delete_check', function (string $ami_id): void {
-    $log = (array) get_option('csbr_ami_log', []);
+    try {
+        $log = (array) get_option('csbr_ami_log', []);
 
-    // Find the entry
-    $entry_idx = null;
-    foreach ($log as $i => $e) {
-        if (($e['ami_id'] ?? '') === $ami_id) {
-            $entry_idx = $i;
-            break;
+        // Find the entry
+        $entry_idx = null;
+        foreach ($log as $i => $e) {
+            if (($e['ami_id'] ?? '') === $ami_id) {
+                $entry_idx = $i;
+                break;
+            }
         }
+        if ($entry_idx === null) return; // already removed from log
+
+        $aws = csbr_find_aws();
+        if (!$aws) {
+            csbr_log('[CloudScale Backup & Restore] AMI delete check: AWS CLI not found for ' . $ami_id);
+            return;
+        }
+
+        $region      = csbr_get_instance_region();
+        $region_flag = $region ? ' --region ' . escapeshellarg($region) : '';
+        $cmd = escapeshellarg($aws) . ' ec2 describe-images --image-ids ' . escapeshellarg($ami_id) . $region_flag . ' --output json 2>&1';
+        $out  = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+        $data = json_decode($out, true);
+
+        if (empty($data['Images'])) {
+            // Gone from AWS — remove from local log
+            $log = array_values(array_filter($log, fn($e) => ($e['ami_id'] ?? '') !== $ami_id));
+            csbr_log('[CloudScale Backup & Restore] AMI delete confirmed, removed from log: ' . $ami_id);
+        } else {
+            // Still exists — update state from AWS
+            $log[$entry_idx]['state'] = $data['Images'][0]['State'] ?? 'unknown';
+            csbr_log('[CloudScale Backup & Restore] AMI delete check: ' . $ami_id . ' state = ' . $log[$entry_idx]['state']);
+        }
+
+        update_option('csbr_ami_log', $log, false);
+    } catch ( \Throwable $e ) {
+        error_log( sprintf( '[CloudScale Backup & Restore] cron "csbr_ami_delete_check" exception (%s): %s in %s line %d', get_class( $e ), $e->getMessage(), $e->getFile(), $e->getLine() ) ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- cron Throwable safety net; no user-facing log available here
     }
-    if ($entry_idx === null) return; // already removed from log
-
-    $aws = csbr_find_aws();
-    if (!$aws) {
-        csbr_log('[CloudScale Backup & Restore] AMI delete check: AWS CLI not found for ' . $ami_id);
-        return;
-    }
-
-    $region      = csbr_get_instance_region();
-    $region_flag = $region ? ' --region ' . escapeshellarg($region) : '';
-    $cmd = escapeshellarg($aws) . ' ec2 describe-images --image-ids ' . escapeshellarg($ami_id) . $region_flag . ' --output json 2>&1';
-    $out  = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $data = json_decode($out, true);
-
-    if (empty($data['Images'])) {
-        // Gone from AWS — remove from local log
-        $log = array_values(array_filter($log, fn($e) => ($e['ami_id'] ?? '') !== $ami_id));
-        csbr_log('[CloudScale Backup & Restore] AMI delete confirmed, removed from log: ' . $ami_id);
-    } else {
-        // Still exists — update state from AWS
-        $log[$entry_idx]['state'] = $data['Images'][0]['State'] ?? 'unknown';
-        csbr_log('[CloudScale Backup & Restore] AMI delete check: ' . $ami_id . ' state = ' . $log[$entry_idx]['state']);
-    }
-
-    update_option('csbr_ami_log', $log, false);
 });
 
 // ============================================================
@@ -6692,7 +6707,7 @@ add_action( 'admin_post_csbr_quick_backup', function (): void {
 add_action('wp_dashboard_setup', function (): void {
     wp_add_dashboard_widget(
         'csbr_backup_status_widget',
-        '&#128736; ' . esc_html__( 'CloudScale Backup Status', 'cloudscale-backup-restore' ),
+        '&#128736; ' . esc_html__( 'CloudScale Backup Status', 'cloudscale-backup-restore' ) . ' <span style="font-weight:normal;font-size:11px;color:#000;">v' . CSBR_VERSION . '</span>',
         'csbr_render_dashboard_widget'
     );
 });
@@ -6894,9 +6909,6 @@ function csbr_render_dashboard_widget(): void {
                 <div style="flex:1; min-width:0;">
                     <span style="<?php echo esc_attr( $label_style ); ?> display:block; margin-bottom:1px;"><?php echo wp_kses( $cr[0], [] ); ?></span>
                     <span style="<?php echo esc_attr( $value_style ); ?> font-size:13px; color:<?php echo esc_attr( $cr[2] ); ?>;"><?php echo esc_html( $cr[1] ); ?></span>
-                    <?php if ( ! empty( $cr[3] ) ): ?>
-                    <span style="display:block; font-size:10px; color:#c62828; font-family:monospace; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="<?php echo esc_attr( $cr[3] ); ?>"><?php echo esc_html( $cr[3] ); ?></span>
-                    <?php endif; ?>
                 </div>
                 <?php endforeach; ?>
             </div>
@@ -7136,7 +7148,7 @@ function csbr_create_backup(
  * Writes to both the transient (fast in-memory path) and directly to wp_options
  * (DB-backed, survives Redis flushes and server restarts). TTL: 7 days.
  *
- * @since 3.2.422
+ * @since 3.2.430
  * @return void
  */
 function csbr_imds_set_unavailable(): void {
@@ -7158,7 +7170,7 @@ function csbr_imds_set_unavailable(): void {
  * Checks the transient first (fast), then falls back to the DB-backed option
  * (survives restarts). Re-populates the transient from DB when needed.
  *
- * @since 3.2.422
+ * @since 3.2.430
  * @return bool
  */
 function csbr_imds_is_unavailable(): bool {
@@ -7683,6 +7695,21 @@ function csbr_rclone_base( string $rclone ): string {
 }
 
 /**
+ * Run a shell command and return [output_string, exit_code].
+ * Command must already include 2>&1 to capture stderr.
+ *
+ * @since 3.2.430
+ * @param string $cmd Shell command to execute.
+ * @return array{0: string, 1: int} [trimmed output, exit code]
+ */
+function csbr_rclone_run( string $cmd ): array {
+    $lines = [];
+    $rc    = 0;
+    exec( $cmd, $lines, $rc ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_exec -- rclone CLI; all args built with escapeshellarg()
+    return [ trim( implode( "\n", $lines ) ), (int) $rc ];
+}
+
+/**
  * Query free bytes available on an rclone remote via `rclone about --json`.
  * Returns null if the remote does not report quota info or if rclone is unavailable.
  *
@@ -7747,25 +7774,27 @@ function csbr_sync_to_gdrive(string $local_path): array {
     }
 
     $cmd = csbr_rclone_base($rclone) . " copy --timeout 5m --contimeout 30s {$escaped} {$edest} 2>&1";
-    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    [ $out, $rc ] = csbr_rclone_run( $cmd );
 
     // Space error: free oldest local backup and retry once
-    if ($out && csbr_is_space_error($out)) {
+    if ($rc !== 0 && csbr_is_space_error($out)) {
         csbr_free_local_space('Google Drive', basename($local_path));
-        // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-        $out = trim((string) shell_exec($cmd)); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+        [ $out, $rc ] = csbr_rclone_run( $cmd );
     }
 
     $filename = basename($local_path);
     $log      = (array) get_option('csbr_gdrive_log', []);
 
-    if ($out) {
+    if ($rc !== 0) {
         $diagnosed = csbr_rclone_diagnose_error( $out );
         csbr_log('[CloudScale Backup & Restore] GDrive sync error: ' . $diagnosed);
         $result       = ['ok' => false, 'dest' => $dest, 'error' => $diagnosed];
         $log[$filename] = ['ok' => false, 'time' => time(), 'dest' => $dest, 'error' => $diagnosed];
     } else {
+        if ($out) {
+            $warning = csbr_rclone_diagnose_error( $out );
+            csbr_log('[CloudScale Backup & Restore] GDrive sync WARNING (sync succeeded): ' . $warning);
+        }
         csbr_log('[CloudScale Backup & Restore] GDrive sync OK: ' . $dest);
         $result       = ['ok' => true, 'dest' => $dest];
         $log[$filename] = ['ok' => true, 'time' => time(), 'dest' => $dest];
@@ -7818,24 +7847,27 @@ function csbr_sync_to_dropbox( string $local_path ): array {
     }
 
     $cmd = csbr_rclone_base( $rclone ) . " copy --dropbox-batch-mode off --timeout 5m --contimeout 30s {$escaped} {$edest} 2>&1";
-    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    [ $out, $rc ] = csbr_rclone_run( $cmd );
 
     // Space error: free oldest local backup and retry once
-    if ( $out && csbr_is_space_error( $out ) ) {
+    if ( $rc !== 0 && csbr_is_space_error( $out ) ) {
         csbr_free_local_space( 'Dropbox', basename( $local_path ) );
-        // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-        $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+        [ $out, $rc ] = csbr_rclone_run( $cmd );
     }
 
     $filename = basename( $local_path );
     $log      = (array) get_option( 'csbr_dropbox_log', [] );
 
-    if ( $out ) {
-        csbr_log( '[CloudScale Backup & Restore] Dropbox sync error: ' . $out );
-        $result         = [ 'ok' => false, 'dest' => $dest, 'error' => $out ];
-        $log[$filename] = [ 'ok' => false, 'time' => time(), 'dest' => $dest, 'error' => $out ];
+    if ( $rc !== 0 ) {
+        $diagnosed = csbr_rclone_diagnose_error( $out );
+        csbr_log( '[CloudScale Backup & Restore] Dropbox sync error: ' . $diagnosed );
+        $result         = [ 'ok' => false, 'dest' => $dest, 'error' => $diagnosed ];
+        $log[$filename] = [ 'ok' => false, 'time' => time(), 'dest' => $dest, 'error' => $diagnosed ];
     } else {
+        if ( $out ) {
+            $warning = csbr_rclone_diagnose_error( $out );
+            csbr_log( '[CloudScale Backup & Restore] Dropbox sync WARNING (sync succeeded): ' . $warning );
+        }
         csbr_log( '[CloudScale Backup & Restore] Dropbox sync OK: ' . $dest );
         $result         = [ 'ok' => true, 'dest' => $dest ];
         $log[$filename] = [ 'ok' => true, 'time' => time(), 'dest' => $dest ];
@@ -8352,23 +8384,26 @@ function csbr_sync_to_onedrive( string $local_path ): array {
     }
 
     $cmd = csbr_rclone_base( $rclone ) . " copy --timeout 5m --contimeout 30s {$escaped} {$edest} 2>&1";
-    // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-    $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+    [ $out, $rc ] = csbr_rclone_run( $cmd );
 
-    if ( $out && csbr_is_space_error( $out ) ) {
+    if ( $rc !== 0 && csbr_is_space_error( $out ) ) {
         csbr_free_local_space( 'OneDrive', basename( $local_path ) );
-        // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
-        $out = trim( (string) shell_exec( $cmd ) ); // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.system_calls_shell_exec
+        [ $out, $rc ] = csbr_rclone_run( $cmd );
     }
 
     $filename = basename( $local_path );
     $log      = (array) get_option( 'csbr_onedrive_log', [] );
 
-    if ( $out ) {
-        csbr_log( '[CloudScale Backup & Restore] OneDrive sync error: ' . $out );
-        $result         = [ 'ok' => false, 'dest' => $dest, 'error' => $out ];
-        $log[$filename] = [ 'ok' => false, 'time' => time(), 'dest' => $dest, 'error' => $out ];
+    if ( $rc !== 0 ) {
+        $diagnosed = csbr_rclone_diagnose_error( $out );
+        csbr_log( '[CloudScale Backup & Restore] OneDrive sync error: ' . $diagnosed );
+        $result         = [ 'ok' => false, 'dest' => $dest, 'error' => $diagnosed ];
+        $log[$filename] = [ 'ok' => false, 'time' => time(), 'dest' => $dest, 'error' => $diagnosed ];
     } else {
+        if ( $out ) {
+            $warning = csbr_rclone_diagnose_error( $out );
+            csbr_log( '[CloudScale Backup & Restore] OneDrive sync WARNING (sync succeeded): ' . $warning );
+        }
         csbr_log( '[CloudScale Backup & Restore] OneDrive sync OK: ' . $dest );
         $result         = [ 'ok' => true, 'dest' => $dest ];
         $log[$filename] = [ 'ok' => true, 'time' => time(), 'dest' => $dest ];
